@@ -1,1 +1,1 @@
-obj-m		:= kernel/hisi-hwrng.o kernel/sys_config.o
+obj-m		:= hisi-hwrng.o sys_config.o
