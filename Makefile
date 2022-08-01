@@ -12,6 +12,9 @@ INSTALL_PROGRAM = $(INSTALL) -p -m 755
 INSTALL_DIR     = $(INSTALL) -p -m 755 -d
 INSTALL_DATA    = $(INSTALL) -m 644
 
+SRCDIR ?= $(PREFIX)/kernel
+DESTDIR ?=
+
 DEPMOD ?= depmod
 DEPMODBASEDIR ?= /
 
