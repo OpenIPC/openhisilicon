@@ -12,6 +12,9 @@ INSTALL_PROGRAM = $(INSTALL) -p -m 755
 INSTALL_DIR     = $(INSTALL) -p -m 755 -d
 INSTALL_DATA    = $(INSTALL) -m 644
 
+DEPMOD ?= depmod
+DEPMODBASEDIR ?= /
+
 MODULE_OPTIONS = devices=2
 
 
@@ -26,6 +29,7 @@ build:
 
 install:
 	$(MAKE) -C $(KERNEL_DIR) M=$(PWD) modules_install
+	$(DEPMOD) -b "$(DEPMODBASEDIR)" -a $(KERNELRELEASE)
 	@echo ""
 
 clean:
