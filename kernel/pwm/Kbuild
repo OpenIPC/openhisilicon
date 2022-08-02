@@ -1,0 +1,11 @@
+MOD_NAME := pwm
+
+DIR=$(MOD_NAME)
+
+SRCS := $(DIR)/pwm.c
+
+OBJS := $(SRCS:%.c=%.o) $(ASM_SRCS:%.S=%.o)
+
+$(MOD_NAME)-objs := $(OBJS)
+
+obj-m += $(MOD_NAME).o

@@ -1,0 +1,11 @@
+MOD_NAME := sensor_i2c
+
+DIR=$(MOD_NAME)
+
+SRCS := $(DIR)/sensor_i2c.c
+
+OBJS := $(SRCS:%.c=%.o) $(ASM_SRCS:%.S=%.o)
+
+$(MOD_NAME)-objs := $(OBJS)
+
+obj-m += $(MOD_NAME).o
