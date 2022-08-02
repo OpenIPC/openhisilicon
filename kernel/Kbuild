@@ -4,3 +4,4 @@ include $(src)/hisi-hwrng/Kbuild
 include $(src)/sys_config/Kbuild
 include $(src)/osal/Kbuild
 include $(src)/wdt/Kbuild
+include $(src)/adc/Kbuild
