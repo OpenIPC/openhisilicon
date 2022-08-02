@@ -1,4 +1,4 @@
-MOD_NAME := hisi-hwrng
+MOD_NAME := sys_config
 
 DIR=$(MOD_NAME)
 
