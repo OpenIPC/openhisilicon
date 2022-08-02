@@ -4,7 +4,7 @@ DIR=$(MOD_NAME)
 
 SRCS := \
   $(DIR)/adc_init.c \
-  $(DIR)/adc_core.c
+  $(DIR)/adc.c
 
 OBJS := $(SRCS:%.c=%.o) $(ASM_SRCS:%.S=%.o)
 
