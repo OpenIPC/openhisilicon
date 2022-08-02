@@ -1,0 +1,11 @@
+MOD_NAME := piris
+
+DIR=$(MOD_NAME)
+
+SRCS := $(DIR)/piris.c
+
+OBJS := $(SRCS:%.c=%.o) $(ASM_SRCS:%.S=%.o)
+
+$(MOD_NAME)-objs := $(OBJS)
+
+obj-m += $(MOD_NAME).o
