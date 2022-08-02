@@ -1,6 +1,6 @@
 MOD_NAME := isp
 
-DIR=$(MOD_NAME)/kernel
+DIR=$(MOD_NAME)
 
 SRCS := \
 	$(DIR)/arch/gk7205v200/hal/isp_drv.c \
@@ -11,10 +11,10 @@ SRCS := \
 	$(DIR)/mkp/src/isp_st.c
 
 ccflags-y += -I$(src)/$(MOD_NAME)/include
-ccflags-y += -I$(src)/$(MOD_NAME)/kernel/arch/include
+ccflags-y += -I$(src)/$(MOD_NAME)/arch/include
 ccflags-y += -I$(src)/$(MOD_NAME)/ext_inc
-ccflags-y += -I$(src)/$(MOD_NAME)/kernel/mkp/include
-ccflags-y += -I$(src)/$(MOD_NAME)/kernel/arch/gk7205v200/include
+ccflags-y += -I$(src)/$(MOD_NAME)/mkp/include
+ccflags-y += -I$(src)/$(MOD_NAME)/arch/gk7205v200/include
 ccflags-y += -I$(src)/../libraries/isp/arch/gk7205v200/include
 ccflags-y += -I$(src)/../libraries/isp/include
 
