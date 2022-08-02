@@ -38,7 +38,7 @@ ifeq ($(CONFIG_CMA),y)
 SRCS += $(DIR)/mmz/cma_allocator.c
 endif
 
-ccflags-y := -I$(src)/$(MOD_NAME)/include
+ccflags-y += -I$(src)/$(MOD_NAME)/include
 ccflags-y += -I$(src)/$(MOD_NAME)/linux/kernel
 ccflags-y += -I$(src)/$(MOD_NAME)/linux/kernel/media
 

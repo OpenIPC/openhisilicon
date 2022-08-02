@@ -1,0 +1,13 @@
+MOD_NAME := wdt
+
+DIR=$(MOD_NAME)
+
+SRCS := \
+  $(DIR)/wdt_init.c \
+  $(DIR)/wdt_core.c
+
+OBJS := $(SRCS:%.c=%.o) $(ASM_SRCS:%.S=%.o)
+
+$(MOD_NAME)-objs := $(OBJS)
+
+obj-m += $(MOD_NAME).o

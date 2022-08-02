@@ -1,3 +1,6 @@
+ccflags-y := -DRELEASE -DUSER_BIT_32 -DKERNEL_BIT_32 -Wno-date-time -D_GNU_SOURCE
+
 include $(src)/hisi-hwrng/Kbuild
 include $(src)/sys_config/Kbuild
 include $(src)/osal/Kbuild
+include $(src)/wdt/Kbuild
