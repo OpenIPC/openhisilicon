@@ -1,28 +1,24 @@
-ifeq ($(CFG_SDK_EXPORT_FLAG),)
-    SDK_DIR := $(shell cd $(CURDIR)/../../../../../.. && /bin/pwd)
-endif
-
-include $(SDK_DIR)/build/base.mk
-include $(SDK_DIR)/source/gmp/modules/isp/arch.mk
-
 LIB_NAME := libisp
 
-ISP_ROOT := $(GMP_DIR)/modules/isp
+CC := $(CROSS_COMPILE)$(CC)
+AR := $(CROSS_COMPILE)$(AR)
 
-SDK_USR_CFLAGS += -I$(GMP_DIR)/include \
-		  -I$(ISP_ROOT)/include \
-                  -I$(ISP_ROOT)/kernel/include/arch/$(CHIPARCH)/include \
-		  -I$(ISP_ROOT)/kernel/arch/$(CHIPARCH)/include \
-		  -I$(ISP_ROOT)/kernel/mkp/include \
-		  -I$(ISP_ROOT)/kernel/arch/include \
-		  -I$(ISP_ROOT)/user/3a/include \
-                  -I$(ISP_ROOT)/user/firmware/include \
-		  -I$(ISP_ROOT)/user/firmware/drv \
-		  -I$(ISP_ROOT)/user/firmware/arch/include \
-                  -I$(ISP_ROOT)/user/firmware/arch/$(CHIPARCH)/include \
-                  -I$(ISP_ROOT)/ext_inc
+LIB_DIR := $(CURDIR)
+KO_DIR := $(CURDIR)/../../kernel/isp
 
-SDK_USR_CFLAGS += -DENABLE_JPEGEDCF
+CHIPARCH := gk7205v200
+
+CFLAGS += -fPIC -O3 -DNDEBUG
+
+CFLAGS += -I$(LIB_DIR)/include \
+		  -I$(LIB_DIR)/../../include \
+		  -I$(LIB_DIR)/arch/$(CHIPARCH)/include \
+		  -I$(KO_DIR)/include \
+		  -I$(KO_DIR)/ext_inc \
+		  -I$(KO_DIR)/mkp/include \
+		  -I$(KO_DIR)/arch/$(CHIPARCH)/include
+
+CFLAGS += -DENABLE_JPEGEDCF
 
 SRCS := $(wildcard arch/$(CHIPARCH)/algorithms/*.c)
 SRCS += $(wildcard arch/$(CHIPARCH)/hal/*.c)
@@ -60,7 +56,15 @@ ifneq ($(CONFIG_VI_FPN_SUPPORT), y)
      SRCS := $(filter-out arch/$(CHIPARCH)/algorithms/isp_fpn.c, $(SRCS))
 endif
 
-THIS_LIB_STATIC_INSTALL_DIR := $(SDK_STATIC_LIB_DIR)/base
-THIS_LIB_SHARE_INSTALL_DIR := $(SDK_SHARE_LIB_DIR)/base
+OBJS := $(SRCS:%.c=%.o) $(ASM_SRCS:%.S=%.o)
 
-include $(SDK_DIR)/build/sdk_lib_rules.mk
+all: $(LIB_NAME).so $(LIB_NAME).a
+
+$(LIB_NAME).so: $(OBJS)
+	$(CC) -shared -o $@ $(OBJS)
+
+$(LIB_NAME).a: $(OBJS)
+	$(AR) -rcs $(LIB_NAME).a $(OBJS)
+
+clean:
+	-rm $(OBJS) $(LIB_NAME).so
