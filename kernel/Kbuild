@@ -1,1 +1,2 @@
-obj-m		:= hw-rng/hisi-hwrng.o sysconfig/sys_config.o
+include $(src)/hw-rng/Kbuild
+include $(src)/sysconfig/Kbuild
