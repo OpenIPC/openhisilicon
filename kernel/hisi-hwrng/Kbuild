@@ -1,0 +1,7 @@
+MOD_NAME := hisi-hwrng
+
+DIR=$(MOD_NAME)
+
+$(MOD_NAME)-objs := $(DIR)/hisi-hwrng.o
+
+obj-m += $(MOD_NAME).o
