@@ -60,6 +60,6 @@ static struct platform_driver vendor_isp_driver =
 
 osal_module_platform_driver(vendor_isp_driver);
 
-MODULE_LICENSE("Proprietary");
+MODULE_LICENSE("GPL");
 
 
