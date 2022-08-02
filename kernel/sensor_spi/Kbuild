@@ -1,0 +1,11 @@
+MOD_NAME := sensor_spi
+
+DIR=$(MOD_NAME)
+
+SRCS := $(DIR)/sensor_spi.c
+
+OBJS := $(SRCS:%.c=%.o) $(ASM_SRCS:%.S=%.o)
+
+$(MOD_NAME)-objs := $(OBJS)
+
+obj-m += $(MOD_NAME).o

@@ -1,0 +1,25 @@
+MOD_NAME := isp
+
+DIR=$(MOD_NAME)/kernel
+
+SRCS := \
+	$(DIR)/arch/gk7205v200/hal/isp_drv.c \
+	$(DIR)/init/linux/isp_init.c \
+	$(DIR)/mkp/src/isp.c \
+	$(DIR)/mkp/src/isp_drv_vreg.c \
+	$(DIR)/mkp/src/isp_list.c \
+	$(DIR)/mkp/src/isp_st.c
+
+ccflags-y += -I$(src)/$(MOD_NAME)/include
+ccflags-y += -I$(src)/$(MOD_NAME)/kernel/arch/include
+ccflags-y += -I$(src)/$(MOD_NAME)/ext_inc
+ccflags-y += -I$(src)/$(MOD_NAME)/kernel/mkp/include
+ccflags-y += -I$(src)/$(MOD_NAME)/kernel/arch/gk7205v200/include
+ccflags-y += -I$(src)/../libraries/isp/arch/gk7205v200/include
+ccflags-y += -I$(src)/../libraries/isp/include
+
+OBJS := $(SRCS:%.c=%.o) $(ASM_SRCS:%.S=%.o)
+
+$(MOD_NAME)-objs := $(OBJS)
+
+obj-m += $(MOD_NAME).o
