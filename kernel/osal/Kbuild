@@ -1,0 +1,49 @@
+MOD_NAME := osal
+
+DIR=$(MOD_NAME)/linux/kernel
+
+SRCS := \
+	$(DIR)/osal_fileops.c \
+	$(DIR)/osal_vmalloc.c \
+	$(DIR)/osal_addr.c \
+	$(DIR)/osal_init.c \
+	$(DIR)/osal_atomic.c \
+	$(DIR)/osal_barrier.c \
+	$(DIR)/osal_cache.c \
+	$(DIR)/osal_debug.c \
+	$(DIR)/osal_device.c \
+	$(DIR)/osal_interrupt.c \
+	$(DIR)/osal_math.c \
+	$(DIR)/osal_mutex.c \
+	$(DIR)/osal_proc.c \
+	$(DIR)/osal_schedule.c \
+	$(DIR)/osal_semaphore.c \
+	$(DIR)/osal_spinlock.c \
+	$(DIR)/osal_string.c \
+	$(DIR)/osal_task.c \
+	$(DIR)/osal_timer.c \
+	$(DIR)/osal_wait.c \
+	$(DIR)/osal_workqueue.c \
+	$(DIR)/osal_notifier.c \
+	$(DIR)/osal_platform.c
+
+SRCS += \
+	$(DIR)/media/base.c \
+	$(DIR)/media/media.c \
+	$(DIR)/mmz/media-mem.c \
+	$(DIR)/mmz/mmz-userdev.c \
+	$(DIR)/mmz/allocator.c
+
+ifeq ($(CONFIG_CMA),y)
+SRCS += $(DIR)/mmz/cma_allocator.c
+endif
+
+ccflags-y += -I$(src)/$(MOD_NAME)/include
+ccflags-y += -I$(src)/$(MOD_NAME)/linux/kernel
+ccflags-y += -I$(src)/$(MOD_NAME)/linux/kernel/media
+
+OBJS := $(SRCS:%.c=%.o) $(ASM_SRCS:%.S=%.o)
+
+$(MOD_NAME)-objs := $(OBJS)
+
+obj-m += $(MOD_NAME).o
