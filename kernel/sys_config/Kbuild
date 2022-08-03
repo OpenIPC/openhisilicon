@@ -1,7 +1,8 @@
 MOD_NAME := sys_config
+OUT := $(PREFIX)$(MOD_NAME)
 
 DIR=$(MOD_NAME)
 
-$(MOD_NAME)-objs := $(DIR)/$(MOD_NAME).o
+$(OUT)-objs := $(DIR)/$(MOD_NAME).o
 
-obj-m += $(MOD_NAME).o
+obj-m += $(OUT).o

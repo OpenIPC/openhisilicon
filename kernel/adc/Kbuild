@@ -1,4 +1,5 @@
 MOD_NAME := adc
+OUT := $(PREFIX)$(MOD_NAME)
 
 DIR=$(MOD_NAME)
 
@@ -8,6 +9,6 @@ SRCS := \
 
 OBJS := $(SRCS:%.c=%.o) $(ASM_SRCS:%.S=%.o)
 
-$(MOD_NAME)-objs := $(OBJS)
+$(OUT)-objs := $(OBJS)
 
-obj-m += $(MOD_NAME).o
+obj-m += $(OUT).o
