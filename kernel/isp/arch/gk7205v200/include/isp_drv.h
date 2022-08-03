@@ -8,6 +8,6 @@
 
 #define ISP_FE_IRQ_NR 75
 
-#define ISP_BITMASK(bit)  ((1 << (bit)) - 1)
+#define ISP_BITMASK(bit) ((1 << (bit)) - 1)
 GK_S32 ISP_DRV_SetOnlineSttAddr(VI_PIPE ViPipe, GK_U64 u64PhyBaseAddr);
 #endif /* __ISP_DRV_H__ */

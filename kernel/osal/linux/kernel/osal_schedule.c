@@ -8,7 +8,7 @@
 
 void osal_yield(void)
 {
-    // yield();
-    cond_resched();
+	// yield();
+	cond_resched();
 }
 EXPORT_SYMBOL(osal_yield);
