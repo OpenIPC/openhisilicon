@@ -1,0 +1,15 @@
+MOD_NAME := mipi_rx
+OUT := $(PREFIX)$(MOD_NAME)
+
+DIR=$(MOD_NAME)
+
+SRCS := \
+  $(DIR)/mipi_rx_init.c \
+  $(DIR)/mipi_rx_hal.c \
+  $(DIR)/mipi_rx.c \
+
+OBJS := $(SRCS:%.c=%.o) $(ASM_SRCS:%.S=%.o)
+
+$(OUT)-objs := $(OBJS)
+
+obj-m += $(OUT).o

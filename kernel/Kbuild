@@ -14,3 +14,4 @@ include $(src)/pwm/Kbuild
 include $(src)/sample_ist/Kbuild
 include $(src)/sensor_i2c/Kbuild
 include $(src)/sensor_spi/Kbuild
+include $(src)/mipi_rx/Kbuild
