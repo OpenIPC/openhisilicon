@@ -10,14 +10,8 @@ extern "C" {
 #endif
 #endif /* End of #ifdef __cplusplus */
 
-
-
 #define PWMI_ADRESS_BASE 0x12080000
-#define PWM_NUM_MAX      0x08
-
-
-
-
+#define PWM_NUM_MAX 0x08
 
 #ifdef __cplusplus
 #if __cplusplus

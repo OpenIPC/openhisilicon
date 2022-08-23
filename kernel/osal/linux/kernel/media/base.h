@@ -24,7 +24,8 @@ void media_device_unregister(struct media_device *pdev);
 #endif
 
 struct media_driver *media_driver_register(const char *name,
-                                               struct module *owner, struct media_ops *ops);
+					   struct module *owner,
+					   struct media_ops *ops);
 
 void media_driver_unregister(struct media_driver *pdrv);
 

@@ -1,0 +1,13 @@
+MOD_NAME := rc
+OUT := $(PREFIX)$(MOD_NAME)
+
+DIR=$(MOD_NAME)
+
+SRCS := $(DIR)/rc_init.c
+
+OBJS := $(SRCS:%.c=%.o) $(ASM_SRCS:%.S=%.o)
+OBJS += $(DIR)/rc.o
+
+$(OUT)-objs := $(OBJS)
+
+obj-m += $(OUT).o

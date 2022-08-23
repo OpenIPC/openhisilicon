@@ -12,17 +12,17 @@
 
 #define MAX_MPP_MODULES MOD_ID_BUTT
 
-#define VERSION_MAGIC   20190906
+#define VERSION_MAGIC 20190906
 
-#define MAX_MOD_NAME    16
+#define MAX_MOD_NAME 16
 
 typedef enum MOD_NOTICE_ID_E {
-    MOD_NOTICE_STOP = 0x11,
+	MOD_NOTICE_STOP = 0x11,
 } MOD_NOTICE_ID_E;
 
 typedef enum MOD_STATE_E {
-    MOD_STATE_FREE = 0x11,
-    MOD_STATE_BUSY = 0X22,
+	MOD_STATE_FREE = 0x11,
+	MOD_STATE_BUSY = 0X22,
 } MOD_STATE_E;
 
 typedef GK_S32 FN_MOD_Init(GK_VOID *);
@@ -32,23 +32,23 @@ typedef GK_VOID FN_MOD_QueryState(MOD_STATE_E *pstState);
 typedef GK_U32 FN_MOD_VerChecker(GK_VOID);
 
 typedef struct MPP_MODULE_S {
-    struct osal_list_head list;
+	struct osal_list_head list;
 
-    GK_CHAR aModName[MAX_MOD_NAME];
-    MOD_ID_E enModId;
+	GK_CHAR aModName[MAX_MOD_NAME];
+	MOD_ID_E enModId;
 
-    FN_MOD_Init *pfnInit;
-    FN_MOD_Exit *pfnExit;
-    FN_MOD_QueryState *pfnQueryState;
-    FN_MOD_Notify *pfnNotify;
-    FN_MOD_VerChecker *pfnVerChecker;
+	FN_MOD_Init *pfnInit;
+	FN_MOD_Exit *pfnExit;
+	FN_MOD_QueryState *pfnQueryState;
+	FN_MOD_Notify *pfnNotify;
+	FN_MOD_VerChecker *pfnVerChecker;
 
-    GK_BOOL bInited;
+	GK_BOOL bInited;
 
-    GK_VOID *pstExportFuncs;
-    GK_VOID *pData;
+	GK_VOID *pstExportFuncs;
+	GK_VOID *pData;
 
-    GK_CHAR *pVersion;
+	GK_CHAR *pVersion;
 } UMAP_MODULE_S;
 
 extern GK_CHAR *CMPI_GetModuleName(MOD_ID_E enModId);
@@ -67,4 +67,3 @@ extern GK_VOID CMPI_UnRegisterModule(MOD_ID_E enModId);
 #define FUNC_ENTRY_NULL(id) (!CHECK_FUNC_ENTRY(id))
 
 #endif /*  __MOD_EXT_H__ */
-

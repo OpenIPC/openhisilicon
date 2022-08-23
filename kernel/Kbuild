@@ -1,4 +1,10 @@
-ccflags-y := -DRELEASE -DUSER_BIT_32 -DKERNEL_BIT_32 -Wno-date-time -D_GNU_SOURCE
+PREFIX = open_
+
+ifeq ($(CHIPSET),)
+	@echo CHIPSET must be set
+endif
+
+ccflags-y := -D$(CHIPSET) -DRELEASE -DUSER_BIT_32 -DKERNEL_BIT_32 -Wno-date-time -D_GNU_SOURCE
 ccflags-y += -I$(src)/../include
 
 include $(src)/hisi-hwrng/Kbuild
@@ -12,3 +18,30 @@ include $(src)/pwm/Kbuild
 include $(src)/sample_ist/Kbuild
 include $(src)/sensor_i2c/Kbuild
 include $(src)/sensor_spi/Kbuild
+include $(src)/mipi_rx/Kbuild
+
+ifeq ($(CHIPSET),hi3516ev200)
+    include $(src)/acodec/Kbuild
+    include $(src)/adec/Kbuild
+    include $(src)/aenc/Kbuild
+    include $(src)/ai/Kbuild
+    include $(src)/aio/Kbuild
+    include $(src)/ao/Kbuild
+    include $(src)/base/Kbuild
+    include $(src)/chnl/Kbuild
+    include $(src)/h264e/Kbuild
+    include $(src)/h265e/Kbuild
+    include $(src)/ive/Kbuild
+    include $(src)/jpege/Kbuild
+    #include $(src)/pm/Kbuild
+    include $(src)/rc/Kbuild
+    include $(src)/rgn/Kbuild
+    include $(src)/sys/Kbuild
+    include $(src)/tde/Kbuild
+    include $(src)/vedu/Kbuild
+    include $(src)/venc/Kbuild
+    include $(src)/vgs/Kbuild
+    include $(src)/vi/Kbuild
+    include $(src)/vo/Kbuild
+    include $(src)/vpss/Kbuild
+endif

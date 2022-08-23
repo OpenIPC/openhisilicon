@@ -10,10 +10,8 @@ extern "C" {
 #endif
 #endif /* __cplusplus */
 
-
 #define SAMPLE_IST_DEL_NODE 0x01
 #define SAMPLE_IST_ADD_NODE 0x03
-
 
 #ifdef __cplusplus
 #if __cplusplus
@@ -21,4 +19,4 @@ extern "C" {
 #endif
 #endif /* __cplusplus */
 
-#endif  /* __ISP_PWM_H__ */
+#endif /* __ISP_PWM_H__ */

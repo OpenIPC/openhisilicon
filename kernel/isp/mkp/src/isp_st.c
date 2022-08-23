@@ -13,9 +13,8 @@ extern "C" {
 #endif
 #endif /* End of #ifdef __cplusplus */
 
-
 /* isp sync task */
-#define  ISP_SYNC_TSK_MAX_NODES  16
+#define ISP_SYNC_TSK_MAX_NODES 16
 
 #define ISP_SYNC_TSK_MAX_NUM 200
 
@@ -24,27 +23,27 @@ extern "C" {
 typedef void (*ISP_FUNC_PTR)(unsigned long data);
 
 typedef enum ISP_SYNC_TSK_TRIG_POS_E {
-    TRIG_POS_FIRST_PIXEL = 1 << 0,
-    TRIG_POS_LAST_PIXEL  = 1 << 1,
-    TRIG_POS_VSYNC_SIGNAL = 1 << 2,
+	TRIG_POS_FIRST_PIXEL = 1 << 0,
+	TRIG_POS_LAST_PIXEL = 1 << 1,
+	TRIG_POS_VSYNC_SIGNAL = 1 << 2,
 
-    TRIG_POS_BUTT
+	TRIG_POS_BUTT
 } ISP_SYNC_TSK_TRIG_POS_E;
 
 typedef struct LIST_ENTRY_S {
-    GK_U32 u32Num;
-    struct osal_list_head head;
+	GK_U32 u32Num;
+	struct osal_list_head head;
 
 } LIST_ENTRY_S;
 
 typedef struct ISP_SYNC_TSK_CTX_S {
-    VI_PIPE ViPipe;
-    struct osal_work_struct worker;
-    LIST_ENTRY_S hwirq_list;
-    LIST_ENTRY_S tsklet_list;
-    LIST_ENTRY_S workqueue_list;
+	VI_PIPE ViPipe;
+	struct osal_work_struct worker;
+	LIST_ENTRY_S hwirq_list;
+	LIST_ENTRY_S tsklet_list;
+	LIST_ENTRY_S workqueue_list;
 
-    struct osal_semaphore sem;
+	struct osal_semaphore sem;
 
 } ISP_SYNC_TSK_CTX_S;
 
@@ -59,7 +58,6 @@ typedef struct ISP_SYNC_TSK_CTX_S {
 /* ----------------------------------------------*
  * internal routine prototypes                  *
  * ---------------------------------------------- */
-
 
 /* ----------------------------------------------*
  * project-wide global variables                *
@@ -99,24 +97,27 @@ ISP_SYNC_TSK_CTX_S g_astIspSyncTskCtx[ISP_MAX_PIPE_NUM];
 
 GK_S32 ispSyncTskFIndAndExecute(VI_PIPE ViPipe, struct osal_list_head *head)
 {
-    struct osal_list_head *pos = GK_NULL;
-    struct osal_list_head *next = GK_NULL;
-    ISP_SYNC_TASK_NODE_S *pstSyncTskNode;
+	struct osal_list_head *pos = GK_NULL;
+	struct osal_list_head *next = GK_NULL;
+	ISP_SYNC_TASK_NODE_S *pstSyncTskNode;
 
-    if (!osal_list_empty(head)) {
-        osal_list_for_each_safe(pos, next, head) {
-            pstSyncTskNode = osal_list_entry(pos, ISP_SYNC_TASK_NODE_S, list);
-            if (pstSyncTskNode->pstFocusStat) {
-                ISP_DRV_StaKernelGet(ViPipe, pstSyncTskNode->pstFocusStat);
-            }
-            if (pstSyncTskNode->pfnIspSyncTskCallBack) {
-                pstSyncTskNode->pfnIspSyncTskCallBack(pstSyncTskNode->u64Data);
-            }
+	if (!osal_list_empty(head)) {
+		osal_list_for_each_safe(pos, next, head)
+		{
+			pstSyncTskNode = osal_list_entry(
+				pos, ISP_SYNC_TASK_NODE_S, list);
+			if (pstSyncTskNode->pstFocusStat) {
+				ISP_DRV_StaKernelGet(
+					ViPipe, pstSyncTskNode->pstFocusStat);
+			}
+			if (pstSyncTskNode->pfnIspSyncTskCallBack) {
+				pstSyncTskNode->pfnIspSyncTskCallBack(
+					pstSyncTskNode->u64Data);
+			}
+		}
+	}
 
-        }
-    }
-
-    return GK_SUCCESS;
+	return GK_SUCCESS;
 }
 
 /*****************************************************************************
@@ -152,18 +153,19 @@ GK_S32 ispSyncTskFIndAndExecute(VI_PIPE ViPipe, struct osal_list_head *head)
 *****************************************************************************/
 static void workQueueHandler(struct osal_work_struct *pstWorker)
 {
+	ISP_SYNC_TSK_CTX_S *pstSyncTsk = osal_container_of(
+		(void *)pstWorker, ISP_SYNC_TSK_CTX_S, worker);
 
-    ISP_SYNC_TSK_CTX_S *pstSyncTsk = osal_container_of((void *)pstWorker, ISP_SYNC_TSK_CTX_S, worker);
+	if (osal_down_interruptible(&pstSyncTsk->sem)) {
+		return;
+	}
 
-    if (osal_down_interruptible(&pstSyncTsk->sem)) {
-        return;
-    }
+	ispSyncTskFIndAndExecute(pstSyncTsk->ViPipe,
+				 &pstSyncTsk->workqueue_list.head);
 
-    ispSyncTskFIndAndExecute(pstSyncTsk->ViPipe, &pstSyncTsk->workqueue_list.head);
+	osal_up(&pstSyncTsk->sem);
 
-    osal_up(&pstSyncTsk->sem);
-
-    return;
+	return;
 }
 
 /*****************************************************************************
@@ -172,41 +174,44 @@ static void workQueueHandler(struct osal_work_struct *pstWorker)
 *****************************************************************************/
 GK_S32 IspSyncTaskProcess(VI_PIPE ViPipe)
 {
-    ISP_SYNC_TSK_CTX_S *pstSyncTsk = ISP_SYNC_TSK_GET_CTX(ViPipe);
+	ISP_SYNC_TSK_CTX_S *pstSyncTsk = ISP_SYNC_TSK_GET_CTX(ViPipe);
 
-    if (pstSyncTsk->hwirq_list.u32Num) {
-        ispSyncTskFIndAndExecute(ViPipe, &pstSyncTsk->hwirq_list.head);
-    }
+	if (pstSyncTsk->hwirq_list.u32Num) {
+		ispSyncTskFIndAndExecute(ViPipe, &pstSyncTsk->hwirq_list.head);
+	}
 
-    if (pstSyncTsk->tsklet_list.u32Num) {
-    }
+	if (pstSyncTsk->tsklet_list.u32Num) {
+	}
 
-    if (pstSyncTsk->workqueue_list.u32Num) {
-        osal_schedule_work(&pstSyncTsk->worker);
-    }
+	if (pstSyncTsk->workqueue_list.u32Num) {
+		osal_schedule_work(&pstSyncTsk->worker);
+	}
 
-    return GK_SUCCESS;
-
+	return GK_SUCCESS;
 }
 
 /*****************************************************************************
  Prototype    : searchNode
  Description  : seach a node by id
 *****************************************************************************/
-static struct osal_list_head *searchNode(struct osal_list_head *head, const char *id)
+static struct osal_list_head *searchNode(struct osal_list_head *head,
+					 const char *id)
 {
-    struct osal_list_head *pos = GK_NULL;
-    struct osal_list_head *next = GK_NULL;
-    ISP_SYNC_TASK_NODE_S *pstSyncTskNode;
+	struct osal_list_head *pos = GK_NULL;
+	struct osal_list_head *next = GK_NULL;
+	ISP_SYNC_TASK_NODE_S *pstSyncTskNode;
 
-    osal_list_for_each_safe(pos, next, head) {
-        pstSyncTskNode = osal_list_entry(pos, ISP_SYNC_TASK_NODE_S, list);
-        if (!osal_strncmp(pstSyncTskNode->pszId, id, ISP_SYNC_TASK_ID_MAX_LENGTH)) {
-            return pos;
-        }
-    }
+	osal_list_for_each_safe(pos, next, head)
+	{
+		pstSyncTskNode =
+			osal_list_entry(pos, ISP_SYNC_TASK_NODE_S, list);
+		if (!osal_strncmp(pstSyncTskNode->pszId, id,
+				  ISP_SYNC_TASK_ID_MAX_LENGTH)) {
+			return pos;
+		}
+	}
 
-    return GK_NULL;
+	return GK_NULL;
 }
 
 /*****************************************************************************
@@ -215,110 +220,108 @@ static struct osal_list_head *searchNode(struct osal_list_head *head, const char
 *****************************************************************************/
 GK_S32 isp_sync_task_register(VI_PIPE ViPipe, ISP_SYNC_TASK_NODE_S *pstNewNode)
 {
-    ISP_SYNC_TSK_CTX_S *pstSyncTsk = ISP_SYNC_TSK_GET_CTX(ViPipe);
-    struct osal_list_head *pstTargetList, *pos;
-    LIST_ENTRY_S *pstListEntry;
+	ISP_SYNC_TSK_CTX_S *pstSyncTsk = ISP_SYNC_TSK_GET_CTX(ViPipe);
+	struct osal_list_head *pstTargetList, *pos;
+	LIST_ENTRY_S *pstListEntry;
 
-    ISP_CHECK_POINTER(pstNewNode);
+	ISP_CHECK_POINTER(pstNewNode);
 
-    if (pstNewNode->enMethod == ISP_SYNC_TSK_METHOD_HW_IRQ) {
-        pstTargetList = &pstSyncTsk->hwirq_list.head;
-    } else {
-        pstTargetList = &pstSyncTsk->workqueue_list.head;
-    }
+	if (pstNewNode->enMethod == ISP_SYNC_TSK_METHOD_HW_IRQ) {
+		pstTargetList = &pstSyncTsk->hwirq_list.head;
+	} else {
+		pstTargetList = &pstSyncTsk->workqueue_list.head;
+	}
 
-    pstListEntry = osal_list_entry(pstTargetList, LIST_ENTRY_S, head);
+	pstListEntry = osal_list_entry(pstTargetList, LIST_ENTRY_S, head);
 
-    pos = searchNode(pstTargetList, pstNewNode->pszId);
-    if (pos) {
-        return GK_FAILURE;
-    }
+	pos = searchNode(pstTargetList, pstNewNode->pszId);
+	if (pos) {
+		return GK_FAILURE;
+	}
 
-    if (osal_down_interruptible(&pstSyncTsk->sem)) {
-        return -ERESTARTSYS;
-    }
+	if (osal_down_interruptible(&pstSyncTsk->sem)) {
+		return -ERESTARTSYS;
+	}
 
-    osal_list_add_tail(&pstNewNode->list, pstTargetList);
+	osal_list_add_tail(&pstNewNode->list, pstTargetList);
 
-    if (pstListEntry->u32Num < ISP_SYNC_TSK_MAX_NUM) {
-        pstListEntry->u32Num++;
-    }
+	if (pstListEntry->u32Num < ISP_SYNC_TSK_MAX_NUM) {
+		pstListEntry->u32Num++;
+	}
 
-    osal_up(&pstSyncTsk->sem);
+	osal_up(&pstSyncTsk->sem);
 
-    return GK_SUCCESS;
-
+	return GK_SUCCESS;
 }
 
 /*****************************************************************************
  Prototype    : isp_sync_task_unregister
  Description  : unregister a task export to other module
 *****************************************************************************/
-GK_S32 isp_sync_task_unregister(VI_PIPE ViPipe, ISP_SYNC_TASK_NODE_S *pstDelNode)
+GK_S32 isp_sync_task_unregister(VI_PIPE ViPipe,
+				ISP_SYNC_TASK_NODE_S *pstDelNode)
 {
-    ISP_SYNC_TSK_CTX_S *pstSyncTsk = ISP_SYNC_TSK_GET_CTX(ViPipe);
-    struct osal_list_head *pstTargetList;
-    LIST_ENTRY_S *pstListEntry;
-    struct osal_list_head *pos;
-    GK_S32 bDelSuccess = GK_FAILURE;
+	ISP_SYNC_TSK_CTX_S *pstSyncTsk = ISP_SYNC_TSK_GET_CTX(ViPipe);
+	struct osal_list_head *pstTargetList;
+	LIST_ENTRY_S *pstListEntry;
+	struct osal_list_head *pos;
+	GK_S32 bDelSuccess = GK_FAILURE;
 
+	ISP_CHECK_POINTER(pstDelNode);
 
-    ISP_CHECK_POINTER(pstDelNode);
+	if (pstDelNode->enMethod == ISP_SYNC_TSK_METHOD_HW_IRQ) {
+		pstTargetList = &pstSyncTsk->hwirq_list.head;
+	} else {
+		pstTargetList = &pstSyncTsk->workqueue_list.head;
+	}
+	pstListEntry = osal_list_entry(pstTargetList, LIST_ENTRY_S, head);
 
-    if (pstDelNode->enMethod == ISP_SYNC_TSK_METHOD_HW_IRQ) {
-        pstTargetList = &pstSyncTsk->hwirq_list.head;
-    } else {
-        pstTargetList = &pstSyncTsk->workqueue_list.head;
-    }
-    pstListEntry = osal_list_entry(pstTargetList, LIST_ENTRY_S, head);
+	if (osal_down_interruptible(&pstSyncTsk->sem)) {
+		return -ERESTARTSYS;
+	}
 
-    if (osal_down_interruptible(&pstSyncTsk->sem)) {
-        return -ERESTARTSYS;
-    }
+	pos = searchNode(pstTargetList, pstDelNode->pszId);
 
-    pos = searchNode(pstTargetList, pstDelNode->pszId);
+	if (pos) {
+		osal_list_del(pos);
+		if (pstListEntry->u32Num > 0) {
+			pstListEntry->u32Num = pstListEntry->u32Num - 1;
+		}
 
-    if (pos) {
-        osal_list_del(pos);
-        if (pstListEntry->u32Num > 0) {
-            pstListEntry->u32Num = pstListEntry->u32Num - 1;
-        }
+		bDelSuccess = GK_SUCCESS;
+	}
 
-        bDelSuccess = GK_SUCCESS;
-    }
+	osal_up(&pstSyncTsk->sem);
 
-    osal_up(&pstSyncTsk->sem);
-
-    return bDelSuccess;
-
+	return bDelSuccess;
 }
 
 void SyncTaskInit(VI_PIPE ViPipe)
 {
-    ISP_SYNC_TSK_CTX_S *pstSyncTsk = ISP_SYNC_TSK_GET_CTX(ViPipe);
+	ISP_SYNC_TSK_CTX_S *pstSyncTsk = ISP_SYNC_TSK_GET_CTX(ViPipe);
 
-    OSAL_INIT_LIST_HEAD(&pstSyncTsk->hwirq_list.head);
-    OSAL_INIT_LIST_HEAD(&pstSyncTsk->tsklet_list.head);
-    OSAL_INIT_LIST_HEAD(&pstSyncTsk->workqueue_list.head);
+	OSAL_INIT_LIST_HEAD(&pstSyncTsk->hwirq_list.head);
+	OSAL_INIT_LIST_HEAD(&pstSyncTsk->tsklet_list.head);
+	OSAL_INIT_LIST_HEAD(&pstSyncTsk->workqueue_list.head);
 
-    pstSyncTsk->hwirq_list.u32Num     = 0;
-    pstSyncTsk->tsklet_list.u32Num    = 0;
-    pstSyncTsk->workqueue_list.u32Num = 0;
-    osal_sema_init(&pstSyncTsk->sem, 1);
+	pstSyncTsk->hwirq_list.u32Num = 0;
+	pstSyncTsk->tsklet_list.u32Num = 0;
+	pstSyncTsk->workqueue_list.u32Num = 0;
+	osal_sema_init(&pstSyncTsk->sem, 1);
 
-    OSAL_INIT_WORK(&pstSyncTsk->worker, workQueueHandler);
+	OSAL_INIT_WORK(&pstSyncTsk->worker, workQueueHandler);
 
-    return;
+	return;
 }
 
 void SyncTaskExit(VI_PIPE ViPipe)
 {
-    ISP_SYNC_TSK_CTX_S *pstSyncTsk = ISP_SYNC_TSK_GET_CTX(ViPipe);
+	ISP_SYNC_TSK_CTX_S *pstSyncTsk = ISP_SYNC_TSK_GET_CTX(ViPipe);
 
-    osal_destroy_work(&pstSyncTsk->worker);
-    osal_sema_destory(&pstSyncTsk->sem);
+	osal_destroy_work(&pstSyncTsk->worker);
+	osal_sema_destory(&pstSyncTsk->sem);
 
-    return;
+	return;
 }
 
 #ifdef __cplusplus

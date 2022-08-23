@@ -10,39 +10,37 @@
 #include "type.h"
 #include "common.h"
 #include "osal.h"
+#include "../../compat/compat.h"
 
 extern int ISP_ModInit(void);
 extern void ISP_ModExit(void);
 
-
-extern  unsigned int     isp_fe_irq;
+extern unsigned int isp_fe_irq;
 
 static int vendor_isp_probe(struct platform_device *pdev)
 {
-    isp_fe_irq = osal_platform_get_irq_byname (pdev, "ISP");
+	isp_fe_irq = osal_platform_get_irq_byname(pdev, "ISP");
 
-    if (isp_fe_irq <= 0)
-    {
-        dev_err(&pdev->dev, "Can't find isp IRQ!\n");
-        return GK_FALSE;
-    }
+	if (isp_fe_irq <= 0) {
+		dev_err(&pdev->dev, "Can't find isp IRQ!\n");
+		return GK_FALSE;
+	}
 
-    ISP_ModInit();
+	ISP_ModInit();
 
-    return 0;
+	return 0;
 }
 
 static int vendor_isp_remove(struct platform_device *pdev)
 {
-    ISP_ModExit();
-    
-    return 0;
+	ISP_ModExit();
+
+	return 0;
 }
 
-static const struct of_device_id vendor_isp_match[] =
-{
-    { .compatible = "goke,isp" },
-    {},
+static const struct of_device_id vendor_isp_match[] = {
+	{ .compatible = PLATFORM_NAME "," HISI_PRX "isp" },
+	{},
 };
 
 MODULE_DEVICE_TABLE(of, vendor_isp_match);
@@ -53,7 +51,7 @@ static struct platform_driver vendor_isp_driver =
         .remove         = vendor_isp_remove,
         .driver         = 
         {
-            .name           = "vendor_isp",
+            .name           = VENDOR_PRX "_isp",
             .of_match_table = vendor_isp_match,
         },
 };
@@ -61,5 +59,3 @@ static struct platform_driver vendor_isp_driver =
 osal_module_platform_driver(vendor_isp_driver);
 
 MODULE_LICENSE("GPL");
-
-

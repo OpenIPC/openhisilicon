@@ -23,9 +23,9 @@ extern "C" {
  * GENERAL STRUCTURES                                                       *
  ****************************************************************************/
 typedef struct ISP_BIN_REG_ATTR_S {
-    GK_U32  u32Addr;    /* register addr */
-    GK_U8   u8StartBit; /* start bit of register addr */
-    GK_U8   u8EndBit;   /* end bit of register addr */
+	GK_U32 u32Addr; /* register addr */
+	GK_U8 u8StartBit; /* start bit of register addr */
+	GK_U8 u8EndBit; /* end bit of register addr */
 } ISP_BIN_REG_ATTR_S;
 
 /* -------------------------------------------*
@@ -36,9 +36,8 @@ typedef struct ISP_BIN_REG_ATTR_S {
 * ------------------------------------------- */
 
 ISP_BIN_REG_ATTR_S g_astIspBinRegAttr[ISP_MAX_PIPE_NUM][MAX_BIN_REG_NUM] = {
-    [0 ...(ISP_MAX_PIPE_NUM - 1)] = {0}
+	[0 ...(ISP_MAX_PIPE_NUM - 1)] = { 0 }
 };
-
 
 #ifdef __cplusplus
 #if __cplusplus

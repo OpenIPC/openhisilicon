@@ -8,54 +8,54 @@
 
 void osal_mb(void)
 {
-    mb();
+	mb();
 }
 EXPORT_SYMBOL(osal_mb);
 void osal_rmb(void)
 {
-    rmb();
+	rmb();
 }
 EXPORT_SYMBOL(osal_rmb);
 void osal_wmb(void)
 {
-    wmb();
+	wmb();
 }
 EXPORT_SYMBOL(osal_wmb);
 void osal_smp_mb(void)
 {
-    smp_mb();
+	smp_mb();
 }
 EXPORT_SYMBOL(osal_smp_mb);
 void osal_smp_rmb(void)
 {
-    smp_rmb();
+	smp_rmb();
 }
 EXPORT_SYMBOL(osal_smp_rmb);
 void osal_smp_wmb(void)
 {
-    smp_wmb();
+	smp_wmb();
 }
 EXPORT_SYMBOL(osal_smp_wmb);
 void osal_isb(void)
 {
-    isb();
+	isb();
 }
 EXPORT_SYMBOL(osal_isb);
 void osal_dsb(void)
 {
 #ifdef CONFIG_64BIT
-    dsb(sy);
+	dsb(sy);
 #else
-    dsb();
+	dsb();
 #endif
 }
 EXPORT_SYMBOL(osal_dsb);
 void osal_dmb(void)
 {
 #ifdef CONFIG_64BIT
-    dmb(sy);
+	dmb(sy);
 #else
-    dmb();
+	dmb();
 #endif
 }
 EXPORT_SYMBOL(osal_dmb);
