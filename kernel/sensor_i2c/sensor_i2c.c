@@ -107,9 +107,8 @@ static int sensor_i2c_write(unsigned char i2c_dev, unsigned char dev_addr,
 				return GK_FAILURE;
 			}
 		} else {
-			osal_printk(
-				"[%s %d] i2c_master_send error, ret=%d. \n",
-				__func__, __LINE__, ret);
+			osal_printk("[%s %d] i2c_master_send error, ret=%d. \n",
+				    __func__, __LINE__, ret);
 			return ret;
 		}
 	}

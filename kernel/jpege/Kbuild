@@ -1,0 +1,13 @@
+MOD_NAME := jpege
+OUT := $(PREFIX)$(MOD_NAME)
+
+DIR=$(MOD_NAME)
+
+SRCS := $(DIR)/jpege_init.c
+
+OBJS := $(SRCS:%.c=%.o) $(ASM_SRCS:%.S=%.o)
+OBJS += $(DIR)/jpege.o
+
+$(OUT)-objs := $(OBJS)
+
+obj-m += $(OUT).o

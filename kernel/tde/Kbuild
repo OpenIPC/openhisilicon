@@ -1,0 +1,13 @@
+MOD_NAME := tde
+OUT := $(PREFIX)$(MOD_NAME)
+
+DIR=$(MOD_NAME)
+
+SRCS := $(DIR)/tde_init.c
+
+OBJS := $(SRCS:%.c=%.o) $(ASM_SRCS:%.S=%.o)
+OBJS += $(DIR)/tde.o
+
+$(OUT)-objs := $(OBJS)
+
+obj-m += $(OUT).o

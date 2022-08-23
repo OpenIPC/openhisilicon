@@ -20,7 +20,7 @@
 #define I2C_MASTER_SEND hi_i2c_master_send
 #define GET_CMA_ZONE hisi_get_cma_zone
 
-#elif defined (gk7205v200)
+#elif defined(gk7205v200)
 
 /* gk7205v200 gk7205v300 gk7202v300 gk7605v100 */
 #define MAIN_CHIPNAME "gk7205v200"
