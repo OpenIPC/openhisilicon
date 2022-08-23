@@ -1,6 +1,10 @@
 PREFIX = open_
 
-ccflags-y := -DRELEASE -DUSER_BIT_32 -DKERNEL_BIT_32 -Wno-date-time -D_GNU_SOURCE
+ifeq ($(CHIPSET),)
+	@echo CHIPSET must be set
+endif
+
+ccflags-y := -D$(CHIPSET) -DRELEASE -DUSER_BIT_32 -DKERNEL_BIT_32 -Wno-date-time -D_GNU_SOURCE
 ccflags-y += -I$(src)/../include
 
 include $(src)/hisi-hwrng/Kbuild

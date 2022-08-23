@@ -16,6 +16,8 @@
 #include <linux/delay.h>
 #include "isp_ext.h"
 
+#include "../compat/compat.h"
+
 #define I2C_MAX_NUM 2
 #define ISP_MAX_DEV 2
 
@@ -90,7 +92,7 @@ static int sensor_i2c_write(unsigned char i2c_dev, unsigned char dev_addr,
 #endif
 
 	while (1) {
-		ret = gk_i2c_master_send(&client, (const char *)tmp_buf, idx);
+		ret = I2C_MASTER_SEND(&client, (const char *)tmp_buf, idx);
 		if (ret == idx) {
 			break;
 		}
@@ -106,7 +108,7 @@ static int sensor_i2c_write(unsigned char i2c_dev, unsigned char dev_addr,
 			}
 		} else {
 			osal_printk(
-				"[%s %d] gk_i2c_master_send error, ret=%d. \n",
+				"[%s %d] i2c_master_send error, ret=%d. \n",
 				__func__, __LINE__, ret);
 			return ret;
 		}
