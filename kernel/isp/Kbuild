@@ -4,7 +4,7 @@ OUT := $(PREFIX)$(MOD_NAME)
 DIR=$(MOD_NAME)
 
 SRCS := \
-	$(DIR)/arch/gk7205v200/hal/isp_drv.c \
+	$(DIR)/arch/$(CHIPSET)/hal/isp_drv.c \
 	$(DIR)/init/linux/isp_init.c \
 	$(DIR)/mkp/src/isp.c \
 	$(DIR)/mkp/src/isp_drv_vreg.c \
@@ -15,8 +15,8 @@ ccflags-y += -I$(src)/$(MOD_NAME)/include
 ccflags-y += -I$(src)/$(MOD_NAME)/arch/include
 ccflags-y += -I$(src)/$(MOD_NAME)/ext_inc
 ccflags-y += -I$(src)/$(MOD_NAME)/mkp/include
-ccflags-y += -I$(src)/$(MOD_NAME)/arch/gk7205v200/include
-ccflags-y += -I$(src)/../libraries/isp/arch/gk7205v200/include
+ccflags-y += -I$(src)/$(MOD_NAME)/arch/$(CHIPSET)/include
+ccflags-y += -I$(src)/../libraries/isp/arch/$(CHIPSET)/include
 ccflags-y += -I$(src)/../libraries/isp/include
 
 OBJS := $(SRCS:%.c=%.o) $(ASM_SRCS:%.S=%.o)
