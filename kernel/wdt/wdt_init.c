@@ -7,6 +7,8 @@
 #include <linux/version.h>
 #include <linux/of_platform.h>
 
+#include "../compat/compat.h"
+
 extern int default_margin;
 module_param(default_margin, int, 0);
 MODULE_PARM_DESC(
@@ -48,14 +50,14 @@ static int wdg_remove(struct platform_device *pdev)
 }
 
 static const struct of_device_id wdg_match[] = {
-	{ .compatible = "goke,wdg" },
+	{ .compatible = PLATFORM_NAME "," PLATFORM_PRX "wdg" },
 	{},
 };
 
 static struct platform_driver wdg_driver = {
     .probe  = wdg_probe,
     .remove = wdg_remove,
-    .driver =  { .name = "wdg",
+    .driver =  { .name = PLATFORM_PRX "wdg",
                 .of_match_table = wdg_match,
                },
 };

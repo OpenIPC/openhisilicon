@@ -21,6 +21,8 @@
 #include "allocator.h"
 #include "mmz_arm.h"
 
+#include "../../compat/compat.h"
+
 #define __use_vmalloc_space 1
 
 struct cma_zone {
@@ -494,7 +496,7 @@ static int __allocator_init(char *s)
 	while ((line = strsep(&s, ":")) != NULL) {
 		int i;
 		char *argv[6];
-		extern struct cma_zone *goke_get_cma_zone(const char *name);
+		extern struct cma_zone *GET_CMA_ZONE(const char *name);
 		/*
          * FIXME: We got 4 args in "line", formated as
          * "argv[0],argv[1],argv[2],argv[3],argv[4]".
@@ -506,7 +508,7 @@ static int __allocator_init(char *s)
 				break;
 			}
 
-		cma_zone = goke_get_cma_zone(argv[0]);
+		cma_zone = GET_CMA_ZONE(argv[0]);
 		if (cma_zone == NULL) {
 			printk(KERN_ERR "can't get cma zone info:%s\n",
 			       argv[0]);

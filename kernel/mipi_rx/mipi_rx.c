@@ -17,10 +17,12 @@ extern "C" {
 #endif
 #endif /* End of #ifdef __cplusplus */
 
+#include "../compat/compat.h"
+
 /*
  * macro definition
  */
-#define MIPI_RX_DEV_NAME "mipi"
+#define MIPI_RX_DEV_NAME PLATFORM_PRX "mipi"
 #define MIPI_RX_PROC_NAME "mipi_rx"
 
 #define HIMEDIA_DYNAMIC_MINOR 255

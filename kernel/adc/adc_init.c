@@ -7,6 +7,8 @@
 #include <linux/version.h>
 #include <linux/of_platform.h>
 
+#include "../compat/compat.h"
+
 extern unsigned int lsadc_irq;
 extern volatile void *lsadc_reg;
 extern int lsadc_init(void);
@@ -40,14 +42,14 @@ static int adc_remove(struct platform_device *pdev)
 }
 
 static const struct of_device_id adc_match[] = {
-	{ .compatible = "goke,lsadc" },
+	{ .compatible = PLATFORM_NAME "," HISI_PRX "lsadc" },
 	{},
 };
 
 static struct platform_driver lsadc_driver = {
     .probe  = adc_probe,
     .remove = adc_remove,
-    .driver =  { .name = "lsadc",
+    .driver =  { .name = HI_PRX "lsadc",
                 .of_match_table = adc_match,
                },
 };

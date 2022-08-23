@@ -43,6 +43,7 @@
 #include "piris.h"
 #include "isp_ext.h"
 #include "mm_ext.h"
+#include "../compat/compat.h"
 
 #include <linux/completion.h>
 
@@ -702,7 +703,7 @@ static int piris_remove(struct platform_device *pdev)
 }
 
 static const struct of_device_id piris_match[] = {
-	{ .compatible = "goke,piris" },
+	{ .compatible = PLATFORM_NAME ",piris" },
 	{},
 };
 

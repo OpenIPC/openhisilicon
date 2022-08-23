@@ -15,6 +15,8 @@ Function List :
 #include <linux/version.h>
 #include <linux/of_platform.h>
 
+#include "../compat/compat.h"
+
 extern unsigned int mipi_rx_irq_num;
 extern void *mipi_rx_regs_va;
 
@@ -49,7 +51,7 @@ static int hi35xx_mipi_rx_remove(struct platform_device *pdev)
 }
 
 static const struct of_device_id hi35xx_mipi_rx_match[] = {
-	{ .compatible = "goke,mipi" },
+	{ .compatible = PLATFORM_NAME "," HISI_PRX "mipi" },
 	{},
 };
 MODULE_DEVICE_TABLE(of, hi35xx_mipi_rx_match);

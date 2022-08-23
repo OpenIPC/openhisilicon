@@ -33,6 +33,7 @@
 #endif
 #endif
 
+#include "../compat/compat.h"
 #include "pwm_arch.h"
 
 void __iomem *reg_pwmI_base_va = 0;
@@ -517,7 +518,7 @@ static int pwm_remove(struct platform_device *pdev)
 	return 0;
 }
 static const struct of_device_id pwm_match[] = {
-	{ .compatible = "goke,pwm" },
+	{ .compatible = PLATFORM_NAME ",pwm" },
 	{},
 };
 MODULE_DEVICE_TABLE(of, pwm_match);

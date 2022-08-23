@@ -10,6 +10,7 @@
 #include "type.h"
 #include "common.h"
 #include "osal.h"
+#include "../../compat/compat.h"
 
 extern int ISP_ModInit(void);
 extern void ISP_ModExit(void);
@@ -38,7 +39,7 @@ static int vendor_isp_remove(struct platform_device *pdev)
 }
 
 static const struct of_device_id vendor_isp_match[] = {
-	{ .compatible = "goke,isp" },
+	{ .compatible = PLATFORM_NAME "," HISI_PRX "isp" },
 	{},
 };
 
@@ -50,7 +51,7 @@ static struct platform_driver vendor_isp_driver =
         .remove         = vendor_isp_remove,
         .driver         = 
         {
-            .name           = "vendor_isp",
+            .name           = VENDOR_PRX "_isp",
             .of_match_table = vendor_isp_match,
         },
 };
