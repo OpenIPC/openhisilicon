@@ -295,6 +295,14 @@ mmz_mmb_t *mmz_mmb_alloc(const char *name, unsigned long size,
 }
 EXPORT_SYMBOL(mmz_mmb_alloc);
 
+mmz_mmb_t *hil_mmb_alloc(const char *name, unsigned long size,
+			 unsigned long align, unsigned long gfp,
+			 const char *mmz_name)
+{
+	return mmz_mmb_alloc(name, size, align, gfp, mmz_name);
+}
+EXPORT_SYMBOL(hil_mmb_alloc);
+
 mmz_mmb_t *mmz_mmb_alloc_v2(const char *name, unsigned long size,
 			    unsigned long align, unsigned long gfp,
 			    const char *mmz_name, unsigned int order)
@@ -358,6 +366,12 @@ void *mmz_mmb_map2kern(mmz_mmb_t *mmb)
 }
 EXPORT_SYMBOL(mmz_mmb_map2kern);
 
+void *hil_mmb_map2kern(mmz_mmb_t *mmb)
+{
+	return mmz_mmb_map2kern(mmb);
+}
+EXPORT_SYMBOL(hil_mmb_map2kern);
+
 /* mmf: media-memory fragment */
 void *mmz_mmf_map2kern_nocache(unsigned long phys, int len)
 {
@@ -369,6 +383,12 @@ void *mmz_mmf_map2kern_nocache(unsigned long phys, int len)
 }
 EXPORT_SYMBOL(mmz_mmf_map2kern_nocache);
 
+void *hil_mmf_map2kern_nocache(unsigned long phys, int len)
+{
+	return mmz_mmf_map2kern_nocache(phys, len);
+}
+EXPORT_SYMBOL(hil_mmf_map2kern_nocache);
+
 void *mmz_mmf_map2kern_cache(unsigned long phys, int len)
 {
 	void *virt = the_allocator.mmf_map(phys, len, 1);
@@ -379,11 +399,23 @@ void *mmz_mmf_map2kern_cache(unsigned long phys, int len)
 }
 EXPORT_SYMBOL(mmz_mmf_map2kern_cache);
 
+void *hil_mmf_map2kern_cache(unsigned long phys, int len)
+{
+	return mmz_mmf_map2kern_cache(phys, len);
+}
+EXPORT_SYMBOL(hil_mmf_map2kern_cache);
+
 void mmz_mmf_unmap(void *virt)
 {
 	the_allocator.mmf_unmap(virt);
 }
 EXPORT_SYMBOL(mmz_mmf_unmap);
+
+void hil_mmf_unmap(void *virt)
+{
+	mmz_mmf_unmap(virt);
+}
+EXPORT_SYMBOL(hil_mmf_unmap);
 
 void *mmz_mmb_map2kern_cached(mmz_mmb_t *mmb)
 {
@@ -399,6 +431,12 @@ void *mmz_mmb_map2kern_cached(mmz_mmb_t *mmb)
 	return p;
 }
 EXPORT_SYMBOL(mmz_mmb_map2kern_cached);
+
+void *hil_mmb_map2kern_cached(mmz_mmb_t *mmb)
+{
+	return mmz_mmb_map2kern_cached(mmb);
+}
+EXPORT_SYMBOL(hil_mmb_map2kern_cached);
 
 int mmz_mmb_flush_dcache_byaddr(void *kvirt, unsigned long phys_addr,
 				unsigned long length)
@@ -435,6 +473,13 @@ int mmz_mmb_flush_dcache_byaddr(void *kvirt, unsigned long phys_addr,
 }
 EXPORT_SYMBOL(mmz_mmb_flush_dcache_byaddr);
 
+int hil_mmb_flush_dcache_byaddr(void *kvirt, unsigned long phys_addr,
+				unsigned long length)
+{
+	return mmz_mmb_flush_dcache_byaddr(kvirt, phys_addr, length);
+}
+EXPORT_SYMBOL(hil_mmb_flush_dcache_byaddr);
+
 int mmz_mmb_invalid_cache_byaddr(void *kvirt, unsigned long phys_addr,
 				 unsigned long length)
 {
@@ -454,6 +499,13 @@ int mmz_mmb_invalid_cache_byaddr(void *kvirt, unsigned long phys_addr,
 }
 EXPORT_SYMBOL(mmz_mmb_invalid_cache_byaddr);
 
+int hil_mmb_invalid_cache_byaddr(void *kvirt, unsigned long phys_addr,
+				 unsigned long length)
+{
+	return mmz_mmb_invalid_cache_byaddr(kvirt, phys_addr, length);
+}
+EXPORT_SYMBOL(hil_mmb_invalid_cache_byaddr);
+
 int mmz_mmb_unmap(mmz_mmb_t *mmb)
 {
 	int ref;
@@ -470,6 +522,12 @@ int mmz_mmb_unmap(mmz_mmb_t *mmb)
 	return ref;
 }
 EXPORT_SYMBOL(mmz_mmb_unmap);
+
+int hil_mmb_unmap(mmz_mmb_t *mmb)
+{
+	return mmz_mmb_unmap(mmb);
+}
+EXPORT_SYMBOL(hil_mmb_unmap);
 
 int mmz_mmb_get(mmz_mmb_t *mmb)
 {
@@ -560,6 +618,12 @@ int mmz_mmb_free(mmz_mmb_t *mmb)
 }
 EXPORT_SYMBOL(mmz_mmb_free);
 
+int hil_mmb_free(mmz_mmb_t *mmb)
+{
+	return mmz_mmb_free(mmb);
+}
+EXPORT_SYMBOL(hil_mmb_free);
+
 #define MACH_MMB(p, val, member)                                          \
 	do {                                                              \
 		mmz_mmz_t *__mach_mmb_zone__ = NULL;                      \
@@ -588,6 +652,12 @@ mmz_mmb_t *mmz_mmb_getby_phys(unsigned long addr)
 	return p;
 }
 EXPORT_SYMBOL(mmz_mmb_getby_phys);
+
+mmz_mmb_t *hil_mmb_getby_phys(unsigned long addr)
+{
+	return mmz_mmb_getby_phys(addr);
+}
+EXPORT_SYMBOL(hil_mmb_getby_phys);
 
 unsigned long usr_virt_to_phys(unsigned long virt)
 {
@@ -704,6 +774,12 @@ mmz_mmb_t *mmz_mmb_getby_kvirt(void *virt)
 	return p;
 }
 EXPORT_SYMBOL(mmz_mmb_getby_kvirt);
+
+mmz_mmb_t *hil_mmb_getby_kvirt(void *virt)
+{
+	return mmz_mmb_getby_kvirt(virt);
+}
+EXPORT_SYMBOL(hil_mmb_getby_kvirt);
 
 mmz_mmb_t *mmz_mmb_getby_phys_2(unsigned long addr, unsigned long *Outoffset)
 {
@@ -943,6 +1019,12 @@ int mmz_map_mmz_check_phys(unsigned long addr_start, unsigned long addr_len)
 }
 EXPORT_SYMBOL(mmz_map_mmz_check_phys);
 
+int hil_map_mmz_check_phys(unsigned long addr_start, unsigned long addr_len)
+{
+	return mmz_map_mmz_check_phys(addr_start, addr_len);
+}
+EXPORT_SYMBOL(hil_map_mmz_check_phys);
+
 int mmz_vma_check(unsigned long vm_start, unsigned long vm_end)
 {
 	struct vm_area_struct *pvma1;
@@ -1002,6 +1084,12 @@ int mmz_is_phys_in_mmz(unsigned long addr_start, unsigned long addr_len)
 }
 EXPORT_SYMBOL(mmz_is_phys_in_mmz);
 
+int hil_is_phys_in_mmz(unsigned long addr_start, unsigned long addr_len)
+{
+	return mmz_is_phys_in_mmz(addr_start, addr_len);
+}
+EXPORT_SYMBOL(hil_is_phys_in_mmz);
+
 int mmz_mmb_flush_dcache_byaddr_safe(void *kvirt, unsigned long phys_addr,
 				     unsigned long length)
 {
@@ -1026,6 +1114,13 @@ int mmz_mmb_flush_dcache_byaddr_safe(void *kvirt, unsigned long phys_addr,
 	return ret;
 }
 EXPORT_SYMBOL(mmz_mmb_flush_dcache_byaddr_safe);
+
+int hil_mmb_flush_dcache_byaddr_safe(void *kvirt, unsigned long phys_addr,
+				     unsigned long length)
+{
+	return mmz_mmb_flush_dcache_byaddr_safe(kvirt, phys_addr, length);
+}
+EXPORT_SYMBOL(hil_mmb_flush_dcache_byaddr_safe);
 
 #define MEDIA_MEM_NAME "media-mem"
 

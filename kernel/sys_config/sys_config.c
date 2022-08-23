@@ -8,6 +8,8 @@
 #include <linux/delay.h>
 #include <asm/io.h>
 
+#include "../compat/compat.h"
+
 #define SENSOR_NAME_LEN 64
 #define CHIP_NAME_STR_LEN 64
 #define BOARD_NAME_LEN 64
@@ -29,8 +31,7 @@ int g_online_flag = 0; /* Same as the value of the VI_VPSS_MODE_E.*/
 int g_cmos_yuv_flag = 0; /* vi: 0--RAW, 1--DC, 2--BT1120, 3--BT656 */
 char sensor_list[SENSOR_NAME_LEN] =
 	"imx307"; /* imx307 imx327 sc4236 sc2235 sc3235 imx335 soi_f37 os05a gc2053 bt656 bt1120 imx307_2l,imx327_2l*/
-char chip_list[CHIP_NAME_STR_LEN] =
-	"gk7205v200"; /* gk7205v200 gk7205v300 gk7202v300 gk7605v100 */
+char chip_list[CHIP_NAME_STR_LEN] = MAIN_CHIPNAME;
 char board_list[BOARD_NAME_LEN] = "demo"; /* sck demo*/
 int g_quick_start_flag =
 	0; /* If set to 1, you need to do something in Uboot. */
@@ -147,16 +148,16 @@ int is_coms(const char *name)
 int clkcfg(const char *s, int cmos_yuv_flag, const char *sensor)
 {
 	SYS_WRITEL(reg_crg_base + 0x00A4, 0x00000000);
-	if (0 == strncmp("gk7205v200", s, CHIP_NAME_STR_LEN)) {
+	if (0 == strncmp(C_HI3516EV200, s, CHIP_NAME_STR_LEN)) {
 		SYS_WRITEL(reg_crg_base + 0x00A0, 0x00240400);
 		SYS_WRITEL(reg_crg_base + 0x00F4, 0x00110000);
 		SYS_WRITEL(reg_crg_base + 0x00FC, 0x00000008);
-	} else if (0 == strncmp("gk7202v300", s, CHIP_NAME_STR_LEN)) {
+	} else if (0 == strncmp(C_HI3518EV300, s, CHIP_NAME_STR_LEN)) {
 		SYS_WRITEL(reg_crg_base + 0x00A0, 0x00240400);
 		SYS_WRITEL(reg_crg_base + 0x00F4, 0x00110000);
 		SYS_WRITEL(reg_crg_base + 0x00FC, 0x00000008);
-	} else if ((strncmp("gk7205v300", s, CHIP_NAME_STR_LEN) == 0) ||
-		   (strncmp("gk7605v100", s, CHIP_NAME_STR_LEN) == 0)) {
+	} else if ((strncmp(C_HI3516EV300, s, CHIP_NAME_STR_LEN) == 0) ||
+		   (strncmp(C_HI3516DV200, s, CHIP_NAME_STR_LEN) == 0)) {
 		SYS_WRITEL(reg_crg_base + 0x00A0, 0x0);
 		if ((strncmp("imx335", sensor, SENSOR_NAME_LEN) == 0) ||
 		    (strncmp("os05a", sensor, SENSOR_NAME_LEN) == 0) ||
@@ -743,7 +744,7 @@ void ir_mux(void)
 
 int pinmux(const char *chip_name, const char *board, const int cmos_yuv_flag)
 {
-	if (0 == strncmp("gk7202v300", chip_name, CHIP_NAME_STR_LEN)) {
+	if (0 == strncmp(C_HI3518EV300, chip_name, CHIP_NAME_STR_LEN)) {
 		if (!g_quick_start_flag) {
 			i2c0_for_mipi_sensor_pin_mux_gk7205v200();
 			sensor_cfg_for_mipi_sensor_mux();
@@ -752,7 +753,7 @@ int pinmux(const char *chip_name, const char *board, const int cmos_yuv_flag)
 
 		/*audio*/
 		amp_unmute_mux_gk7202v300();
-	} else if (0 == strncmp("gk7205v200", chip_name, CHIP_NAME_STR_LEN)) {
+	} else if (0 == strncmp(C_HI3516EV200, chip_name, CHIP_NAME_STR_LEN)) {
 		if (0 == strncmp("demo", board, BOARD_NAME_LEN)) {
 			/*mipi*/
 			if (cmos_yuv_flag == 0) {
@@ -786,7 +787,7 @@ int pinmux(const char *chip_name, const char *board, const int cmos_yuv_flag)
 			//i2c1_for_aic31_pin_mux_gk7205v200();
 			//i2s0_pin_mux_gk7205v200();
 		}
-	} else if (0 == strncmp("gk7205v300", chip_name, CHIP_NAME_STR_LEN)) {
+	} else if (0 == strncmp(C_HI3516EV300, chip_name, CHIP_NAME_STR_LEN)) {
 		if (0 == strncmp("demo", board, BOARD_NAME_LEN)) {
 			i2c0_for_mipi_sensor_pin_mux_gk7205v300();
 			sensor_cfg_for_mipi_sensor_mux();
@@ -936,9 +937,9 @@ int sysconfig_init(void)
 		goto out;
 	}
 
-	if (strncmp("gk7605v100", chip_list, CHIP_NAME_STR_LEN) == 0) {
-		pinmux("gk7205v300", board_list, g_cmos_yuv_flag);
-		clkcfg("gk7205v300", g_cmos_yuv_flag, sensor_list);
+	if (strncmp(C_HI3516DV200, chip_list, CHIP_NAME_STR_LEN) == 0) {
+		pinmux(C_HI3516EV300, board_list, g_cmos_yuv_flag);
+		clkcfg(C_HI3516EV300, g_cmos_yuv_flag, sensor_list);
 	} else {
 		pinmux(chip_list, board_list, g_cmos_yuv_flag);
 		clkcfg(chip_list, g_cmos_yuv_flag, sensor_list);
