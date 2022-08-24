@@ -68,9 +68,9 @@ jobs:
 
           pushd /tmp/linux-${{ matrix.linux }}
 
-          setopt null_glob
-          for i in ${BR}/br-ext-chip-${{ matrix.vendor }}/board/${{ matrix.platform }}/kernel/overlay/*; do
-            cp -r $i /tmp/${{ matrix.linux }}
+          DIR=${BR}/br-ext-chip-${{ matrix.vendor }}/board/${{ matrix.platform }}/kernel/overlay
+          for i in $(find $DIR); do
+            cp -r $DIR/$i /tmp/${{ matrix.linux }}
           done
 
           patch -p1 < ${BR}/br-ext-chip-${{ matrix.vendor }}/board/${{ matrix.platform }}/kernel/patches/*
