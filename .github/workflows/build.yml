@@ -50,6 +50,7 @@ jobs:
             https://github.com/${REPO} firmware
 
           pushd firmware
+          BR=$(pwd)
           BOARD=unknown_unknown_${{ matrix.platform }}_openipc
           make BOARD=${BOARD} prepare
           TOOLNAME=$(make BOARD=${BOARD} toolname)
@@ -64,12 +65,10 @@ jobs:
 
           wget -c https://cdn.kernel.org/pub/linux/kernel/v4.x/linux-${{ matrix.linux }}.tar.xz \
             -O - 2>/dev/null | tar -xJ -C /tmp
-          cp firmware/br-ext-chip-${{ matrix.vendor }}/board/${{ matrix.platform }}/kernel/${{ matrix.platform }}.generic.config \
-            /tmp/linux-${{ matrix.linux }}/.config
 
           pushd /tmp/linux-${{ matrix.linux }}
-          cp -r firmware/br-ext-chip-${{ matrix.vendor }}/board/${{ matrix.platform }}/kernel/overlay/* /tmp/${{ matrix.linux }}
-          patch -p1 firmware/br-ext-chip-${{ matrix.vendor }}/board/${{ matrix.platform }}/kernel/patches/*
+          cp -r ${BR}/br-ext-chip-${{ matrix.vendor }}/board/${{ matrix.platform }}/kernel/overlay/* /tmp/${{ matrix.linux }}
+          patch -p1 < ${BR}/br-ext-chip-${{ matrix.vendor }}/board/${{ matrix.platform }}/kernel/patches/*
           make ARCH=arm CROSS_COMPILE=${PREFIX}- ${{ matrix.platform }}_full_defconfig
           make ARCH=arm CROSS_COMPILE=${PREFIX}- prepare
           popd
