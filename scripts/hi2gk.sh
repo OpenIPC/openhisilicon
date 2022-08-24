@@ -8,12 +8,12 @@ do_file() {
   sed 's/\r//g' -i $1
 
   sed -i \
-    $1
     -e 's/CONFIG_HI_/CONFIG_/g' \
     -e 's/CONFIG_HISI_/CONFIG_/g' \
     -e 's/HI_BOOL/GK_BOOL/g' \
     -e 's/HI_CHAR/GK_CHAR/g' \
     -e 's/HI_DBG_/MODULE_DBG_/g' \
+    -e 's/HI_DOUBLE/GK_DOUBLE/g' \
     -e 's/HI_ERR_/ERR_CODE_/g' \
     -e 's/hi_ext_/ext_/g' \
     -e 's/HI_EXT_/ISP_EXT_/g' \
@@ -26,6 +26,7 @@ do_file() {
     -e 's/HI_ISP_/ISP_/g' \
     -e 's/hil_is_phys_in_mmz/mmz_is_phys_in_mmz/g' \
     -e 's/hil_map_mmz_check_phys/mmz_map_mmz_check_phys/g' \
+    -e 's/HI_MPI_/MPI_/g' \
     -e 's/HI_NULL/GK_NULL/g' \
     -e 's/HI_PRINT/GK_PRINT/g' \
     -e 's/HI_S16/GK_S16/g' \
@@ -53,6 +54,7 @@ do_file() {
     -e 's/typedef struct HI_/typedef struct /g' \
     -e 's/typedef struct hiVI_/typedef struct VI_/g' \
     -e 's/typedef union hi/typedef union /g' \
+    $1
 }
 
 if [ -d $1 ]; then
