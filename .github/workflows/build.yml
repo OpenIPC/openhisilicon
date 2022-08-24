@@ -67,8 +67,14 @@ jobs:
             -O - 2>/dev/null | tar -xJ -C /tmp
 
           pushd /tmp/linux-${{ matrix.linux }}
-          cp -r ${BR}/br-ext-chip-${{ matrix.vendor }}/board/${{ matrix.platform }}/kernel/overlay/* /tmp/${{ matrix.linux }}
+
+          setopt null_glob
+          for i in ${BR}/br-ext-chip-${{ matrix.vendor }}/board/${{ matrix.platform }}/kernel/overlay/*; do
+            cp -r $i /tmp/${{ matrix.linux }}
+          done
+
           patch -p1 < ${BR}/br-ext-chip-${{ matrix.vendor }}/board/${{ matrix.platform }}/kernel/patches/*
+
           make ARCH=arm CROSS_COMPILE=${PREFIX}- ${{ matrix.platform }}_full_defconfig
           make ARCH=arm CROSS_COMPILE=${PREFIX}- prepare
           popd
