@@ -35,7 +35,7 @@ jobs:
             vendor: hisilicon
           - platform: gk7205v200
             linux: 4.9.37
-            vendor: hisilicon
+            vendor: goke
 
     steps:
       - name: Checkout
@@ -63,7 +63,7 @@ jobs:
 
           wget -c https://cdn.kernel.org/pub/linux/kernel/v4.x/linux-${{ matrix.linux }}.tar.xz \
             -O - | tar -xJ -C /tmp
-          cp br-ext-chip-${{ matrix.vendor }}/board/${{ matrix.platform }}/kernel/${{ matrix.platform }}.generic.config \
+          cp firmware/br-ext-chip-${{ matrix.vendor }}/board/${{ matrix.platform }}/kernel/${{ matrix.platform }}.generic.config \
             /tmp/linux-${{ matrix.linux }}/.config
 
           pushd /tmp/linux-${{ matrix.linux }}
