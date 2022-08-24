@@ -63,6 +63,8 @@ jobs:
 
           wget -c https://cdn.kernel.org/pub/linux/kernel/v4.x/linux-${{ matrix.linux }}.tar.xz \
             -O - | tar -xJ -C /tmp
+          cp br-ext-chip-${{ matrix.vendor }}/board/${{ matrix.platform }}/kernel/${{ matrix.platform }}.generic.config \
+            /tmp/linux-${{ matrix.linux }}/.config
 
           pushd /tmp/linux-${{ matrix.linux }}
           patch -p1 firmware/br-ext-chip-${{ matrix.vendor }}/board/${{ matrix.platform }}/kernel/patches/*
