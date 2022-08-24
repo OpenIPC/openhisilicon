@@ -68,10 +68,10 @@ jobs:
             /tmp/linux-${{ matrix.linux }}/.config
 
           pushd /tmp/linux-${{ matrix.linux }}
+          cp -r br-ext-chip-${{ matrix.vendor }}/board/${{ matrix.platform }}/kernel/overlay/* /tmp/${{ matrix.linux }}
           patch -p1 firmware/br-ext-chip-${{ matrix.vendor }}/board/${{ matrix.platform }}/kernel/patches/*
-          make ARCH=arm CROSS_COMPILE=${PREFIX}- olddefconfig
+          make ARCH=arm CROSS_COMPILE=${PREFIX}- ${{ matrix.platform }}_full_defconfig
           make ARCH=arm CROSS_COMPILE=${PREFIX}- prepare
-          cat .config
           popd
 
           cd kernel
