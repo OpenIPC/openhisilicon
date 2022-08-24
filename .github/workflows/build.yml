@@ -10,7 +10,7 @@ on:
       - "**.md"
   push:
     branches:
-      - "master"
+      - "main"
     tags:
       - "v*"
     paths-ignore:
@@ -50,7 +50,9 @@ jobs:
             https://github.com/${REPO} firmware
 
           pushd firmware
-          TOOLNAME=$(make BOARD=unknown_unknown_${{ matrix.platform }}_openipc toolname)
+          BOARD=unknown_unknown_${{ matrix.platform }}_openipc
+          make BOARD=${BOARD} prepare
+          TOOLNAME=$(make BOARD=${BOARD} toolname)
           popd
 
           mkdir /tmp/extsdk
