@@ -1,0 +1,76 @@
+name: build
+
+on:
+  pull_request:
+    types:
+      - synchronize
+      - reopened
+      - opened
+    paths-ignore:
+      - "**.md"
+  push:
+    branches:
+      - "master"
+    tags:
+      - "v*"
+    paths-ignore:
+      - "**.md"
+  workflow_dispatch:
+
+env:
+  TAG_NAME: latest
+  REPO: OpenIPC/firmware
+
+jobs:
+  toolchain:
+    name: Kernel space
+    runs-on: ubuntu-latest
+
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: hi3516ev200
+            linux: 4.9.37
+            vendor: hisilicon
+          - platform: gk7205v200
+            linux: 4.9.37
+            vendor: hisilicon
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v3
+        with:
+          fetch-depth: 0 # OR "2" -> To retrieve the preceding commit.
+
+      - name: Build kernel modules
+        run: |
+          git clone \
+            --depth 1 --single-branch --branch=master \
+            https://github.com/${REPO} firmware
+
+          pushd firmware
+          TOOLNAME=$(make BOARD=unknown_unknown_${{ matrix.platform }}_openipc toolname)
+          popd
+
+          mkdir /tmp/extsdk
+          wget https://github.com/${REPO}/releases/download/${TAG_NAME}/${TOOLNAME}.tgz
+          tar xvf ${TOOLNAME}.tgz --strip-components=1 -C /tmp/extsdk >/dev/null
+          PREFIX="arm-openipc-linux-musleabi"
+          export PATH=/tmp/extsdk/bin:$PATH
+
+          wget -c https://cdn.kernel.org/pub/linux/kernel/v4.x/linux-${{ matrix.linux }}.tar.xz \
+            -O - | tar -xJ -C /tmp
+
+          pushd /tmp/linux-${{ matrix.linux }}
+          patch -p1 firmware/br-ext-chip-${{ matrix.vendor }}/board/${{ matrix.platform }}/kernel/patches/*
+          make ARCH=arm CROSS_COMPILE=${PREFIX}- olddefconfig
+          make ARCH=arm CROSS_COMPILE=${PREFIX}- prepare
+          popd
+
+          cd kernel
+          make \
+            ARCH=arm CROSS_COMPILE=${PREFIX}- \
+            CHIPSET=${{ matrix.platform }} \
+            -C /tmp/linux-4.9.37 \
+            M=$PWD
