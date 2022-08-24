@@ -56,13 +56,14 @@ jobs:
           popd
 
           mkdir /tmp/extsdk
-          wget https://github.com/${REPO}/releases/download/${TAG_NAME}/${TOOLNAME}.tgz
+          wget https://github.com/${REPO}/releases/download/${TAG_NAME}/${TOOLNAME}.tgz \
+            2>/dev/null
           tar xvf ${TOOLNAME}.tgz --strip-components=1 -C /tmp/extsdk >/dev/null
           PREFIX="arm-openipc-linux-musleabi"
           export PATH=/tmp/extsdk/bin:$PATH
 
           wget -c https://cdn.kernel.org/pub/linux/kernel/v4.x/linux-${{ matrix.linux }}.tar.xz \
-            -O - | tar -xJ -C /tmp
+            -O - 2>/dev/null | tar -xJ -C /tmp
           cp firmware/br-ext-chip-${{ matrix.vendor }}/board/${{ matrix.platform }}/kernel/${{ matrix.platform }}.generic.config \
             /tmp/linux-${{ matrix.linux }}/.config
 
@@ -70,6 +71,7 @@ jobs:
           patch -p1 firmware/br-ext-chip-${{ matrix.vendor }}/board/${{ matrix.platform }}/kernel/patches/*
           make ARCH=arm CROSS_COMPILE=${PREFIX}- olddefconfig
           make ARCH=arm CROSS_COMPILE=${PREFIX}- prepare
+          cat .config
           popd
 
           cd kernel
