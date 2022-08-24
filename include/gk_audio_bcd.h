@@ -12,15 +12,17 @@
 
 #ifdef __cplusplus
 #if __cplusplus
-extern "C"
-{
+extern "C" {
 #endif
 #endif
 
-gk_s32 gk_audio_baby_crying_detection_init(bcd_handle *bcd, gk_s32 sample_rate, const audio_bcd_config *bcd_config);
+gk_s32 gk_audio_baby_crying_detection_init(bcd_handle *bcd, gk_s32 sample_rate,
+					   const audio_bcd_config *bcd_config);
 
-gk_s32 gk_audio_baby_crying_detection_process(bcd_handle bcd, audio_bcd_process_data *input_data,
-    audio_bcd_process_data *output_data);
+gk_s32
+gk_audio_baby_crying_detection_process(bcd_handle bcd,
+				       audio_bcd_process_data *input_data,
+				       audio_bcd_process_data *output_data);
 
 gk_s32 gk_audio_baby_crying_detection_deinit(bcd_handle bcd);
 
@@ -31,4 +33,3 @@ gk_s32 gk_audio_baby_crying_detection_deinit(bcd_handle bcd);
 #endif
 
 #endif
-

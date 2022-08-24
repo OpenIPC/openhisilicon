@@ -13,14 +13,14 @@ extern "C" {
 #endif /* End of #ifdef __cplusplus */
 
 typedef struct ISP_DNG_INFO_CTRL_S {
-    DNG_IMAGE_STATIC_INFO_S *pstIspDng;
+	DNG_IMAGE_STATIC_INFO_S *pstIspDng;
 } ISP_DNG_INFO_CTRL_S;
 
 typedef struct DNG_MATRIX_S {
-    GK_DOUBLE adAColorMatrix[9];
-    GK_DOUBLE adD50ColorMatrix[9];
-    GK_DOUBLE adAForwardMatrix[9];
-    GK_DOUBLE adD50ForwardMatrix[9];
+	GK_DOUBLE adAColorMatrix[9];
+	GK_DOUBLE adD50ColorMatrix[9];
+	GK_DOUBLE adAForwardMatrix[9];
+	GK_DOUBLE adD50ForwardMatrix[9];
 } DNG_MATRIX_S;
 
 GK_S32 ISP_UpdateDngImageDynamicInfo(VI_PIPE ViPipe);

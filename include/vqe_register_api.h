@@ -34,4 +34,3 @@ GK_VOID *VQE_WNR_GetHandle(GK_VOID);
 #endif
 
 #endif
-

@@ -17,14 +17,16 @@ GK_S32 ISP_ProcInit(VI_PIPE ViPipe);
 GK_S32 ISP_ProcWrite(const ISP_ALG_NODE_S *astAlgs, VI_PIPE ViPipe);
 GK_S32 ISP_ProcExit(VI_PIPE ViPipe);
 
-#define ISP_PROC_PRINTF(proc, len, fmt...)                                              \
-    do {                                                                                \
-        snprintf_s((proc)->pcProcBuff, (proc)->u32BuffLen, (proc)->u32BuffLen, ##fmt); \
-        (proc)->u32WriteLen = strlen((proc)->pcProcBuff);                               \
-        (proc)->pcProcBuff = &((proc)->pcProcBuff[(proc)->u32WriteLen]);                \
-        (proc)->u32BuffLen -= (proc)->u32WriteLen;                                      \
-        len += (proc)->u32WriteLen;                                                     \
-    } while (0)
+#define ISP_PROC_PRINTF(proc, len, fmt...)                          \
+	do {                                                        \
+		snprintf_s((proc)->pcProcBuff, (proc)->u32BuffLen,  \
+			   (proc)->u32BuffLen, ##fmt);              \
+		(proc)->u32WriteLen = strlen((proc)->pcProcBuff);   \
+		(proc)->pcProcBuff =                                \
+			&((proc)->pcProcBuff[(proc)->u32WriteLen]); \
+		(proc)->u32BuffLen -= (proc)->u32WriteLen;          \
+		len += (proc)->u32WriteLen;                         \
+	} while (0)
 
 #ifdef __cplusplus
 #if __cplusplus

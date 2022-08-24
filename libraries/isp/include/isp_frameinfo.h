@@ -13,23 +13,23 @@ extern "C" {
 #endif /* End of #ifdef __cplusplus */
 
 typedef struct ISP_FRAME_INFO_CTRL_S {
-    ISP_FRAME_INFO_S *pstIspFrame;
+	ISP_FRAME_INFO_S *pstIspFrame;
 } ISP_FRAME_INFO_CTRL_S;
 
 typedef struct ISP_ATTACH_INFO_CTRL_S {
-    ISP_ATTACH_INFO_S *pstAttachInfo;
+	ISP_ATTACH_INFO_S *pstAttachInfo;
 } ISP_ATTACH_INFO_CTRL_S;
 
 typedef struct ISP_GAMMUT_INFO_CTRL_S {
-    ISP_COLORGAMMUT_INFO_S *pstColorGamutInfo;
+	ISP_COLORGAMMUT_INFO_S *pstColorGamutInfo;
 } ISP_GAMMUT_INFO_CTRL_S;
 
 typedef struct ISP_PRO_NR_PARAM_CTRL_S {
-    ISP_PRO_NR_PARAM_S *pstProNrParam;
+	ISP_PRO_NR_PARAM_S *pstProNrParam;
 } ISP_PRO_NR_PARAM_CTRL_S;
 
 typedef struct ISP_PRO_SHP_PARAM_CTRL_S {
-    ISP_PRO_SHP_PARAM_S *pstProShpParam;
+	ISP_PRO_SHP_PARAM_S *pstProShpParam;
 } ISP_PRO_SHP_PARAM_CTRL_S;
 
 GK_S32 ISP_TransInfoInit(VI_PIPE ViPipe, ISP_TRANS_INFO_BUF_S *pstTransInfo);

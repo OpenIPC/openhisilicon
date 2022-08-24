@@ -15,7 +15,7 @@ extern "C" {
 
 GK_S32 ISP_AlgRegisterSplit(VI_PIPE ViPipe)
 {
-    return GK_SUCCESS;
+	return GK_SUCCESS;
 }
 
 #ifdef __cplusplus

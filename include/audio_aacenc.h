@@ -31,72 +31,80 @@ extern "C" {
 
 #define AACENC_VERSION_MAX_BYTE 64 /**< version max byte size */
 
-/** @} */                     /** <!-- ==== Macro Definition end ==== */
+/** @} */ /** <!-- ==== Macro Definition end ==== */
 
 /*************************** Structure Definition ****************************/
 /** \addtogroup      AACENC */
 /** @{ */ /** <!-- [AACENC] */
 
 typedef enum {
-    AACENC_CODE_OK                     = 0x0000,  /* !< No error happened. All fine. */
+	AACENC_CODE_OK = 0x0000, /* !< No error happened. All fine. */
 
-    AACENC_CODE_INVALID_HANDLE         = 0x0020,  /* !< Handle passed to function call was invalid. */
-    AACENC_CODE_MEMORY_ERROR           = 0x0021,  /* !< Memory allocation failed. */
-    AACENC_CODE_UNSUPPORTED_PARAMETER  = 0x0022,  /* !< Parameter not available. */
-    AACENC_CODE_INVALID_CONFIG         = 0x0023,  /* !< Configuration not provided. */
+	AACENC_CODE_INVALID_HANDLE =
+		0x0020, /* !< Handle passed to function call was invalid. */
+	AACENC_CODE_MEMORY_ERROR = 0x0021, /* !< Memory allocation failed. */
+	AACENC_CODE_UNSUPPORTED_PARAMETER =
+		0x0022, /* !< Parameter not available. */
+	AACENC_CODE_INVALID_CONFIG =
+		0x0023, /* !< Configuration not provided. */
 
-    AACENC_CODE_INIT_ERROR             = 0x0040,  /* !< General initialization error. */
-    AACENC_CODE_INIT_AAC_ERROR         = 0x0041,  /* !< AAC library initialization error. */
-    AACENC_CODE_INIT_SBR_ERROR         = 0x0042,  /* !< SBR library initialization error. */
-    AACENC_CODE_INIT_TP_ERROR          = 0x0043,  /* !< Transport library initialization error. */
-    AACENC_CODE_INIT_META_ERROR        = 0x0044,  /* !< Meta data library initialization error. */
+	AACENC_CODE_INIT_ERROR = 0x0040, /* !< General initialization error. */
+	AACENC_CODE_INIT_AAC_ERROR =
+		0x0041, /* !< AAC library initialization error. */
+	AACENC_CODE_INIT_SBR_ERROR =
+		0x0042, /* !< SBR library initialization error. */
+	AACENC_CODE_INIT_TP_ERROR =
+		0x0043, /* !< Transport library initialization error. */
+	AACENC_CODE_INIT_META_ERROR =
+		0x0044, /* !< Meta data library initialization error. */
 
-    AACENC_CODE_ENCODE_ERROR           = 0x0060,  /* !< The encoding process was interrupted by an unexpected error. */
+	AACENC_CODE_ENCODE_ERROR =
+		0x0060, /* !< The encoding process was interrupted by an unexpected error. */
 
-    AACENC_CODE_ENCODE_EOF             = 0x0080   /* !< End of file reached. */
+	AACENC_CODE_ENCODE_EOF = 0x0080 /* !< End of file reached. */
 
 } AACENC_ERROR_E;
 
 /** Defines AACENC quality */
 typedef enum {
-    AU_QualityExcellent = 0,
-    AU_QualityHigh = 1,
-    AU_QualityMedium = 2,
-    AU_QualityLow = 3,
+	AU_QualityExcellent = 0,
+	AU_QualityHigh = 1,
+	AU_QualityMedium = 2,
+	AU_QualityLow = 3,
 } AuQuality;
 
 /** Defines AACENC format */
 typedef enum {
-    AACLC = 0,    /**< AAC-LC format */
-    EAAC = 1,     /**< HEAAC or AAC+  or aacPlusV1 */
-    EAACPLUS = 2, /**< AAC++ or aacPlusV2 */
-    AACLD = 3,    /**< AAC LD(Low Delay) */
-    AACELD = 4,   /**< AAC ELD(Low Delay) */
+	AACLC = 0, /**< AAC-LC format */
+	EAAC = 1, /**< HEAAC or AAC+  or aacPlusV1 */
+	EAACPLUS = 2, /**< AAC++ or aacPlusV2 */
+	AACLD = 3, /**< AAC LD(Low Delay) */
+	AACELD = 4, /**< AAC ELD(Low Delay) */
 } AuEncoderFormat;
 
 /** Defines AACENC container */
 typedef enum {
-    AACENC_ADTS = 0,
-    AACENC_LOAS = 1,
-    AACENC_LATM_MCP1 = 2,
+	AACENC_ADTS = 0,
+	AACENC_LOAS = 1,
+	AACENC_LATM_MCP1 = 2,
 } AACENCTransportType;
 
 /** Defines AACENC configuration */
 typedef struct {
-    AuQuality quality;
-    AuEncoderFormat coderFormat;
-    GK_S16 bitsPerSample;
-    GK_S32 sampleRate;   /**< audio file sample rate */
-    GK_S32 bitRate;      /**< encoder bit rate in bits/sec */
-    GK_S16 nChannelsIn;  /**< number of channels on input (1,2) */
-    GK_S16 nChannelsOut; /**< number of channels on output (1,2) */
-    GK_S16 bandWidth;    /**< targeted audio bandwidth in Hz */
-    AACENCTransportType transtype;
+	AuQuality quality;
+	AuEncoderFormat coderFormat;
+	GK_S16 bitsPerSample;
+	GK_S32 sampleRate; /**< audio file sample rate */
+	GK_S32 bitRate; /**< encoder bit rate in bits/sec */
+	GK_S16 nChannelsIn; /**< number of channels on input (1,2) */
+	GK_S16 nChannelsOut; /**< number of channels on output (1,2) */
+	GK_S16 bandWidth; /**< targeted audio bandwidth in Hz */
+	AACENCTransportType transtype;
 } AACENC_CONFIG;
 
 /* Defines AACENC version */
 typedef struct AACENC_VERSION_S {
-    GK_U8 aVersion[AACENC_VERSION_MAX_BYTE];
+	GK_U8 aVersion[AACENC_VERSION_MAX_BYTE];
 } AACENC_VERSION_S;
 
 typedef GK_U32 AAC_ENCODER_S;
@@ -158,7 +166,7 @@ N/A
 N/A
 */
 GK_S32 AACEncoderFrame(AAC_ENCODER_S *hAacPlusEnc, GK_S16 *ps16PcmBuf,
-                       GK_U8 *pu8Outbuf, GK_S32 *ps32NumOutBytes);
+		       GK_U8 *pu8Outbuf, GK_S32 *ps32NumOutBytes);
 
 /**
 \brief close encoder device.

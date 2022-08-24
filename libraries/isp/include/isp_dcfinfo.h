@@ -13,8 +13,8 @@ extern "C" {
 #endif /* End of #ifdef __cplusplus */
 
 typedef struct ISP_UPDATE_INFO_CTRL_S {
-    ISP_DCF_CONST_INFO_S  *pstIspDCFConstInfo;
-    ISP_DCF_UPDATE_INFO_S *pstIspUpdateInfo;
+	ISP_DCF_CONST_INFO_S *pstIspDCFConstInfo;
+	ISP_DCF_UPDATE_INFO_S *pstIspUpdateInfo;
 } ISP_UPDATE_INFO_CTRL_S;
 
 GK_S32 ISP_UpdateInfoInit(VI_PIPE ViPipe);

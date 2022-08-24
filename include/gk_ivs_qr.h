@@ -9,15 +9,17 @@
 
 #ifdef __cplusplus
 #if __cplusplus
-extern "C"{
+extern "C" {
 #endif
 #endif
 
 gk_s32 gk_ivs_qr_init(gk_void);
 
-gk_s32 gk_ivs_qr_get_buf_size(gk_u32 max_img_width, gk_u32 max_img_height, gk_u32 *size);
+gk_s32 gk_ivs_qr_get_buf_size(gk_u32 max_img_width, gk_u32 max_img_height,
+			      gk_u32 *size);
 
-gk_s32 gk_ivs_qr_proc(VIDEO_FRAME_INFO_S *src_frame, qr_mem_info *buf, qr_info *qr_info);
+gk_s32 gk_ivs_qr_proc(VIDEO_FRAME_INFO_S *src_frame, qr_mem_info *buf,
+		      qr_info *qr_info);
 
 gk_s32 gk_ivs_qr_deinit(gk_void);
 
