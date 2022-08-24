@@ -4,10 +4,12 @@
 # should checked
 
 # tested on in Hi3516EV200_SDK_V1.0.1.2 dir:
+# cp -r mpp/component/isp/include $REPO/kernel/isp
+# for f in `git ls-files --others --exclude-standard`; do N=$(basename $f); mv $f $(dirname $f)/${N:3}; done
+# mv kernel/isp/include/_isp.h kernel/isp/include/ot_mpi_isp.h
 # cp -r mpp/component/isp/user/firmware/* $REPO/libraries/isp/
 # cp -r mpp/component/isp/kernel/* $REPO/kernel/isp
 # cp -r mpp/component/isp/ext_inc $REPO/kernel/isp
-# cp -r mpp/component/isp/include $REPO/kernel/isp
 # ./scripts/hi2gk.sh
 
 do_file() {
