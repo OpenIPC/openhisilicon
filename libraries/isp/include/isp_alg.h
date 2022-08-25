@@ -59,228 +59,236 @@ GK_S32 ISP_AlgRegisterRgbir(VI_PIPE ViPipe);
 
 /* find the specified library */
 static inline GK_S32 ISP_FindLib(const ISP_LIB_NODE_S *astLibs,
-                                 const ALG_LIB_S *pstLib)
+				 const ALG_LIB_S *pstLib)
 {
-    GK_S32 i;
+	GK_S32 i;
 
-    for (i = 0; i < MAX_REGISTER_ALG_LIB_NUM; i++) {
-        /* can't use memcmp, if user not fill the string. */
-        if ((strncmp(astLibs[i].stAlgLib.acLibName, pstLib->acLibName, ALG_LIB_NAME_SIZE_MAX) == 0) &&
-            (astLibs[i].stAlgLib.s32Id == pstLib->s32Id)) {
-            return i;
-        }
-    }
+	for (i = 0; i < MAX_REGISTER_ALG_LIB_NUM; i++) {
+		/* can't use memcmp, if user not fill the string. */
+		if ((strncmp(astLibs[i].stAlgLib.acLibName, pstLib->acLibName,
+			     ALG_LIB_NAME_SIZE_MAX) == 0) &&
+		    (astLibs[i].stAlgLib.s32Id == pstLib->s32Id)) {
+			return i;
+		}
+	}
 
-    return -1;
+	return -1;
 }
 
 /* search the empty pos of libs */
 static inline ISP_LIB_NODE_S *ISP_SearchLib(ISP_LIB_NODE_S *astLibs)
 {
-    GK_S32 i;
+	GK_S32 i;
 
-    for (i = 0; i < MAX_REGISTER_ALG_LIB_NUM; i++) {
-        if (!astLibs[i].bUsed) {
-            return &astLibs[i];
-        }
-    }
+	for (i = 0; i < MAX_REGISTER_ALG_LIB_NUM; i++) {
+		if (!astLibs[i].bUsed) {
+			return &astLibs[i];
+		}
+	}
 
-    return GK_NULL;
+	return GK_NULL;
 }
 
 /* search the empty pos of algs */
 static inline ISP_ALG_NODE_S *ISP_SearchAlg(ISP_ALG_NODE_S *astAlgs)
 {
-    GK_S32 i;
+	GK_S32 i;
 
-    for (i = 0; i < ISP_MAX_ALGS_NUM; i++) {
-        if (!astAlgs[i].bUsed) {
-            return &astAlgs[i];
-        }
-    }
+	for (i = 0; i < ISP_MAX_ALGS_NUM; i++) {
+		if (!astAlgs[i].bUsed) {
+			return &astAlgs[i];
+		}
+	}
 
-    return GK_NULL;
+	return GK_NULL;
 }
 
-static inline GK_VOID ISP_AlgsInit(const ISP_ALG_NODE_S *astAlgs, VI_PIPE ViPipe, GK_VOID *pRegCfg)
+static inline GK_VOID ISP_AlgsInit(const ISP_ALG_NODE_S *astAlgs,
+				   VI_PIPE ViPipe, GK_VOID *pRegCfg)
 {
-    GK_S32 i;
+	GK_S32 i;
 
-    for (i = 0; i < ISP_MAX_ALGS_NUM; i++) {
-        if (astAlgs[i].bUsed) {
-            if (astAlgs[i].stAlgFunc.pfn_alg_init != GK_NULL) {
-                astAlgs[i].stAlgFunc.pfn_alg_init(ViPipe, pRegCfg);
-            }
-        }
-    }
+	for (i = 0; i < ISP_MAX_ALGS_NUM; i++) {
+		if (astAlgs[i].bUsed) {
+			if (astAlgs[i].stAlgFunc.pfn_alg_init != GK_NULL) {
+				astAlgs[i].stAlgFunc.pfn_alg_init(ViPipe,
+								  pRegCfg);
+			}
+		}
+	}
 
-    return;
+	return;
 }
 
 static inline GK_VOID ISP_AlgsRun(const ISP_ALG_NODE_S *astAlgs, VI_PIPE ViPipe,
-                                  const GK_VOID *pStatInfo, GK_VOID *pRegCfg, GK_S32 s32Rsv)
+				  const GK_VOID *pStatInfo, GK_VOID *pRegCfg,
+				  GK_S32 s32Rsv)
 {
-    GK_S32 i;
+	GK_S32 i;
 
-    for (i = 0; i < ISP_MAX_ALGS_NUM; i++) {
-        if (astAlgs[i].bUsed) {
-            if (astAlgs[i].stAlgFunc.pfn_alg_run != GK_NULL) {
-                astAlgs[i].stAlgFunc.pfn_alg_run(ViPipe, pStatInfo, pRegCfg, s32Rsv);
-            }
-        }
-    }
+	for (i = 0; i < ISP_MAX_ALGS_NUM; i++) {
+		if (astAlgs[i].bUsed) {
+			if (astAlgs[i].stAlgFunc.pfn_alg_run != GK_NULL) {
+				astAlgs[i].stAlgFunc.pfn_alg_run(
+					ViPipe, pStatInfo, pRegCfg, s32Rsv);
+			}
+		}
+	}
 
-    return;
+	return;
 }
 
 static inline GK_VOID ISP_AlgsCtrl(const ISP_ALG_NODE_S *astAlgs,
-                                   VI_PIPE ViPipe, GK_U32 u32Cmd, GK_VOID *pValue)
+				   VI_PIPE ViPipe, GK_U32 u32Cmd,
+				   GK_VOID *pValue)
 {
-    GK_S32 i;
+	GK_S32 i;
 
-    for (i = 0; i < ISP_MAX_ALGS_NUM; i++) {
-        if (astAlgs[i].bUsed) {
-            if (astAlgs[i].stAlgFunc.pfn_alg_ctrl != GK_NULL) {
-                astAlgs[i].stAlgFunc.pfn_alg_ctrl(ViPipe, u32Cmd, pValue);
-            }
-        }
-    }
+	for (i = 0; i < ISP_MAX_ALGS_NUM; i++) {
+		if (astAlgs[i].bUsed) {
+			if (astAlgs[i].stAlgFunc.pfn_alg_ctrl != GK_NULL) {
+				astAlgs[i].stAlgFunc.pfn_alg_ctrl(
+					ViPipe, u32Cmd, pValue);
+			}
+		}
+	}
 
-    return;
+	return;
 }
 
-static inline GK_VOID ISP_AlgsExit(VI_PIPE ViPipe, const ISP_ALG_NODE_S *astAlgs)
+static inline GK_VOID ISP_AlgsExit(VI_PIPE ViPipe,
+				   const ISP_ALG_NODE_S *astAlgs)
 {
-    GK_S32 i;
+	GK_S32 i;
 
-    for (i = 0; i < ISP_MAX_ALGS_NUM; i++) {
-        if (astAlgs[i].bUsed) {
-            if (astAlgs[i].stAlgFunc.pfn_alg_exit != GK_NULL) {
-                astAlgs[i].stAlgFunc.pfn_alg_exit(ViPipe);
-            }
-        }
-    }
+	for (i = 0; i < ISP_MAX_ALGS_NUM; i++) {
+		if (astAlgs[i].bUsed) {
+			if (astAlgs[i].stAlgFunc.pfn_alg_exit != GK_NULL) {
+				astAlgs[i].stAlgFunc.pfn_alg_exit(ViPipe);
+			}
+		}
+	}
 
-    return;
+	return;
 }
 
 static inline GK_VOID ISP_AlgsRegister(VI_PIPE ViPipe)
 {
-    ISP_AlgRegisterAe(ViPipe);
-    ISP_AlgRegisterAwb(ViPipe);
+	ISP_AlgRegisterAe(ViPipe);
+	ISP_AlgRegisterAwb(ViPipe);
 #ifdef CONFIG_ISP_AF_SUPPORT
-    ISP_AlgRegisterAf(ViPipe);
+	ISP_AlgRegisterAf(ViPipe);
 #endif
-    ISP_AlgRegisterDp(ViPipe);
+	ISP_AlgRegisterDp(ViPipe);
 
 #ifdef CONFIG_ISP_CR_SUPPORT
-    ISP_AlgRegisterGe(ViPipe);
+	ISP_AlgRegisterGe(ViPipe);
 #endif
-    ISP_AlgRegisterFrameWDR(ViPipe);
-    ISP_AlgRegisterExpander(ViPipe);
-    ISP_AlgRegisterBlc(ViPipe);
-    ISP_AlgRegisterBayernr(ViPipe);
-    ISP_AlgRegisterSplit(ViPipe);
-    ISP_AlgRegisterFlicker(ViPipe);
-    ISP_AlgRegisterDg(ViPipe);
-    ISP_AlgRegisterHrs(ViPipe);
-    ISP_AlgRegisterFeLsc(ViPipe);
-    ISP_AlgRegisterLsc(ViPipe);
-    ISP_AlgRegisterRLsc(ViPipe);
-    ISP_AlgRegisterRc(ViPipe);
-    ISP_AlgRegisterDrc(ViPipe);
-    ISP_AlgRegisterDehaze(ViPipe);
-    ISP_AlgRegisterLCac(ViPipe);
+	ISP_AlgRegisterFrameWDR(ViPipe);
+	ISP_AlgRegisterExpander(ViPipe);
+	ISP_AlgRegisterBlc(ViPipe);
+	ISP_AlgRegisterBayernr(ViPipe);
+	ISP_AlgRegisterSplit(ViPipe);
+	ISP_AlgRegisterFlicker(ViPipe);
+	ISP_AlgRegisterDg(ViPipe);
+	ISP_AlgRegisterHrs(ViPipe);
+	ISP_AlgRegisterFeLsc(ViPipe);
+	ISP_AlgRegisterLsc(ViPipe);
+	ISP_AlgRegisterRLsc(ViPipe);
+	ISP_AlgRegisterRc(ViPipe);
+	ISP_AlgRegisterDrc(ViPipe);
+	ISP_AlgRegisterDehaze(ViPipe);
+	ISP_AlgRegisterLCac(ViPipe);
 
 #ifdef CONFIG_ISP_GCAC_SUPPORT
-    ISP_AlgRegisterGCac(ViPipe);
+	ISP_AlgRegisterGCac(ViPipe);
 #endif
 
-    ISP_AlgRegisterDemosaic(ViPipe);
-    ISP_AlgRegisterFcr(ViPipe);
-    ISP_AlgRegisterGamma(ViPipe);
-    ISP_AlgRegisterCsc(ViPipe);
+	ISP_AlgRegisterDemosaic(ViPipe);
+	ISP_AlgRegisterFcr(ViPipe);
+	ISP_AlgRegisterGamma(ViPipe);
+	ISP_AlgRegisterCsc(ViPipe);
 
 #ifdef CONFIG_ISP_CA_SUPPORT
-    ISP_AlgRegisterCa(ViPipe);
+	ISP_AlgRegisterCa(ViPipe);
 #endif
 
 #ifdef CONFIG_VI_FPN_SUPPORT
-    ISP_AlgRegisterFPN(ViPipe);
+	ISP_AlgRegisterFPN(ViPipe);
 #endif
-    ISP_AlgRegisterSharpen(ViPipe);
+	ISP_AlgRegisterSharpen(ViPipe);
 
 #ifdef CONFIG_ISP_EDGEMARK_SUPPORT
-    ISP_AlgRegisterEdgeMark(ViPipe);
+	ISP_AlgRegisterEdgeMark(ViPipe);
 #endif
-    ISP_AlgRegisterMcds(ViPipe);
-    ISP_AlgRegisterLdci(ViPipe);
+	ISP_AlgRegisterMcds(ViPipe);
+	ISP_AlgRegisterLdci(ViPipe);
 
 #ifdef CONFIG_ISP_PREGAMMA_SUPPORT
-    ISP_AlgRegisterPreGamma(ViPipe);
+	ISP_AlgRegisterPreGamma(ViPipe);
 #endif
-    ISP_AlgRegisterFeLogLUT(ViPipe);
-    ISP_AlgRegisterLogLUT(ViPipe);
-    ISP_AlgRegisterClut(ViPipe);
+	ISP_AlgRegisterFeLogLUT(ViPipe);
+	ISP_AlgRegisterLogLUT(ViPipe);
+	ISP_AlgRegisterClut(ViPipe);
 
 #ifdef CONFIG_ISP_HLC_SUPPORT
-    ISP_AlgRegisterHlc(ViPipe);
+	ISP_AlgRegisterHlc(ViPipe);
 #endif
-    ISP_AlgRegisterDetail(ViPipe);
-    ISP_AlgRegisterRgbir(ViPipe);
-    return;
+	ISP_AlgRegisterDetail(ViPipe);
+	ISP_AlgRegisterRgbir(ViPipe);
+	return;
 }
 
 static inline GK_VOID ISP_YUVAlgsRegister(VI_PIPE ViPipe)
 {
 #ifdef CONFIG_ISP_AF_SUPPORT
-    ISP_AlgRegisterAf(ViPipe);
+	ISP_AlgRegisterAf(ViPipe);
 #endif
 
 #ifdef CONFIG_ISP_CA_SUPPORT
-    ISP_AlgRegisterCa(ViPipe);
+	ISP_AlgRegisterCa(ViPipe);
 #endif
 
-    ISP_AlgRegisterSharpen(ViPipe);
+	ISP_AlgRegisterSharpen(ViPipe);
 #ifdef CONFIG_ISP_EDGEMARK_SUPPORT
-    ISP_AlgRegisterEdgeMark(ViPipe);
+	ISP_AlgRegisterEdgeMark(ViPipe);
 #endif
-    ISP_AlgRegisterMcds(ViPipe);
-    ISP_AlgRegisterLdci(ViPipe);
+	ISP_AlgRegisterMcds(ViPipe);
+	ISP_AlgRegisterLdci(ViPipe);
 
-    return;
+	return;
 }
 
 /* resolve problem:
 isp error: Null Pointer in ISP_AlgRegisterxxx when return isp_init without app exit */
 static inline GK_VOID ISP_AlgsUnRegister(VI_PIPE ViPipe)
 {
-    ISP_CTX_S *pstIspCtx = GK_NULL;
-    GK_S32 i;
+	ISP_CTX_S *pstIspCtx = GK_NULL;
+	GK_S32 i;
 
-    ISP_GET_CTX(ViPipe, pstIspCtx);
+	ISP_GET_CTX(ViPipe, pstIspCtx);
 
-    for (i = 0; i < ISP_MAX_ALGS_NUM; i++) {
-        if (pstIspCtx->astAlgs[i].bUsed) {
-            pstIspCtx->astAlgs[i].bUsed = GK_FALSE;
-        }
-    }
+	for (i = 0; i < ISP_MAX_ALGS_NUM; i++) {
+		if (pstIspCtx->astAlgs[i].bUsed) {
+			pstIspCtx->astAlgs[i].bUsed = GK_FALSE;
+		}
+	}
 }
 
 /* resolve problem:
 isp error: MPI_XX_Register failed when return 3a lib register without app exit */
 static inline GK_VOID ISP_LibsUnRegister(VI_PIPE ViPipe)
 {
-    ISP_CTX_S *pstIspCtx = GK_NULL;
-    GK_S32 i;
+	ISP_CTX_S *pstIspCtx = GK_NULL;
+	GK_S32 i;
 
-    ISP_GET_CTX(ViPipe, pstIspCtx);
+	ISP_GET_CTX(ViPipe, pstIspCtx);
 
-    for (i = 0; i < MAX_REGISTER_ALG_LIB_NUM; i++) {
-        pstIspCtx->stAeLibInfo.astLibs[i].bUsed  = GK_FALSE;
-        pstIspCtx->stAwbLibInfo.astLibs[i].bUsed = GK_FALSE;
-        pstIspCtx->stAfLibInfo.astLibs[i].bUsed  = GK_FALSE;
-    }
+	for (i = 0; i < MAX_REGISTER_ALG_LIB_NUM; i++) {
+		pstIspCtx->stAeLibInfo.astLibs[i].bUsed = GK_FALSE;
+		pstIspCtx->stAwbLibInfo.astLibs[i].bUsed = GK_FALSE;
+		pstIspCtx->stAfLibInfo.astLibs[i].bUsed = GK_FALSE;
+	}
 }
 
 #ifdef __cplusplus

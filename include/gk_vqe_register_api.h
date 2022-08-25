@@ -10,8 +10,7 @@
 
 #ifdef __cplusplus
 #if __cplusplus
-extern "C"
-{
+extern "C" {
 #endif
 #endif
 
@@ -37,4 +36,3 @@ GK_VOID *GK_VQE_WNR_GetHandle(GK_VOID);
 #endif
 
 #endif
-

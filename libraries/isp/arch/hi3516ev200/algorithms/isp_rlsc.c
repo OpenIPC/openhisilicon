@@ -14,10 +14,9 @@ extern "C" {
 #endif
 #endif /* __cplusplus */
 
-
 GK_S32 ISP_AlgRegisterRLsc(VI_PIPE ViPipe)
 {
-    return GK_SUCCESS;
+	return GK_SUCCESS;
 }
 
 #ifdef __cplusplus

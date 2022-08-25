@@ -9,7 +9,6 @@
 #include "isp_sensor.h"
 #include "isp_proc.h"
 
-
 #ifdef __cplusplus
 #if __cplusplus
 extern "C" {
@@ -18,9 +17,7 @@ extern "C" {
 
 GK_S32 ISP_AlgRegisterHlc(VI_PIPE ViPipe)
 {
-
-
-    return GK_SUCCESS;
+	return GK_SUCCESS;
 }
 #ifdef __cplusplus
 #if __cplusplus

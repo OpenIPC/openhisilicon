@@ -18,194 +18,196 @@
 #include "i2c.h"
 #endif
 
-const unsigned char sc3335_i2c_addr     =    0x60;        /* I2C Address of SC3335 */
-const unsigned int  sc3335_addr_byte    =    2;
-const unsigned int  sc3335_data_byte    =    1;
-static int g_fd[ISP_MAX_PIPE_NUM] = {[0 ... (ISP_MAX_PIPE_NUM - 1)] = -1};
+const unsigned char sc3335_i2c_addr = 0x60; /* I2C Address of SC3335 */
+const unsigned int sc3335_addr_byte = 2;
+const unsigned int sc3335_data_byte = 1;
+static int g_fd[ISP_MAX_PIPE_NUM] = { [0 ...(ISP_MAX_PIPE_NUM - 1)] = -1 };
 
-extern ISP_SNS_STATE_S       *g_pastSc3335[ISP_MAX_PIPE_NUM];
-extern ISP_SNS_COMMBUS_U      g_aunSc3335BusInfo[];
+extern ISP_SNS_STATE_S *g_pastSc3335[ISP_MAX_PIPE_NUM];
+extern ISP_SNS_COMMBUS_U g_aunSc3335BusInfo[];
 
 int sc3335_i2c_init(VI_PIPE ViPipe)
 {
-    char acDevFile[16] = {0};
-    GK_U8 u8DevNum;
+	char acDevFile[16] = { 0 };
+	GK_U8 u8DevNum;
 
-    if (g_fd[ViPipe] >= 0) {
-        return GK_SUCCESS;
-    }
+	if (g_fd[ViPipe] >= 0) {
+		return GK_SUCCESS;
+	}
 #ifdef GPIO_I2C
-    int ret;
+	int ret;
 
-    g_fd[ViPipe] = open("/dev/gpioi2c_ex", O_RDONLY, S_IRUSR);
-    if (g_fd[ViPipe] < 0) {
-        ISP_TRACE(MODULE_DBG_ERR, "Open gpioi2c_ex error!\n");
-        return GK_FAILURE;
-    }
+	g_fd[ViPipe] = open("/dev/gpioi2c_ex", O_RDONLY, S_IRUSR);
+	if (g_fd[ViPipe] < 0) {
+		ISP_TRACE(MODULE_DBG_ERR, "Open gpioi2c_ex error!\n");
+		return GK_FAILURE;
+	}
 #else
-    int ret;
+	int ret;
 
-    u8DevNum = g_aunSc3335BusInfo[ViPipe].s8I2cDev;
-    snprintf(acDevFile, sizeof(acDevFile),  "/dev/i2c-%u", u8DevNum);
+	u8DevNum = g_aunSc3335BusInfo[ViPipe].s8I2cDev;
+	snprintf(acDevFile, sizeof(acDevFile), "/dev/i2c-%u", u8DevNum);
 
-    g_fd[ViPipe] = open(acDevFile, O_RDWR, S_IRUSR | S_IWUSR);
+	g_fd[ViPipe] = open(acDevFile, O_RDWR, S_IRUSR | S_IWUSR);
 
-    if (g_fd[ViPipe] < 0) {
-        ISP_TRACE(MODULE_DBG_ERR, "Open /dev/i2c_drv-%u error!\n", u8DevNum);
-        return GK_FAILURE;
-    }
+	if (g_fd[ViPipe] < 0) {
+		ISP_TRACE(MODULE_DBG_ERR, "Open /dev/i2c_drv-%u error!\n",
+			  u8DevNum);
+		return GK_FAILURE;
+	}
 
-    ret = ioctl(g_fd[ViPipe], I2C_SLAVE_FORCE, (sc3335_i2c_addr >> 1));
-    if (ret < 0) {
-        ISP_TRACE(MODULE_DBG_ERR, "I2C_SLAVE_FORCE error!\n");
-        close(g_fd[ViPipe]);
-        g_fd[ViPipe] = -1;
-        return ret;
-    }
+	ret = ioctl(g_fd[ViPipe], I2C_SLAVE_FORCE, (sc3335_i2c_addr >> 1));
+	if (ret < 0) {
+		ISP_TRACE(MODULE_DBG_ERR, "I2C_SLAVE_FORCE error!\n");
+		close(g_fd[ViPipe]);
+		g_fd[ViPipe] = -1;
+		return ret;
+	}
 #endif
 
-    return GK_SUCCESS;
+	return GK_SUCCESS;
 }
 
 int sc3335_i2c_exit(VI_PIPE ViPipe)
 {
-    if (g_fd[ViPipe] >= 0) {
-        close(g_fd[ViPipe]);
-        g_fd[ViPipe] = -1;
-        return GK_SUCCESS;
-    }
-    return GK_FAILURE;
+	if (g_fd[ViPipe] >= 0) {
+		close(g_fd[ViPipe]);
+		g_fd[ViPipe] = -1;
+		return GK_SUCCESS;
+	}
+	return GK_FAILURE;
 }
 
 int sc3335_read_register(VI_PIPE ViPipe, GK_U32 addr)
 {
-    GK_S32 s32RegVal = 0;
+	GK_S32 s32RegVal = 0;
 
-    if (g_fd[ViPipe] < 0) {
-        ISP_TRACE(MODULE_DBG_ERR, "sc3335_read_register fd not opened!\n");
-        return GK_FAILURE;
-    }
+	if (g_fd[ViPipe] < 0) {
+		ISP_TRACE(MODULE_DBG_ERR,
+			  "sc3335_read_register fd not opened!\n");
+		return GK_FAILURE;
+	}
 
-    GK_S32 s32Ret = 0;
-    GK_U32 u32RegWidth = sc3335_addr_byte;
-    GK_U32 u32DataWidth = sc3335_data_byte;
-    GK_U8 aRecvbuf[4];
+	GK_S32 s32Ret = 0;
+	GK_U32 u32RegWidth = sc3335_addr_byte;
+	GK_U32 u32DataWidth = sc3335_data_byte;
+	GK_U8 aRecvbuf[4];
 
 #ifdef LOSCFG_HOST_TYPE_VENDOR
-    GK_U32 u32SnsI2cAddr = (sc3335_i2c_addr >> 1);
-    struct i2c_rdwr_ioctl_data stRdwr;
-    struct i2c_msg astMsg[2];
-    memset(&stRdwr, 0x0, sizeof(stRdwr));
-    memset(astMsg, 0x0, sizeof(astMsg));
+	GK_U32 u32SnsI2cAddr = (sc3335_i2c_addr >> 1);
+	struct i2c_rdwr_ioctl_data stRdwr;
+	struct i2c_msg astMsg[2];
+	memset(&stRdwr, 0x0, sizeof(stRdwr));
+	memset(astMsg, 0x0, sizeof(astMsg));
 #endif
 
-    memset(aRecvbuf, 0x0, sizeof(aRecvbuf));
+	memset(aRecvbuf, 0x0, sizeof(aRecvbuf));
 
 #ifdef LOSCFG_HOST_TYPE_VENDOR
-    astMsg[0].addr = u32SnsI2cAddr;
-    astMsg[0].flags = 0;
-    astMsg[0].len = u32RegWidth;
-    astMsg[0].buf = aRecvbuf;
+	astMsg[0].addr = u32SnsI2cAddr;
+	astMsg[0].flags = 0;
+	astMsg[0].len = u32RegWidth;
+	astMsg[0].buf = aRecvbuf;
 
-    astMsg[1].addr = u32SnsI2cAddr;
-    astMsg[1].flags = 0;
-    astMsg[1].flags |= I2C_M_RD;
-    astMsg[1].len = u32DataWidth;
-    astMsg[1].buf = aRecvbuf;
-    stRdwr.msgs = &astMsg[0];
-    stRdwr.nmsgs = 2;
+	astMsg[1].addr = u32SnsI2cAddr;
+	astMsg[1].flags = 0;
+	astMsg[1].flags |= I2C_M_RD;
+	astMsg[1].len = u32DataWidth;
+	astMsg[1].buf = aRecvbuf;
+	stRdwr.msgs = &astMsg[0];
+	stRdwr.nmsgs = 2;
 #endif
 
 #ifdef LOSCFG_HOST_TYPE_VENDOR
-    if (u32RegWidth == 2) {
-        aRecvbuf[0] = (addr >> 8) & 0xff;
-        aRecvbuf[1] = addr & 0xff;
-    } else {
-        aRecvbuf[0] = addr & 0xff;
-    }
-    s32Ret = ioctl(g_fd[ViPipe], I2C_RDWR, &stRdwr);
+	if (u32RegWidth == 2) {
+		aRecvbuf[0] = (addr >> 8) & 0xff;
+		aRecvbuf[1] = addr & 0xff;
+	} else {
+		aRecvbuf[0] = addr & 0xff;
+	}
+	s32Ret = ioctl(g_fd[ViPipe], I2C_RDWR, &stRdwr);
 #else
-    if (u32RegWidth == 2) {
-        aRecvbuf[0] = addr & 0xff;
-        aRecvbuf[1] = (addr >> 8) & 0xff;
-    } else {
-        aRecvbuf[0] = addr & 0xff;
-    }
-    s32Ret = read(g_fd[ViPipe], aRecvbuf, u32RegWidth + u32DataWidth);
+	if (u32RegWidth == 2) {
+		aRecvbuf[0] = addr & 0xff;
+		aRecvbuf[1] = (addr >> 8) & 0xff;
+	} else {
+		aRecvbuf[0] = addr & 0xff;
+	}
+	s32Ret = read(g_fd[ViPipe], aRecvbuf, u32RegWidth + u32DataWidth);
 #endif
 
-    if (s32Ret < 0) {
-        return GK_FAILURE;
-    }
+	if (s32Ret < 0) {
+		return GK_FAILURE;
+	}
 
-    if (u32DataWidth == 2) {
-        s32RegVal = aRecvbuf[0] | (aRecvbuf[1] << 8);
-    } else {
-        s32RegVal = aRecvbuf[0];
-    }
-    return s32RegVal;
+	if (u32DataWidth == 2) {
+		s32RegVal = aRecvbuf[0] | (aRecvbuf[1] << 8);
+	} else {
+		s32RegVal = aRecvbuf[0];
+	}
+	return s32RegVal;
 }
 
 int sc3335_write_register(VI_PIPE ViPipe, GK_U32 addr, GK_U32 data)
 {
-    if (g_fd[ViPipe] < 0) {
-        return GK_SUCCESS;
-    }
+	if (g_fd[ViPipe] < 0) {
+		return GK_SUCCESS;
+	}
 
 #ifdef GPIO_I2C
-    i2c_data.dev_addr = sc3335_i2c_addr;
-    i2c_data.reg_addr = addr;
-    i2c_data.addr_byte_num = sc3335_addr_byte;
-    i2c_data.data = data;
-    i2c_data.data_byte_num = sc3335_data_byte;
+	i2c_data.dev_addr = sc3335_i2c_addr;
+	i2c_data.reg_addr = addr;
+	i2c_data.addr_byte_num = sc3335_addr_byte;
+	i2c_data.data = data;
+	i2c_data.data_byte_num = sc3335_data_byte;
 
-    ret = ioctl(g_fd[ViPipe], GPIO_I2C_WRITE, &i2c_data);
-    if (ret) {
-        ISP_TRACE(MODULE_DBG_ERR, "GPIO-I2C write faild!\n");
-        return ret;
-    }
+	ret = ioctl(g_fd[ViPipe], GPIO_I2C_WRITE, &i2c_data);
+	if (ret) {
+		ISP_TRACE(MODULE_DBG_ERR, "GPIO-I2C write faild!\n");
+		return ret;
+	}
 #else
-    int idx = 0;
-    int ret;
-    char buf[8];
+	int idx = 0;
+	int ret;
+	char buf[8];
 
-    if (sc3335_addr_byte == 2) {
-        buf[idx] = (addr >> 8) & 0xff;
-        idx++;
-        buf[idx] = addr & 0xff;
-        idx++;
-    } else {
-    }
+	if (sc3335_addr_byte == 2) {
+		buf[idx] = (addr >> 8) & 0xff;
+		idx++;
+		buf[idx] = addr & 0xff;
+		idx++;
+	} else {
+	}
 
-    if (sc3335_data_byte == 2) {
-    } else {
-        buf[idx] = data & 0xff;
-        idx++;
-    }
+	if (sc3335_data_byte == 2) {
+	} else {
+		buf[idx] = data & 0xff;
+		idx++;
+	}
 
-    ret = write(g_fd[ViPipe], buf, sc3335_addr_byte + sc3335_data_byte);
-    if (ret < 0) {
-        ISP_TRACE(MODULE_DBG_ERR, "I2C_WRITE error!\n");
-        return GK_FAILURE;
-    }
+	ret = write(g_fd[ViPipe], buf, sc3335_addr_byte + sc3335_data_byte);
+	if (ret < 0) {
+		ISP_TRACE(MODULE_DBG_ERR, "I2C_WRITE error!\n");
+		return GK_FAILURE;
+	}
 
 #endif
-    return GK_SUCCESS;
+	return GK_SUCCESS;
 }
 
 void sc3335_standby(VI_PIPE ViPipe)
 {
-    return;
+	return;
 }
 
 void sc3335_restart(VI_PIPE ViPipe)
 {
-    return;
+	return;
 }
 
 static void delay_ms(int ms)
 {
-    usleep(ms * 1000);
+	usleep(ms * 1000);
 }
 
 #define SC3335_SENSOR_1296P_30FPS_LINEAR_MODE (1)
@@ -214,46 +216,53 @@ void sc3335_linear_1296p30_init(VI_PIPE ViPipe);
 
 void sc3335_init(VI_PIPE ViPipe)
 {
-    GK_U32           i;
+	GK_U32 i;
 
-    sc3335_i2c_init(ViPipe);
-    sc3335_linear_1296p30_init(ViPipe);
-    for (i = 0; i < g_pastSc3335[ViPipe]->astRegsInfo[0].u32RegNum; i++) {
-        sc3335_write_register(ViPipe,
-            g_pastSc3335[ViPipe]->astRegsInfo[0].astI2cData[i].u32RegAddr,
-            g_pastSc3335[ViPipe]->astRegsInfo[0].astI2cData[i].u32Data);
-    }
-    g_pastSc3335[ViPipe]->bInit = GK_TRUE;
-    return;
+	sc3335_i2c_init(ViPipe);
+	sc3335_linear_1296p30_init(ViPipe);
+	for (i = 0; i < g_pastSc3335[ViPipe]->astRegsInfo[0].u32RegNum; i++) {
+		sc3335_write_register(ViPipe,
+				      g_pastSc3335[ViPipe]
+					      ->astRegsInfo[0]
+					      .astI2cData[i]
+					      .u32RegAddr,
+				      g_pastSc3335[ViPipe]
+					      ->astRegsInfo[0]
+					      .astI2cData[i]
+					      .u32Data);
+	}
+	g_pastSc3335[ViPipe]->bInit = GK_TRUE;
+	return;
 }
 
 void sc3335_exit(VI_PIPE ViPipe)
 {
-    sc3335_i2c_exit(ViPipe);
-    return;
+	sc3335_i2c_exit(ViPipe);
+	return;
 }
 
-void sc3335_mirror_flip(VI_PIPE ViPipe, ISP_SNS_MIRRORFLIP_TYPE_E eSnsMirrorFlip)
+void sc3335_mirror_flip(VI_PIPE ViPipe,
+			ISP_SNS_MIRRORFLIP_TYPE_E eSnsMirrorFlip)
 {
-    switch (eSnsMirrorFlip) {
-        default:
-        case ISP_SNS_NORMAL:
-            sc3335_write_register(ViPipe, 0x3221, 0x00);
-            break;
+	switch (eSnsMirrorFlip) {
+	default:
+	case ISP_SNS_NORMAL:
+		sc3335_write_register(ViPipe, 0x3221, 0x00);
+		break;
 
-        case ISP_SNS_MIRROR:
-            sc3335_write_register(ViPipe, 0x3221, 0x06);
-            break;
+	case ISP_SNS_MIRROR:
+		sc3335_write_register(ViPipe, 0x3221, 0x06);
+		break;
 
-        case ISP_SNS_FLIP:
-            sc3335_write_register(ViPipe, 0x3221, 0x60);
-            break;
+	case ISP_SNS_FLIP:
+		sc3335_write_register(ViPipe, 0x3221, 0x60);
+		break;
 
-        case ISP_SNS_MIRROR_FLIP:
-            sc3335_write_register(ViPipe, 0x3221, 0x66);
-            break;
-    }
-    return;
+	case ISP_SNS_MIRROR_FLIP:
+		sc3335_write_register(ViPipe, 0x3221, 0x66);
+		break;
+	}
+	return;
 }
 
 void sc3335_linear_1296p30_init(VI_PIPE ViPipe)
@@ -345,10 +354,9 @@ void sc3335_linear_1296p30_init(VI_PIPE ViPipe)
 	sc3335_write_register(ViPipe, 0x3221, 0x00);
 	sc3335_write_register(ViPipe, 0x0100, 0x01);
 
-    delay_ms(10);
-    printf("==============================================================\n");
-    printf("===Smart sc3335 sensor 1296P30fps(MIPI) init success!===\n");
-    printf("==============================================================\n");
-    return;
+	delay_ms(10);
+	printf("==============================================================\n");
+	printf("===Smart sc3335 sensor 1296P30fps(MIPI) init success!===\n");
+	printf("==============================================================\n");
+	return;
 }
-

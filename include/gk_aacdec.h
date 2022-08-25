@@ -10,8 +10,7 @@
 
 #ifdef __cplusplus
 #if __cplusplus
-extern "C"
-{
+extern "C" {
 #endif
 #endif /* __cplusplus */
 
@@ -26,4 +25,3 @@ GK_VOID *GK_AAC_SBRDEC_GetHandle(GK_VOID);
 #endif /* __cplusplus */
 
 #endif /* __GK_AACDEC_H__ */
-

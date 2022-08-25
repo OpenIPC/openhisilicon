@@ -28,7 +28,8 @@ GK_VOID ISP_RegsInitialize(VI_PIPE ViPipe);
 /* This function initialises an instance of ISP_CTX_S */
 GK_VOID ISP_GlobalInitialize(VI_PIPE ViPipe);
 
-GK_VOID ISP_DngExtRegsInitialize(VI_PIPE ViPipe, ISP_DNG_COLORPARAM_S *pstDngColorParam);
+GK_VOID ISP_DngExtRegsInitialize(VI_PIPE ViPipe,
+				 ISP_DNG_COLORPARAM_S *pstDngColorParam);
 
 #ifdef __cplusplus
 #if __cplusplus

@@ -17,13 +17,13 @@ extern "C" {
 #endif /* End of #ifdef __cplusplus */
 
 typedef struct ISP_DBG_CTRL_S {
-    GK_BOOL bDebugEn;
-    GK_U64  u64PhyAddr;
-    GK_U32  u32Depth;
+	GK_BOOL bDebugEn;
+	GK_U64 u64PhyAddr;
+	GK_U32 u32Depth;
 
-    GK_U32  u32Size;
-    ISP_DBG_ATTR_S   *pstDbgAttr;
-    ISP_DBG_STATUS_S *pstDbgStatus;
+	GK_U32 u32Size;
+	ISP_DBG_ATTR_S *pstDbgAttr;
+	ISP_DBG_STATUS_S *pstDbgStatus;
 } ISP_DBG_CTRL_S;
 
 GK_S32 ISP_DbgSet(VI_PIPE ViPipe, const ISP_DEBUG_INFO_S *pstDbgInfo);

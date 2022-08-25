@@ -20,14 +20,14 @@ extern "C" {
 #define ISP_ALIGNUP(x, g) ((((x) + (g)-1) / (g)) * (g))
 
 typedef struct ISP_BE_BUF_S {
-    GK_U64 u64BePhyAddr; /* head addr */
-    GK_VOID *pBeVirtAddr;
+	GK_U64 u64BePhyAddr; /* head addr */
+	GK_VOID *pBeVirtAddr;
 
-    ISP_BE_WO_CFG_BUF_S stBeWoCfgBuf;
+	ISP_BE_WO_CFG_BUF_S stBeWoCfgBuf;
 } ISP_BE_BUF_S;
 
 typedef struct ISP_BE_LUT_BUF_S {
-    ISP_MMZ_BUF_EX_S astLutSttBuf[ISP_MAX_BE_NUM];
+	ISP_MMZ_BUF_EX_S astLutSttBuf[ISP_MAX_BE_NUM];
 } ISP_BE_LUT_BUF_S;
 
 GK_S32 ISP_ModParamGet(VI_PIPE ViPipe, ISP_MOD_PARAM_S *pstModParam);
@@ -69,29 +69,30 @@ GK_VOID *ISP_GetViProcVirAddr(VI_PIPE ViPipe, BLK_DEV BlkDev);
 GK_VOID *ISP_GetFeVirAddr(VI_PIPE ViPipe);
 GK_S32 ISP_SwitchStateSet(VI_PIPE ViPipe);
 
-#define ISP_CHECK_FE_PIPE(pipe)                              \
-    do {                                                     \
-        if (((pipe) < 0) || ((pipe) >= ISP_MAX_PIPE_NUM)) {  \
-            ISP_TRACE(MODULE_DBG_ERR, "Invalid ISP-FE Pipe!\n"); \
-            return GK_NULL;                                  \
-        }                                                    \
-    } while (0)
+#define ISP_CHECK_FE_PIPE(pipe)                                              \
+	do {                                                                 \
+		if (((pipe) < 0) || ((pipe) >= ISP_MAX_PIPE_NUM)) {          \
+			ISP_TRACE(MODULE_DBG_ERR, "Invalid ISP-FE Pipe!\n"); \
+			return GK_NULL;                                      \
+		}                                                            \
+	} while (0)
 
-#define ISP_CHECK_BE_DEV(dev)                                 \
-    do {                                                      \
-        if (((dev) < 0) || ((dev) >= ISP_STRIPING_MAX_NUM)) { \
-            ISP_TRACE(MODULE_DBG_ERR, "Err ISP-BE dev!\n");       \
-            return GK_NULL;                                   \
-        }                                                     \
-    } while (0)
+#define ISP_CHECK_BE_DEV(dev)                                           \
+	do {                                                            \
+		if (((dev) < 0) || ((dev) >= ISP_STRIPING_MAX_NUM)) {   \
+			ISP_TRACE(MODULE_DBG_ERR, "Err ISP-BE dev!\n"); \
+			return GK_NULL;                                 \
+		}                                                       \
+	} while (0)
 
 #define ISP_CHECK_NULLPTR(ptr)                                                \
-    do {                                                                      \
-        if (ptr == GK_NULL) {                                                 \
-            ISP_TRACE(MODULE_DBG_ERR, "Null point when writing isp register!\n"); \
-            return GK_NULL;                                                   \
-        }                                                                     \
-    } while (0)
+	do {                                                                  \
+		if (ptr == GK_NULL) {                                         \
+			ISP_TRACE(MODULE_DBG_ERR,                             \
+				  "Null point when writing isp register!\n"); \
+			return GK_NULL;                                       \
+		}                                                             \
+	} while (0)
 
 #ifdef __cplusplus
 #if __cplusplus
