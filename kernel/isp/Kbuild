@@ -13,11 +13,6 @@ SRCS := \
 
 ccflags-y += -I$(src)/$(MOD_NAME)/include
 ccflags-y += -I$(src)/$(MOD_NAME)/arch/include
-ccflags-y += -I$(src)/$(MOD_NAME)/ext_inc
-ccflags-y += -I$(src)/$(MOD_NAME)/mkp/include
-ccflags-y += -I$(src)/$(MOD_NAME)/arch/$(CHIPARCH)/include
-ccflags-y += -I$(src)/../libraries/isp/arch/$(CHIPARCH)/include
-ccflags-y += -I$(src)/../libraries/isp/include
 
 OBJS := $(SRCS:%.c=%.o) $(ASM_SRCS:%.S=%.o)
 

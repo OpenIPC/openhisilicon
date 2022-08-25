@@ -6,6 +6,12 @@ endif
 
 ccflags-y := -D$(CHIPARCH) -DRELEASE -DUSER_BIT_32 -DKERNEL_BIT_32 -Wno-date-time -D_GNU_SOURCE
 ccflags-y += -I$(src)/../include
+ccflags-y += -I$(src)/ext_inc
+
+ccflags-y += -I$(src)/isp/arch/$(CHIPARCH)/include
+ccflags-y += -I$(src)/isp/mkp/include
+ccflags-y += -I$(src)/../libraries/isp/arch/$(CHIPARCH)/include
+ccflags-y += -I$(src)/../libraries/isp/include
 
 include $(src)/hisi-hwrng/Kbuild
 include $(src)/sys_config/Kbuild
