@@ -9,7 +9,7 @@
 # mv kernel/isp/include/_isp.h kernel/isp/include/ot_mpi_isp.h
 # cp -r $SDK/mpp/component/isp/user/firmware/* libraries/isp/
 # cp -r $SDK/mpp/component/isp/kernel/* kernel/isp
-# cp -r $SDK/mpp/component/isp/ext_inc kernel/isp
+# cp -r $SDK/mpp/component/isp/ext_inc kernel
 # ./scripts/hi2gk.sh
 
 do_file() {
