@@ -94,6 +94,6 @@ jobs:
 
       - name: Build userspace libraries
         run: |
-          cd ${GITHUB_WORKSPACE}/libraries/isp
+          cd ${GITHUB_WORKSPACE}/libraries
 
           make CROSS_COMPILE=${PREFIX}- CHIPARCH=${{ matrix.platform }}

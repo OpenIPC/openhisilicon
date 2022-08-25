@@ -1,8 +1,5 @@
 LIB_NAME := libisp
 
-CC := $(CROSS_COMPILE)$(CC)
-AR := $(CROSS_COMPILE)$(AR)
-
 LIB_DIR := $(CURDIR)
 KO_DIR := $(CURDIR)/../../kernel/isp
 

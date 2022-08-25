@@ -1,4 +1,4 @@
-## Build library
+## Build libraries
 
 ```console
 export PATH=/path/to/openipc_sdk/bin:$PATH
