@@ -12,13 +12,18 @@ include $(src)/sys_config/Kbuild
 include $(src)/osal/Kbuild
 include $(src)/wdt/Kbuild
 include $(src)/adc/Kbuild
-include $(src)/isp/Kbuild
+ifndef DISABLE_ISP
+    include $(src)/isp/Kbuild
+endif
 include $(src)/piris/Kbuild
 include $(src)/pwm/Kbuild
-include $(src)/sample_ist/Kbuild
+ifndef DISABLE_IST
+    include $(src)/sample_ist/Kbuild
+endif
 include $(src)/sensor_i2c/Kbuild
 include $(src)/sensor_spi/Kbuild
 include $(src)/mipi_rx/Kbuild
+#+user
 
 ifeq ($(CHIPARCH),hi3516ev200)
     include $(src)/acodec/Kbuild
@@ -33,15 +38,23 @@ ifeq ($(CHIPARCH),hi3516ev200)
     include $(src)/h265e/Kbuild
     include $(src)/ive/Kbuild
     include $(src)/jpege/Kbuild
+ifndef DISABLE_PM
+    # it doesn't compile yet
     #include $(src)/pm/Kbuild
+endif
     include $(src)/rc/Kbuild
     include $(src)/rgn/Kbuild
     include $(src)/sys/Kbuild
+ifndef DISABLE_TDE
     include $(src)/tde/Kbuild
+endif
     include $(src)/vedu/Kbuild
     include $(src)/venc/Kbuild
     include $(src)/vgs/Kbuild
     include $(src)/vi/Kbuild
-    include $(src)/vo/Kbuild
+ifndef DISABLE_VO
+    #include $(src)/vo/Kbuild
+endif
     include $(src)/vpss/Kbuild
+    # +fb
 endif
