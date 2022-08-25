@@ -37,7 +37,8 @@ ifeq ($(CHIPARCH),hi3516ev200)
     include $(src)/ive/Kbuild
     include $(src)/jpege/Kbuild
 ifndef DISABLE_PM
-    include $(src)/pm/Kbuild
+    # it doesn't compile yet
+    #include $(src)/pm/Kbuild
 endif
     include $(src)/rc/Kbuild
     include $(src)/rgn/Kbuild
