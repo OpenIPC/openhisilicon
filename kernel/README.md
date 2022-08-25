@@ -6,12 +6,12 @@
 export PATH=/path/to/openipc_sdk/bin:$PATH
 make \
     ARCH=arm CROSS_COMPILE=arm-openipc-linux-musleabi- \
-    CHIPSET=hi3516ev200 \
+    CHIPARCH=hi3516ev200 \
     -C ~/git/firmware/output/build/linux-4.9.37 \
     M=$PWD
 ```
 
-where `CHIPSET` can be set to options `hi3516ev200` or `gk7205v200`
+where `CHIPARCH` can be set to options `hi3516ev200` or `gk7205v200`
 
 ### Reformat source code to Linux kernel style
 

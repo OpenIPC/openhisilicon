@@ -40,7 +40,7 @@
 #define GET_CMA_ZONE goke_get_cma_zone
 
 #else
-#error CHIPSET must be set to supported values
+#error CHIPARCH must be set to supported values
 #endif
 
 #endif /* COMPAT_H */

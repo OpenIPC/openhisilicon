@@ -88,7 +88,7 @@ jobs:
           cd kernel
           make \
             ARCH=arm CROSS_COMPILE=${PREFIX}- \
-            CHIPSET=${{ matrix.platform }} \
+            CHIPARCH=${{ matrix.platform }} \
             -C /tmp/linux-${{ matrix.linux }} \
             M=$PWD
 

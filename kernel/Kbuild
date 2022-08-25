@@ -1,10 +1,10 @@
 PREFIX = open_
 
-ifeq ($(CHIPSET),)
-	@echo CHIPSET must be set
+ifeq ($(CHIPARCH),)
+	@echo CHIPARCH must be set
 endif
 
-ccflags-y := -D$(CHIPSET) -DRELEASE -DUSER_BIT_32 -DKERNEL_BIT_32 -Wno-date-time -D_GNU_SOURCE
+ccflags-y := -D$(CHIPARCH) -DRELEASE -DUSER_BIT_32 -DKERNEL_BIT_32 -Wno-date-time -D_GNU_SOURCE
 ccflags-y += -I$(src)/../include
 
 include $(src)/hisi-hwrng/Kbuild
@@ -20,7 +20,7 @@ include $(src)/sensor_i2c/Kbuild
 include $(src)/sensor_spi/Kbuild
 include $(src)/mipi_rx/Kbuild
 
-ifeq ($(CHIPSET),hi3516ev200)
+ifeq ($(CHIPARCH),hi3516ev200)
     include $(src)/acodec/Kbuild
     include $(src)/adec/Kbuild
     include $(src)/aenc/Kbuild
