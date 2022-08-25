@@ -12,7 +12,9 @@ include $(src)/sys_config/Kbuild
 include $(src)/osal/Kbuild
 include $(src)/wdt/Kbuild
 include $(src)/adc/Kbuild
-include $(src)/isp/Kbuild
+ifndef DISABLE_ISP
+    include $(src)/isp/Kbuild
+endif
 include $(src)/piris/Kbuild
 include $(src)/pwm/Kbuild
 ifndef DISABLE_IST
