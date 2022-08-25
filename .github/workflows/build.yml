@@ -23,7 +23,7 @@ env:
 
 jobs:
   toolchain:
-    name: Kernel space
+    name: Build SDK
     runs-on: ubuntu-latest
 
     strategy:
@@ -38,19 +38,20 @@ jobs:
             vendor: goke
 
     steps:
-      - name: Checkout
+      - name: Checkout main repo
         uses: actions/checkout@v3
         with:
           fetch-depth: 0 # OR "2" -> To retrieve the preceding commit.
 
-      - name: Build kernel modules
+      - name: Checkout firmware repo
         run: |
           git clone \
             --depth 1 --single-branch --branch=master \
             https://github.com/${REPO} firmware
 
+      - name: Download toolchain
+        run: |
           pushd firmware
-          BR=$(pwd)
           BOARD=unknown_unknown_${{ matrix.platform }}_openipc
           make BOARD=${BOARD} prepare
           TOOLNAME=$(make BOARD=${BOARD} toolname)
@@ -60,28 +61,39 @@ jobs:
           wget https://github.com/${REPO}/releases/download/${TAG_NAME}/${TOOLNAME}.tgz \
             2>/dev/null
           tar xvf ${TOOLNAME}.tgz --strip-components=1 -C /tmp/extsdk >/dev/null
-          PREFIX="arm-openipc-linux-musleabi"
-          export PATH=/tmp/extsdk/bin:$PATH
+          echo "PREFIX=arm-openipc-linux-musleabi" >> $GITHUB_ENV
+          echo "PATH=/tmp/extsdk/bin:$PATH" >> $GITHUB_ENV
 
+      - name: Build kernel modules
+        run: |
           wget -c https://cdn.kernel.org/pub/linux/kernel/v4.x/linux-${{ matrix.linux }}.tar.xz \
             -O - 2>/dev/null | tar -xJ -C /tmp
 
           pushd /tmp/linux-${{ matrix.linux }}
 
-          DIR=${BR}/br-ext-chip-${{ matrix.vendor }}/board/${{ matrix.platform }}/kernel/overlay
-          for i in $(find $DIR); do
-            cp -r $i /tmp/${{ matrix.linux }}
-          done
-
-          patch -p1 < ${BR}/br-ext-chip-${{ matrix.vendor }}/board/${{ matrix.platform }}/kernel/patches/*
+          KERNEL_DIR=${GITHUB_WORKSPACE}/firmware/br-ext-chip-${{ matrix.vendor }}/board/${{ matrix.platform }}/kernel
+          if [ "$(ls -A ${KERNEL_DIR}/overlay)" ]; then
+            for i in ${KERNEL_DIR}/overlay/*; do
+              cp -arv $i .
+            done
+          fi
+          find ${KERNEL_DIR}/patches -type f | sort | xargs -n1 patch -p1 -i
 
           make ARCH=arm CROSS_COMPILE=${PREFIX}- ${{ matrix.platform }}_full_defconfig
-          make ARCH=arm CROSS_COMPILE=${PREFIX}- prepare
+
+          sudo apt update && apt install -y bc
+          make ARCH=arm CROSS_COMPILE=${PREFIX}- prepare modules_prepare
           popd
 
           cd kernel
           make \
             ARCH=arm CROSS_COMPILE=${PREFIX}- \
             CHIPSET=${{ matrix.platform }} \
-            -C /tmp/linux-4.9.37 \
+            -C /tmp/linux-${{ matrix.linux }} \
             M=$PWD
+
+      - name: Build userspace libraries
+        run: |
+          cd ${GITHUB_WORKSPACE}/libraries/isp
+
+          make CROSS_COMPILE=${PREFIX}- CHIPARCH=${{ matrix.platform }}

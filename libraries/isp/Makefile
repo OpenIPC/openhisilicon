@@ -6,8 +6,6 @@ AR := $(CROSS_COMPILE)$(AR)
 LIB_DIR := $(CURDIR)
 KO_DIR := $(CURDIR)/../../kernel/isp
 
-CHIPARCH := gk7205v200
-
 CFLAGS += -fPIC -O3 -DNDEBUG
 
 CFLAGS += -I$(LIB_DIR)/include \
