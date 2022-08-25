@@ -81,7 +81,7 @@ jobs:
 
           make ARCH=arm CROSS_COMPILE=${PREFIX}- ${{ matrix.platform }}_full_defconfig
 
-          sudo apt update && apt install -y bc
+          sudo apt update && sudo apt install -y bc
           make ARCH=arm CROSS_COMPILE=${PREFIX}- prepare modules_prepare
           popd
 
