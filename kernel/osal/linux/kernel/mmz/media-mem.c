@@ -38,6 +38,8 @@
 #include "osal.h"
 #include "allocator.h"
 
+#include "../../../../compat/compat.h"
+
 OSAL_LIST_HEAD(mmz_list);
 
 extern struct osal_list_head map_mmz_list;
@@ -79,7 +81,8 @@ __setup("map_mmz=", parse_kern_cmdline);
 #else
 static char setup_zones[MMZ_SETUP_CMDLINE_LEN] = { '\0' };
 static char mmap_zones[MMZ_SETUP_CMDLINE_LEN] = { '\0' };
-static char setup_allocator[MMZ_ALLOCATOR_NAME_LEN] = "gk"; //default setting
+static char setup_allocator[MMZ_ALLOCATOR_NAME_LEN] =
+	DEFAULT_ALLOCATOR; //default setting
 module_param_string(mmz, setup_zones, MMZ_SETUP_CMDLINE_LEN, 0600);
 module_param_string(map_mmz, mmap_zones, MMZ_SETUP_CMDLINE_LEN, 0600);
 module_param_string(mmz_allocator, setup_allocator, MMZ_ALLOCATOR_NAME_LEN,
@@ -232,7 +235,7 @@ int mmz_mmz_register(mmz_mmz_t *zone)
 
 	down(&mmz_lock);
 
-	if (0 == strcmp(setup_allocator, "gk")) {
+	if (0 == strcmp(setup_allocator, DEFAULT_ALLOCATOR)) {
 		ret = _check_mmz(zone);
 		if (ret) {
 			up(&mmz_lock);
@@ -886,7 +889,7 @@ int mmz_map_mmz_register(mmz_mmz_t *zone)
 
 	down(&mmz_lock);
 
-	if (0 == strcmp(setup_allocator, "gk")) {
+	if (0 == strcmp(setup_allocator, DEFAULT_ALLOCATOR)) {
 		ret = _check_mmz(zone);
 		if (ret) {
 			up(&mmz_lock);
@@ -1262,10 +1265,11 @@ int __init media_mem_init(void)
 	if (strcmp(setup_allocator, "cma") == 0) {
 		ret = cma_allocator_setopt(&the_allocator);
 		allocator_type = 1;
-	} else if (strcmp(setup_allocator, "gk") == 0) {
+	} else if (strcmp(setup_allocator, DEFAULT_ALLOCATOR) == 0) {
 		ret = allocator_setopt(&the_allocator);
 	} else {
-		printk("The module param \"setup_allocator\" should be \"cma\" or \"gk\", which is \"%s\"\n",
+		printk("The module param \"setup_allocator\" should be \"cma\" or \"" DEFAULT_ALLOCATOR
+		       "\", which is \"%s\"\n",
 		       setup_allocator);
 		mmz_exit_check();
 		return -EINVAL;

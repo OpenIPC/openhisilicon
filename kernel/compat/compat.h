@@ -20,6 +20,8 @@
 #define I2C_MASTER_SEND hi_i2c_master_send
 #define GET_CMA_ZONE hisi_get_cma_zone
 
+#define DEFAULT_ALLOCATOR "gk"
+
 #elif defined(gk7205v200)
 
 /* gk7205v200 gk7205v300 gk7202v300 gk7605v100 */
@@ -38,6 +40,8 @@
 
 #define I2C_MASTER_SEND gk_i2c_master_send
 #define GET_CMA_ZONE goke_get_cma_zone
+
+#define DEFAULT_ALLOCATOR "hisi"
 
 #else
 #error CHIPARCH must be set to supported values
