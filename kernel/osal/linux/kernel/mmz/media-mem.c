@@ -38,6 +38,12 @@
 #include "osal.h"
 #include "allocator.h"
 
+#include "../../../../compat/compat.h"
+
+#define EXPORT_COMPAT_MMZ(common_name)    \
+	EXPORT_SYMBOL(mmz_##common_name); \
+	EXPORT_ALIAS(mmz_##common_name, hil_##common_name)
+
 OSAL_LIST_HEAD(mmz_list);
 
 extern struct osal_list_head map_mmz_list;
@@ -79,7 +85,8 @@ __setup("map_mmz=", parse_kern_cmdline);
 #else
 static char setup_zones[MMZ_SETUP_CMDLINE_LEN] = { '\0' };
 static char mmap_zones[MMZ_SETUP_CMDLINE_LEN] = { '\0' };
-static char setup_allocator[MMZ_ALLOCATOR_NAME_LEN] = "gk"; //default setting
+static char setup_allocator[MMZ_ALLOCATOR_NAME_LEN] =
+	DEFAULT_ALLOCATOR; //default setting
 module_param_string(mmz, setup_zones, MMZ_SETUP_CMDLINE_LEN, 0600);
 module_param_string(map_mmz, mmap_zones, MMZ_SETUP_CMDLINE_LEN, 0600);
 module_param_string(mmz_allocator, setup_allocator, MMZ_ALLOCATOR_NAME_LEN,
@@ -232,7 +239,7 @@ int mmz_mmz_register(mmz_mmz_t *zone)
 
 	down(&mmz_lock);
 
-	if (0 == strcmp(setup_allocator, "gk")) {
+	if (0 == strcmp(setup_allocator, DEFAULT_ALLOCATOR)) {
 		ret = _check_mmz(zone);
 		if (ret) {
 			up(&mmz_lock);
@@ -293,15 +300,7 @@ mmz_mmb_t *mmz_mmb_alloc(const char *name, unsigned long size,
 
 	return mmb;
 }
-EXPORT_SYMBOL(mmz_mmb_alloc);
-
-mmz_mmb_t *hil_mmb_alloc(const char *name, unsigned long size,
-			 unsigned long align, unsigned long gfp,
-			 const char *mmz_name)
-{
-	return mmz_mmb_alloc(name, size, align, gfp, mmz_name);
-}
-EXPORT_SYMBOL(hil_mmb_alloc);
+EXPORT_COMPAT_MMZ(mmb_alloc);
 
 mmz_mmb_t *mmz_mmb_alloc_v2(const char *name, unsigned long size,
 			    unsigned long align, unsigned long gfp,
@@ -364,13 +363,7 @@ void *mmz_mmb_map2kern(mmz_mmb_t *mmb)
 
 	return p;
 }
-EXPORT_SYMBOL(mmz_mmb_map2kern);
-
-void *hil_mmb_map2kern(mmz_mmb_t *mmb)
-{
-	return mmz_mmb_map2kern(mmb);
-}
-EXPORT_SYMBOL(hil_mmb_map2kern);
+EXPORT_COMPAT_MMZ(mmb_map2kern);
 
 /* mmf: media-memory fragment */
 void *mmz_mmf_map2kern_nocache(unsigned long phys, int len)
@@ -381,13 +374,7 @@ void *mmz_mmf_map2kern_nocache(unsigned long phys, int len)
 
 	return NULL;
 }
-EXPORT_SYMBOL(mmz_mmf_map2kern_nocache);
-
-void *hil_mmf_map2kern_nocache(unsigned long phys, int len)
-{
-	return mmz_mmf_map2kern_nocache(phys, len);
-}
-EXPORT_SYMBOL(hil_mmf_map2kern_nocache);
+EXPORT_COMPAT_MMZ(mmf_map2kern_nocache);
 
 void *mmz_mmf_map2kern_cache(unsigned long phys, int len)
 {
@@ -397,25 +384,13 @@ void *mmz_mmf_map2kern_cache(unsigned long phys, int len)
 
 	return NULL;
 }
-EXPORT_SYMBOL(mmz_mmf_map2kern_cache);
-
-void *hil_mmf_map2kern_cache(unsigned long phys, int len)
-{
-	return mmz_mmf_map2kern_cache(phys, len);
-}
-EXPORT_SYMBOL(hil_mmf_map2kern_cache);
+EXPORT_COMPAT_MMZ(mmf_map2kern_cache);
 
 void mmz_mmf_unmap(void *virt)
 {
 	the_allocator.mmf_unmap(virt);
 }
-EXPORT_SYMBOL(mmz_mmf_unmap);
-
-void hil_mmf_unmap(void *virt)
-{
-	mmz_mmf_unmap(virt);
-}
-EXPORT_SYMBOL(hil_mmf_unmap);
+EXPORT_COMPAT_MMZ(mmf_unmap);
 
 void *mmz_mmb_map2kern_cached(mmz_mmb_t *mmb)
 {
@@ -430,13 +405,7 @@ void *mmz_mmb_map2kern_cached(mmz_mmb_t *mmb)
 
 	return p;
 }
-EXPORT_SYMBOL(mmz_mmb_map2kern_cached);
-
-void *hil_mmb_map2kern_cached(mmz_mmb_t *mmb)
-{
-	return mmz_mmb_map2kern_cached(mmb);
-}
-EXPORT_SYMBOL(hil_mmb_map2kern_cached);
+EXPORT_COMPAT_MMZ(mmb_map2kern_cached);
 
 int mmz_mmb_flush_dcache_byaddr(void *kvirt, unsigned long phys_addr,
 				unsigned long length)
@@ -471,14 +440,7 @@ int mmz_mmb_flush_dcache_byaddr(void *kvirt, unsigned long phys_addr,
 
 	return 0;
 }
-EXPORT_SYMBOL(mmz_mmb_flush_dcache_byaddr);
-
-int hil_mmb_flush_dcache_byaddr(void *kvirt, unsigned long phys_addr,
-				unsigned long length)
-{
-	return mmz_mmb_flush_dcache_byaddr(kvirt, phys_addr, length);
-}
-EXPORT_SYMBOL(hil_mmb_flush_dcache_byaddr);
+EXPORT_COMPAT_MMZ(mmb_flush_dcache_byaddr);
 
 int mmz_mmb_invalid_cache_byaddr(void *kvirt, unsigned long phys_addr,
 				 unsigned long length)
@@ -497,14 +459,7 @@ int mmz_mmb_invalid_cache_byaddr(void *kvirt, unsigned long phys_addr,
 #endif
 	return 0;
 }
-EXPORT_SYMBOL(mmz_mmb_invalid_cache_byaddr);
-
-int hil_mmb_invalid_cache_byaddr(void *kvirt, unsigned long phys_addr,
-				 unsigned long length)
-{
-	return mmz_mmb_invalid_cache_byaddr(kvirt, phys_addr, length);
-}
-EXPORT_SYMBOL(hil_mmb_invalid_cache_byaddr);
+EXPORT_COMPAT_MMZ(mmb_invalid_cache_byaddr);
 
 int mmz_mmb_unmap(mmz_mmb_t *mmb)
 {
@@ -521,13 +476,7 @@ int mmz_mmb_unmap(mmz_mmb_t *mmb)
 
 	return ref;
 }
-EXPORT_SYMBOL(mmz_mmb_unmap);
-
-int hil_mmb_unmap(mmz_mmb_t *mmb)
-{
-	return mmz_mmb_unmap(mmb);
-}
-EXPORT_SYMBOL(hil_mmb_unmap);
+EXPORT_COMPAT_MMZ(mmb_unmap);
 
 int mmz_mmb_get(mmz_mmb_t *mmb)
 {
@@ -616,13 +565,7 @@ int mmz_mmb_free(mmz_mmb_t *mmb)
 	up(&mmz_lock);
 	return 0;
 }
-EXPORT_SYMBOL(mmz_mmb_free);
-
-int hil_mmb_free(mmz_mmb_t *mmb)
-{
-	return mmz_mmb_free(mmb);
-}
-EXPORT_SYMBOL(hil_mmb_free);
+EXPORT_COMPAT_MMZ(mmb_free);
 
 #define MACH_MMB(p, val, member)                                          \
 	do {                                                              \
@@ -651,13 +594,7 @@ mmz_mmb_t *mmz_mmb_getby_phys(unsigned long addr)
 	up(&mmz_lock);
 	return p;
 }
-EXPORT_SYMBOL(mmz_mmb_getby_phys);
-
-mmz_mmb_t *hil_mmb_getby_phys(unsigned long addr)
-{
-	return mmz_mmb_getby_phys(addr);
-}
-EXPORT_SYMBOL(hil_mmb_getby_phys);
+EXPORT_COMPAT_MMZ(mmb_getby_phys);
 
 unsigned long usr_virt_to_phys(unsigned long virt)
 {
@@ -773,13 +710,7 @@ mmz_mmb_t *mmz_mmb_getby_kvirt(void *virt)
 
 	return p;
 }
-EXPORT_SYMBOL(mmz_mmb_getby_kvirt);
-
-mmz_mmb_t *hil_mmb_getby_kvirt(void *virt)
-{
-	return mmz_mmb_getby_kvirt(virt);
-}
-EXPORT_SYMBOL(hil_mmb_getby_kvirt);
+EXPORT_COMPAT_MMZ(mmb_getby_kvirt);
 
 mmz_mmb_t *mmz_mmb_getby_phys_2(unsigned long addr, unsigned long *Outoffset)
 {
@@ -886,7 +817,7 @@ int mmz_map_mmz_register(mmz_mmz_t *zone)
 
 	down(&mmz_lock);
 
-	if (0 == strcmp(setup_allocator, "gk")) {
+	if (0 == strcmp(setup_allocator, DEFAULT_ALLOCATOR)) {
 		ret = _check_mmz(zone);
 		if (ret) {
 			up(&mmz_lock);
@@ -1017,13 +948,7 @@ int mmz_map_mmz_check_phys(unsigned long addr_start, unsigned long addr_len)
 
 	return -1;
 }
-EXPORT_SYMBOL(mmz_map_mmz_check_phys);
-
-int hil_map_mmz_check_phys(unsigned long addr_start, unsigned long addr_len)
-{
-	return mmz_map_mmz_check_phys(addr_start, addr_len);
-}
-EXPORT_SYMBOL(hil_map_mmz_check_phys);
+EXPORT_COMPAT_MMZ(map_mmz_check_phys);
 
 int mmz_vma_check(unsigned long vm_start, unsigned long vm_end)
 {
@@ -1082,13 +1007,7 @@ int mmz_is_phys_in_mmz(unsigned long addr_start, unsigned long addr_len)
 
 	return -1;
 }
-EXPORT_SYMBOL(mmz_is_phys_in_mmz);
-
-int hil_is_phys_in_mmz(unsigned long addr_start, unsigned long addr_len)
-{
-	return mmz_is_phys_in_mmz(addr_start, addr_len);
-}
-EXPORT_SYMBOL(hil_is_phys_in_mmz);
+EXPORT_COMPAT_MMZ(is_phys_in_mmz);
 
 int mmz_mmb_flush_dcache_byaddr_safe(void *kvirt, unsigned long phys_addr,
 				     unsigned long length)
@@ -1113,14 +1032,7 @@ int mmz_mmb_flush_dcache_byaddr_safe(void *kvirt, unsigned long phys_addr,
 
 	return ret;
 }
-EXPORT_SYMBOL(mmz_mmb_flush_dcache_byaddr_safe);
-
-int hil_mmb_flush_dcache_byaddr_safe(void *kvirt, unsigned long phys_addr,
-				     unsigned long length)
-{
-	return mmz_mmb_flush_dcache_byaddr_safe(kvirt, phys_addr, length);
-}
-EXPORT_SYMBOL(hil_mmb_flush_dcache_byaddr_safe);
+EXPORT_COMPAT_MMZ(mmb_flush_dcache_byaddr_safe);
 
 #define MEDIA_MEM_NAME "media-mem"
 
@@ -1262,10 +1174,11 @@ int __init media_mem_init(void)
 	if (strcmp(setup_allocator, "cma") == 0) {
 		ret = cma_allocator_setopt(&the_allocator);
 		allocator_type = 1;
-	} else if (strcmp(setup_allocator, "gk") == 0) {
+	} else if (strcmp(setup_allocator, DEFAULT_ALLOCATOR) == 0) {
 		ret = allocator_setopt(&the_allocator);
 	} else {
-		printk("The module param \"setup_allocator\" should be \"cma\" or \"gk\", which is \"%s\"\n",
+		printk("The module param \"setup_allocator\" should be \"cma\" or \"" DEFAULT_ALLOCATOR
+		       "\", which is \"%s\"\n",
 		       setup_allocator);
 		mmz_exit_check();
 		return -EINVAL;
