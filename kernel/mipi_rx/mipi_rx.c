@@ -1788,7 +1788,7 @@ static osal_fileops_t mipi_rx_fops = {
 #endif
 };
 
-#ifdef CONFIG_HISI_SNAPSHOT_BOOT
+#ifdef CONFIG_SNAPSHOT_BOOT
 static int mipi_rx_freeze(osal_dev_t *pdev)
 {
 	return 0;

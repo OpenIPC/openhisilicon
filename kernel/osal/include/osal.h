@@ -8,6 +8,8 @@
 
 #include "osal_list.h"
 
+#include "../compat/compat.h"
+
 #define osal_gfp_kernel 0
 #define osal_gfp_atomic 1
 extern void *osal_vmalloc(unsigned long size);

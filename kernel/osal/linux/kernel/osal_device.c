@@ -16,6 +16,8 @@
 
 #define DRVAL_DEBUG 0
 
+#include "../compat/compat.h"
+
 #define GET_FILE(file)                    \
 	do {                              \
 		if (__get_file(file) < 0) \
