@@ -26,6 +26,10 @@
 #define CONFIG_SNAPSHOT_BOOT 1
 #endif
 
+#ifdef CONFIG_CACHE_L2V200
+#define CONFIG_CACHE_HIL2V200 1
+#endif
+
 #elif defined(gk7205v200)
 
 /* gk7205v200 gk7205v300 gk7202v300 gk7605v100 */
