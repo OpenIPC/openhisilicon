@@ -20,7 +20,15 @@
 #define I2C_MASTER_SEND hi_i2c_master_send
 #define GET_CMA_ZONE hisi_get_cma_zone
 
-#define DEFAULT_ALLOCATOR "gk"
+#define DEFAULT_ALLOCATOR "hisi"
+
+#ifdef CONFIG_HISI_SNAPSHOT_BOOT
+#define CONFIG_SNAPSHOT_BOOT 1
+#endif
+
+#ifdef CONFIG_CACHE_L2V200
+#define CONFIG_CACHE_HIL2V200 1
+#endif
 
 #elif defined(gk7205v200)
 
@@ -41,7 +49,7 @@
 #define I2C_MASTER_SEND gk_i2c_master_send
 #define GET_CMA_ZONE goke_get_cma_zone
 
-#define DEFAULT_ALLOCATOR "hisi"
+#define DEFAULT_ALLOCATOR "gk"
 
 #else
 #error CHIPARCH must be set to supported values

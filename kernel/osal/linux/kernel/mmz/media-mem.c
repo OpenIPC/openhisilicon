@@ -423,12 +423,18 @@ int mmz_mmb_flush_dcache_byaddr(void *kvirt, unsigned long phys_addr,
 #ifdef CONFIG_64BIT
 	__flush_dcache_area(kvirt, length);
 #else
-	/*
-     * dmac_map_area is invalid in   kernel,
+		/*
+     * dmac_map_area is invalid in  hi3518ev200 kernel,
      * arm9 is not supported yet
      */
+#if defined(hi3516av100)
+	/* flush without clean */
+	dmac_map_area(kvirt, length, DMA_TO_DEVICE);
+#else
 	__cpuc_flush_dcache_area(kvirt, length);
 #endif
+#endif
+
 #if defined(CONFIG_CACHE_L2V200) || defined(CONFIG_CACHE_L2X0)
 	/* flush l2 cache, use paddr */
 	/*
@@ -451,11 +457,16 @@ int mmz_mmb_invalid_cache_byaddr(void *kvirt, unsigned long phys_addr,
 #ifdef CONFIG_64BIT
 	__flush_dcache_area(kvirt, length);
 #else
-	/*
-     * dmac_map_area is invalid in   kernel,
+		/*
+     * dmac_map_area is invalid in  hi3518ev200 kernel,
      * arm9 is not supported yet
      */
+#if defined(hi3516av100)
+	/* flush without clean */
+	dmac_map_area(kvirt, length, DMA_FROM_DEVICE);
+#else
 	__cpuc_flush_dcache_area(kvirt, length);
+#endif
 #endif
 	return 0;
 }
