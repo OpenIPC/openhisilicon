@@ -47,4 +47,15 @@
 #error CHIPARCH must be set to supported values
 #endif
 
+#define EXPORT_ALIAS(sym, alias)                                            \
+	extern typeof(sym) sym;                                             \
+	__CRC_SYMBOL(sym, "")                                               \
+	static const char __kstrtab_##alias[]                               \
+		__attribute__((section("__ksymtab_strings"), aligned(1))) = \
+			VMLINUX_SYMBOL_STR(alias);                          \
+	static const struct kernel_symbol __ksymtab_##alias __used          \
+		__attribute__((section("___ksymtab+" #alias), used)) = {    \
+			(unsigned long)&sym, __kstrtab_##alias              \
+		}
+
 #endif /* COMPAT_H */
