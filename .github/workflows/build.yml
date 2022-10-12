@@ -52,7 +52,7 @@ jobs:
       - name: Download toolchain
         run: |
           pushd firmware
-          BOARD=unknown_unknown_${{ matrix.platform }}_openipc
+          BOARD=${{ matrix.platform }}_openipc
           make BOARD=${BOARD} prepare
           TOOLNAME=$(make BOARD=${BOARD} toolname)
           popd
