@@ -9,7 +9,7 @@ CFLAGS += -I$(LIB_DIR)/include \
 		  -I$(LIB_DIR)/../../include \
 		  -I$(LIB_DIR)/arch/$(CHIPARCH)/include \
 		  -I$(KO_DIR)/include \
-		  -I$(KO_DIR)/ext_inc \
+		  -I$(KO_DIR)/../ext_inc \
 		  -I$(KO_DIR)/mkp/include \
 		  -I$(KO_DIR)/arch/$(CHIPARCH)/include
 
