@@ -130,6 +130,7 @@ extern int IMX335_read_register(VI_PIPE ViPipe, int addr);
 #define IMX335_RES_IS_5M_12BIT_LINEAR(w, h) (((w) == 2592) && ((h) == 1944))
 #define IMX335_RES_IS_5M_10BIT_WDR(w, h) (((w) == 2592) && ((h) == 1944))
 #define IMX335_RES_IS_4M_12BIT_LINEAR(w, h) (((w) == 2592) && ((h) == 1520))
+#define IMX335_RES_IS_4M_10BIT_LINEAR(w, h) (((w) == 2560) && ((h) == 1440))
 #define IMX335_RES_IS_4M_10BIT_WDR(w, h) (((w) == 2592) && ((h) == 1520))
 #define IMX335_RES_IS_4M_10BIT_WDR_EX(w, h) (((w) == 2560) && ((h) == 1440))
 
@@ -1701,6 +1702,9 @@ cmos_set_image_mode(VI_PIPE ViPipe,
 			    pstSensorImageMode->u16Width,
 			    pstSensorImageMode->u16Height) ||
 		    IMX335_RES_IS_4M_12BIT_LINEAR(
+			    pstSensorImageMode->u16Width,
+			    pstSensorImageMode->u16Height) ||
+		    IMX335_RES_IS_4M_10BIT_LINEAR(
 			    pstSensorImageMode->u16Width,
 			    pstSensorImageMode->u16Height)) {
 			u8SensorImageMode = IMX335_5M_30FPS_12BIT_LINEAR_MODE;
