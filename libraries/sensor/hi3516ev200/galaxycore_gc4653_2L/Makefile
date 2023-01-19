@@ -1,8 +1,6 @@
 LIB_NAME := libsns_gc4653_2l
 
-CFLAGS += -fPIC -O3 -DNDEBUG
-
-CFLAGS += -I$(CURDIR)/../../../../include
+override CFLAGS += -fPIC -O3 -DNDEBUG -I$(CURDIR)/../../../../include
 
 SRCS := $(wildcard *.c)
 OBJS := $(SRCS:%.c=%.o) $(ASM_SRCS:%.S=%.o)

@@ -3,17 +3,16 @@ LIB_NAME := libisp
 LIB_DIR := $(CURDIR)
 KO_DIR := $(CURDIR)/../../kernel/isp
 
-CFLAGS += -fPIC -O3 -DNDEBUG
-
-CFLAGS += -I$(LIB_DIR)/include \
-		  -I$(LIB_DIR)/../../include \
-		  -I$(LIB_DIR)/arch/$(CHIPARCH)/include \
-		  -I$(KO_DIR)/include \
-		  -I$(KO_DIR)/../ext_inc \
-		  -I$(KO_DIR)/mkp/include \
-		  -I$(KO_DIR)/arch/$(CHIPARCH)/include
-
-CFLAGS += -DENABLE_JPEGEDCF
+override CFLAGS += \
+	-fPIC -O3 -DNDEBUG \
+	-DENABLE_JPEGEDCF \
+	-I$(LIB_DIR)/include \
+	-I$(LIB_DIR)/../../include \
+	-I$(LIB_DIR)/arch/$(CHIPARCH)/include \
+	-I$(KO_DIR)/include \
+	-I$(KO_DIR)/../ext_inc \
+	-I$(KO_DIR)/mkp/include \
+	-I$(KO_DIR)/arch/$(CHIPARCH)/include
 
 SRCS := $(wildcard arch/$(CHIPARCH)/algorithms/*.c)
 SRCS += $(wildcard arch/$(CHIPARCH)/hal/*.c)

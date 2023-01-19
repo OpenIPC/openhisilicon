@@ -1,8 +1,6 @@
 LIB_NAME := libsns_os05a
 
-CFLAGS += -fPIC -O3 -DNDEBUG
-
-CFLAGS += -I$(CURDIR)/../../../../include
+override CFLAGS += -fPIC -O3 -DNDEBUG -I$(CURDIR)/../../../../include
 
 SRCS := $(wildcard *.c)
 OBJS := $(SRCS:%.c=%.o) $(ASM_SRCS:%.S=%.o)
