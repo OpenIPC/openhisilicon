@@ -1,8 +1,6 @@
 /*
  * Copyright (c) Hunan Goke,Chengdu Goke,Shandong Goke. 2021. All rights reserved.
  */
-#if !defined(__IMX307_2L_CMOS_H_)
-#define __IMX307_2L_CMOS_H_
 
 #include <stdio.h>
 #include <string.h>
@@ -13,6 +11,7 @@
 #include "gk_api_isp.h"
 #include "gk_api_ae.h"
 #include "gk_api_awb.h"
+#include "hicompat.h"
 
 #include "imx307_2l_cmos_ex.h"
 #ifdef __cplusplus
@@ -1474,5 +1473,3 @@ ISP_SNS_OBJ_S stSnsImx307_2l_Obj = {
 }
 #endif
 #endif /* End of #ifdef __cplusplus */
-
-#endif /* __IMX307_2L_CMOS_H_ */

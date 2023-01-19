@@ -1,8 +1,6 @@
 LIB_NAME := libsns_imx327
 
-CFLAGS += -fPIC -O3 -DNDEBUG
-
-CFLAGS += -I$(CURDIR)/../../../../include
+override CFLAGS += -DSDK_CODE=$(SDK_CODE) -fPIC -I$(CURDIR)/../../../../include
 
 SRCS := $(wildcard *.c)
 OBJS := $(SRCS:%.c=%.o) $(ASM_SRCS:%.S=%.o)

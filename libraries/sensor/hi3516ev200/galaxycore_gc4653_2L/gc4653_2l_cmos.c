@@ -2,9 +2,6 @@
  * Copyright (c) Hunan Goke,Chengdu Goke,Shandong Goke. 2021. All rights reserved.
  */
 
-#if !defined(__GC4653_2L_CMOS_H_)
-#define __GC4653_2L_CMOS_H_
-
 #include <stdio.h>
 #include <string.h>
 #include <assert.h>
@@ -15,6 +12,7 @@
 #include "gk_api_ae.h"
 #include "gk_api_awb.h"
 #include "gc4653_2l_cmos_ex.h"
+#include "hicompat.h"
 
 #ifdef __cplusplus
 #if __cplusplus
@@ -1068,4 +1066,3 @@ ISP_SNS_OBJ_S stSnsgc4653_2lObj = {
 #endif /* End of #ifdef __cplusplus */
 
 #endif
-#endif /* __GC4653_2L_CMOS_H_ */

@@ -15,8 +15,6 @@
     Modification: Created file
 
 ******************************************************************************/
-#if !defined(__IMX335_CMOS_H_)
-#define __IMX335_CMOS_H_
 
 #include <stdio.h>
 #include <string.h>
@@ -27,6 +25,7 @@
 #include "mpi_isp.h"
 #include "mpi_ae.h"
 #include "mpi_awb.h"
+#include "hicompat.h"
 
 #include "imx335_cmos_ex.h"
 #ifdef __cplusplus
@@ -1951,5 +1950,3 @@ ISP_SNS_OBJ_S stSnsImx335Obj = {
 }
 #endif
 #endif /* End of #ifdef __cplusplus */
-
-#endif /* __IMX335_CMOS_H_ */

@@ -1,8 +1,6 @@
 /*
  * Copyright (c) Hunan Goke,Chengdu Goke,Shandong Goke. 2021. All rights reserved.
  */
-#if !defined(__JXF37_CMOS_H_)
-#define __JXF37_CMOS_H_
 
 #include <stdio.h>
 #include <string.h>
@@ -14,6 +12,7 @@
 #include "gk_api_ae.h"
 #include "gk_api_awb.h"
 #include "f37_cmos_ex.h"
+#include "hicompat.h"
 
 #ifdef __cplusplus
 #if __cplusplus
@@ -1097,5 +1096,3 @@ ISP_SNS_OBJ_S stSnsSoiF37Obj = {
 }
 #endif
 #endif /* End of #ifdef __cplusplus */
-
-#endif /* __F37_CMOS_H_ */
