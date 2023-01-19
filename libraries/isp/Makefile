@@ -4,7 +4,7 @@ LIB_DIR := $(CURDIR)
 KO_DIR := $(CURDIR)/../../kernel/isp
 
 override CFLAGS += \
-	-fPIC -O3 -DNDEBUG \
+	-fPIC \
 	-DENABLE_JPEGEDCF \
 	-I$(LIB_DIR)/include \
 	-I$(LIB_DIR)/../../include \
