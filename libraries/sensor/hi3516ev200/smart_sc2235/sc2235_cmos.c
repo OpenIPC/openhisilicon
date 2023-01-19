@@ -1,8 +1,6 @@
 /*
  * Copyright (c) Hunan Goke,Chengdu Goke,Shandong Goke. 2021. All rights reserved.
  */
-#if !defined(__SC2235_CMOS_H_)
-#define __SC2235_CMOS_H_
 
 #include <stdio.h>
 #include <string.h>
@@ -14,6 +12,8 @@
 #include "gk_api_ae.h"
 #include "gk_api_awb.h"
 #include "sc2235_cmos_ex.h"
+#include "hicompat.h"
+
 #ifdef __cplusplus
 #if __cplusplus
 extern "C" {
@@ -1112,4 +1112,3 @@ ISP_SNS_OBJ_S stSnsSc2235Obj = {
 #endif /* End of #ifdef __cplusplus */
 
 #endif
-#endif /* __SC2235_CMOS_H_ */

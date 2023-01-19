@@ -2,9 +2,6 @@
  * Copyright (c) Hunan Goke,Chengdu Goke,Shandong Goke. 2021. All rights reserved.
  */
 
-#if !defined(__SC3335_CMOS_H_)
-#define __SC3335_CMOS_H_
-
 #include <stdio.h>
 #include <string.h>
 #include <assert.h>
@@ -16,6 +13,7 @@
 #include "gk_api_awb.h"
 #include "comm_isp.h"
 #include "sc3335_cmos_ex.h"
+#include "hicompat.h"
 
 #ifdef __cplusplus
 #if __cplusplus
@@ -1166,5 +1164,3 @@ ISP_SNS_OBJ_S stSnsSc3335Obj = {
 #endif
 
 #endif /* End of #ifdef __cplusplus */
-
-#endif /* __SC3335_CMOS_H_ */
