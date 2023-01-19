@@ -1,6 +1,6 @@
 LIB_NAME := libsns_gc4653_2l
 
-override CFLAGS += -fPIC -I$(CURDIR)/../../../../include
+override CFLAGS += -DSDK_CODE=$(SDK_CODE) -fPIC -I$(CURDIR)/../../../../include
 
 SRCS := $(wildcard *.c)
 OBJS := $(SRCS:%.c=%.o) $(ASM_SRCS:%.S=%.o)
