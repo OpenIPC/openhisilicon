@@ -78,6 +78,7 @@ jobs:
             done
           fi
           find ${KERNEL_DIR}/patches -type f | sort | xargs -n1 patch -p1 -i
+          find ${GITHUB_WORKSPACE}/firmware/patches/linux/4.9.x -type f | sort | xargs -n1 patch -p1 -i
 
           make ARCH=arm CROSS_COMPILE=${PREFIX}- ${{ matrix.platform }}_full_defconfig
 
