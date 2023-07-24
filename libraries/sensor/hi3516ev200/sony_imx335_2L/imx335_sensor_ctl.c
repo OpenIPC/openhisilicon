@@ -26,13 +26,13 @@
 #include <sys/mman.h>
 #include <memory.h>
 
-#include "hi_comm_video.h"
-#include "hi_sns_ctrl.h"
+#include "comm_video.h"
+#include "sns_ctrl.h"
 
-#ifdef HI_GPIO_I2C
+#ifdef GPIO_I2C
 #include "gpioi2c_ex.h"
 #else
-#include "hi_i2c.h"
+#include "i2c.h"
 #endif
 
 const unsigned char imx335_i2c_addr = 0x34; /* I2C Address of imx335 */
@@ -41,8 +41,8 @@ const unsigned int imx335_data_byte = 1;
 static int g_fd[ISP_MAX_PIPE_NUM] = { [0 ...(ISP_MAX_PIPE_NUM - 1)] = -1 };
 
 extern WDR_MODE_E genSensorMode;
-extern HI_U8 gu8SensorImageMode;
-extern HI_BOOL bSensorInit;
+extern GK_U8 gu8SensorImageMode;
+extern GK_BOOL bSensorInit;
 
 extern ISP_SNS_STATE_S *g_pastImx335[ISP_MAX_PIPE_NUM];
 extern ISP_SNS_COMMBUS_U g_aunImx335BusInfo[];
@@ -54,18 +54,18 @@ extern ISP_SNS_COMMBUS_U g_aunImx335BusInfo[];
 int IMX335_i2c_init(VI_PIPE ViPipe)
 {
 	char acDevFile[16] = { 0 };
-	HI_U8 u8DevNum;
+	GK_U8 u8DevNum;
 
 	if (g_fd[ViPipe] >= 0) {
-		return HI_SUCCESS;
+		return GK_SUCCESS;
 	}
-#ifdef HI_GPIO_I2C
+#ifdef GPIO_I2C
 	int ret;
 
 	g_fd[ViPipe] = open("/dev/gpioi2c_ex", O_RDONLY, S_IRUSR);
 	if (g_fd[ViPipe] < 0) {
-		ISP_TRACE(HI_DBG_ERR, "Open gpioi2c_ex error!\n");
-		return HI_FAILURE;
+		ISP_TRACE(MODULE_DBG_ERR, "Open gpioi2c_ex error!\n");
+		return GK_FAILURE;
 	}
 #else
 	int ret;
@@ -76,21 +76,21 @@ int IMX335_i2c_init(VI_PIPE ViPipe)
 	g_fd[ViPipe] = open(acDevFile, O_RDWR, S_IRUSR | S_IWUSR);
 
 	if (g_fd[ViPipe] < 0) {
-		ISP_TRACE(HI_DBG_ERR, "Open /dev/hi_i2c_drv-%u error!\n",
+		ISP_TRACE(MODULE_DBG_ERR, "Open /dev/i2c_drv-%u error!\n",
 			  u8DevNum);
-		return HI_FAILURE;
+		return GK_FAILURE;
 	}
 
 	ret = ioctl(g_fd[ViPipe], I2C_SLAVE_FORCE, (imx335_i2c_addr >> 1));
 	if (ret < 0) {
-		ISP_TRACE(HI_DBG_ERR, "I2C_SLAVE_FORCE error!\n");
+		ISP_TRACE(MODULE_DBG_ERR, "I2C_SLAVE_FORCE error!\n");
 		close(g_fd[ViPipe]);
 		g_fd[ViPipe] = -1;
 		return ret;
 	}
 #endif
 
-	return HI_SUCCESS;
+	return GK_SUCCESS;
 }
 
 int IMX335_i2c_exit(VI_PIPE ViPipe)
@@ -98,22 +98,22 @@ int IMX335_i2c_exit(VI_PIPE ViPipe)
 	if (g_fd[ViPipe] >= 0) {
 		close(g_fd[ViPipe]);
 		g_fd[ViPipe] = -1;
-		return HI_SUCCESS;
+		return GK_SUCCESS;
 	}
-	return HI_FAILURE;
+	return GK_FAILURE;
 }
 
 int IMX335_read_register(VI_PIPE ViPipe, int addr)
 {
-	return HI_SUCCESS;
+	return GK_SUCCESS;
 }
-int IMX335_write_register(VI_PIPE ViPipe, HI_U32 addr, HI_U32 data)
+int IMX335_write_register(VI_PIPE ViPipe, GK_U32 addr, GK_U32 data)
 {
 	if (g_fd[ViPipe] < 0) {
-		return HI_SUCCESS;
+		return GK_SUCCESS;
 	}
 
-#ifdef HI_GPIO_I2C
+#ifdef GPIO_I2C
 	i2c_data.dev_addr = imx335_i2c_addr;
 	i2c_data.reg_addr = addr;
 	i2c_data.addr_byte_num = imx335_addr_byte;
@@ -123,7 +123,7 @@ int IMX335_write_register(VI_PIPE ViPipe, HI_U32 addr, HI_U32 data)
 	ret = ioctl(g_fd[ViPipe], GPIO_I2C_WRITE, &i2c_data);
 
 	if (ret) {
-		ISP_TRACE(HI_DBG_ERR, "GPIO-I2C write faild!\n");
+		ISP_TRACE(MODULE_DBG_ERR, "GPIO-I2C write faild!\n");
 		return ret;
 	}
 #else
@@ -147,12 +147,12 @@ int IMX335_write_register(VI_PIPE ViPipe, HI_U32 addr, HI_U32 data)
 
 	ret = write(g_fd[ViPipe], buf, imx335_addr_byte + imx335_data_byte);
 	if (ret < 0) {
-		ISP_TRACE(HI_DBG_ERR, "I2C_WRITE error!\n");
-		return HI_FAILURE;
+		ISP_TRACE(MODULE_DBG_ERR, "I2C_WRITE error!\n");
+		return GK_FAILURE;
 	}
 
 #endif
-	return HI_SUCCESS;
+	return GK_SUCCESS;
 }
 
 void IMX335_standby(VI_PIPE ViPipe)
@@ -177,7 +177,7 @@ void IMX335_wdr_4M30_10bit_init(VI_PIPE ViPipe);
 
 void imx335_default_reg_init(VI_PIPE ViPipe)
 {
-	HI_U32 i;
+	GK_U32 i;
 	for (i = 0; i < g_pastImx335[ViPipe]->astRegsInfo[0].u32RegNum; i++) {
 		IMX335_write_register(ViPipe,
 				      g_pastImx335[ViPipe]
@@ -194,14 +194,14 @@ void imx335_default_reg_init(VI_PIPE ViPipe)
 void IMX335_init(VI_PIPE ViPipe)
 {
 	WDR_MODE_E enWDRMode;
-	HI_BOOL bInit;
-	HI_U8 u8ImgMode;
+	GK_BOOL bInit;
+	GK_U8 u8ImgMode;
 
 	bInit = g_pastImx335[ViPipe]->bInit;
 	enWDRMode = g_pastImx335[ViPipe]->enWDRMode;
 	u8ImgMode = g_pastImx335[ViPipe]->u8ImgMode;
 
-	if (bInit == HI_FALSE) {
+	if (bInit == GK_FALSE) {
 		/* sensor i2c init */
 		printf("binit false IMX335 i2c init\n");
 		IMX335_i2c_init(ViPipe);
@@ -230,7 +230,7 @@ void IMX335_init(VI_PIPE ViPipe)
 	}
 
 	imx335_default_reg_init(ViPipe);
-	g_pastImx335[ViPipe]->bInit = HI_TRUE;
+	g_pastImx335[ViPipe]->bInit = GK_TRUE;
 
 	return;
 }
