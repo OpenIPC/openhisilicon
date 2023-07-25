@@ -1,25 +1,12 @@
 name: build
-
 on:
   pull_request:
-    types:
-      - synchronize
-      - reopened
-      - opened
-    paths-ignore:
-      - "**.md"
+    branches:
+      - main
   push:
     branches:
-      - "main"
-    tags:
-      - "v*"
-    paths-ignore:
-      - "**.md"
+      - main
   workflow_dispatch:
-
-env:
-  TAG_NAME: latest
-  REPO: OpenIPC/firmware
 
 jobs:
   toolchain:
@@ -31,70 +18,17 @@ jobs:
       matrix:
         include:
           - platform: hi3516ev200
-            linux: 4.9.37
-            vendor: hisilicon
           - platform: gk7205v200
-            linux: 4.9.37
-            vendor: goke
 
     steps:
-      - name: Checkout main repo
+      - name: Checkout Source
         uses: actions/checkout@v3
-        with:
-          fetch-depth: 0 # OR "2" -> To retrieve the preceding commit.
 
-      - name: Checkout firmware repo
+      - name: Build OpenHisilicon
         run: |
-          git clone \
-            --depth 1 --single-branch --branch=master \
-            https://github.com/${REPO} firmware
-
-      - name: Download toolchain
-        run: |
-          pushd firmware
-          BOARD=${{ matrix.platform }}_lite
-          make BOARD=${BOARD} prepare
-          TOOLNAME=$(make BOARD=${BOARD} toolname)
-          popd
-
-          mkdir /tmp/extsdk
-          wget https://github.com/${REPO}/releases/download/${TAG_NAME}/${TOOLNAME}.tgz \
-            2>/dev/null
-          tar xvf ${TOOLNAME}.tgz --strip-components=1 -C /tmp/extsdk >/dev/null
-          echo "PREFIX=arm-openipc-linux-musleabi" >> $GITHUB_ENV
-          echo "PATH=/tmp/extsdk/bin:$PATH" >> $GITHUB_ENV
-
-      - name: Build kernel modules
-        run: |
-          wget -c https://cdn.kernel.org/pub/linux/kernel/v4.x/linux-${{ matrix.linux }}.tar.xz \
-            -O - 2>/dev/null | tar -xJ -C /tmp
-
-          pushd /tmp/linux-${{ matrix.linux }}
-
-          KERNEL_DIR=${GITHUB_WORKSPACE}/firmware/br-ext-chip-${{ matrix.vendor }}/board/${{ matrix.platform }}/kernel
-          if [ "$(ls -A ${KERNEL_DIR}/overlay)" ]; then
-            for i in ${KERNEL_DIR}/overlay/*; do
-              cp -arv $i .
-            done
-          fi
-          find ${KERNEL_DIR}/patches -type f | sort | xargs -n1 patch -p1 -i
-          find ${GITHUB_WORKSPACE}/firmware/patches/linux/4.9.x -type f | sort | xargs -n1 patch -p1 -i
-
-          make ARCH=arm CROSS_COMPILE=${PREFIX}- ${{ matrix.platform }}_full_defconfig
-
-          sudo apt update && sudo apt install -y bc
-          make ARCH=arm CROSS_COMPILE=${PREFIX}- prepare modules_prepare
-          popd
-
-          cd kernel
-          make \
-            ARCH=arm CROSS_COMPILE=${PREFIX}- \
-            CHIPARCH=${{ matrix.platform }} \
-            -C /tmp/linux-${{ matrix.linux }} \
-            M=$PWD
-
-      - name: Build userspace libraries
-        run: |
-          cd ${GITHUB_WORKSPACE}/libraries
-
-          make CROSS_COMPILE=${PREFIX}- CHIPARCH=${{ matrix.platform }}
+          git clone --depth 1 https://github.com/openipc/firmware ../firmware
+          cd ../firmware
+          FILE=general/package/hisilicon-opensdk/hisilicon-opensdk.mk
+          sed -i "16i HISILICON_OPENSDK_SITE_METHOD = local" ${FILE}
+          sed -i "17i HISILICON_OPENSDK_SITE = $GITHUB_WORKSPACE" ${FILE}
+          make BOARD=${{matrix.platform}}_lite br-hisilicon-opensdk

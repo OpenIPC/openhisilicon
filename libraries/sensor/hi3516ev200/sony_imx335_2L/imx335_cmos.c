@@ -19,12 +19,12 @@
 #include <stdio.h>
 #include <string.h>
 #include <assert.h>
-#include "hi_comm_sns.h"
-#include "hi_comm_video.h"
-#include "hi_sns_ctrl.h"
-#include "mpi_isp.h"
-#include "mpi_ae.h"
-#include "mpi_awb.h"
+#include "comm_sns.h"
+#include "comm_video.h"
+#include "sns_ctrl.h"
+#include "gk_api_isp.h"
+#include "gk_api_ae.h"
+#include "gk_api_awb.h"
 #include "hicompat.h"
 
 #include "imx335_cmos_ex.h"
@@ -48,21 +48,21 @@ extern "C" {
 #define MIN(a, b) (((a) > (b)) ? (b) : (a))
 #endif
 
-ISP_SNS_STATE_S *g_pastImx335[ISP_MAX_PIPE_NUM] = { HI_NULL };
+ISP_SNS_STATE_S *g_pastImx335[ISP_MAX_PIPE_NUM] = { GK_NULL };
 
 #define IMX335_SENSOR_GET_CTX(dev, pstCtx) (pstCtx = g_pastImx335[dev])
 #define IMX335_SENSOR_SET_CTX(dev, pstCtx) (g_pastImx335[dev] = pstCtx)
-#define IMX335_SENSOR_RESET_CTX(dev) (g_pastImx335[dev] = HI_NULL)
+#define IMX335_SENSOR_RESET_CTX(dev) (g_pastImx335[dev] = GK_NULL)
 
-static HI_U32 g_au32InitExposure[ISP_MAX_PIPE_NUM] = { 0 };
-static HI_U32 g_au32LinesPer500ms[ISP_MAX_PIPE_NUM] = { 0 };
-static HI_U16 g_au16InitWBGain[ISP_MAX_PIPE_NUM][3] = { { 0 } };
-static HI_U16 g_au16SampleRgain[ISP_MAX_PIPE_NUM] = { 0 };
-static HI_U16 g_au16SampleBgain[ISP_MAX_PIPE_NUM] = { 0 };
+static GK_U32 g_au32InitExposure[ISP_MAX_PIPE_NUM] = { 0 };
+static GK_U32 g_au32LinesPer500ms[ISP_MAX_PIPE_NUM] = { 0 };
+static GK_U16 g_au16InitWBGain[ISP_MAX_PIPE_NUM][3] = { { 0 } };
+static GK_U16 g_au16SampleRgain[ISP_MAX_PIPE_NUM] = { 0 };
+static GK_U16 g_au16SampleBgain[ISP_MAX_PIPE_NUM] = { 0 };
 
-static HI_U32 g_u32Imx335AGain[ISP_MAX_PIPE_NUM] = { [0 ...(ISP_MAX_PIPE_NUM -
+static GK_U32 g_u32Imx335AGain[ISP_MAX_PIPE_NUM] = { [0 ...(ISP_MAX_PIPE_NUM -
 							    1)] = 1024 };
-static HI_U32 g_u32Imx335DGain[ISP_MAX_PIPE_NUM] = { [0 ...(ISP_MAX_PIPE_NUM -
+static GK_U32 g_u32Imx335DGain[ISP_MAX_PIPE_NUM] = { [0 ...(ISP_MAX_PIPE_NUM -
 							    1)] = 1024 };
 
 ISP_SNS_COMMBUS_U g_aunImx335BusInfo[ISP_MAX_PIPE_NUM] = {
@@ -74,18 +74,18 @@ static ISP_FSWDR_MODE_E genFSWDRMode[ISP_MAX_PIPE_NUM] = {
 	[0 ... ISP_MAX_PIPE_NUM - 1] = ISP_FSWDR_NORMAL_MODE
 };
 
-typedef struct hiIMX335_STATE_S {
-	HI_U32 u32BRL;
-	HI_U32 u32RHS1_MAX;
-	HI_U32 u32deltaRHS1;
+typedef struct IMX335_STATE_S {
+	GK_U32 u32BRL;
+	GK_U32 u32RHS1_MAX;
+	GK_U32 u32deltaRHS1;
 } IMX335_STATE_S;
 
 IMX335_STATE_S g_astimx335State[ISP_MAX_PIPE_NUM] = { { 0 } };
 
-static HI_U32 gu32MaxTimeGetCnt[ISP_MAX_PIPE_NUM] = { 0 };
+static GK_U32 gu32MaxTimeGetCnt[ISP_MAX_PIPE_NUM] = { 0 };
 
-static HI_U32 gu32STimeFps = 30;
-static HI_U32 gu32LGain = 0;
+static GK_U32 gu32STimeFps = 30;
+static GK_U32 gu32LGain = 0;
 
 /****************************************************************************
  * extern                                                                   *
@@ -160,20 +160,20 @@ extern int IMX335_read_register(VI_PIPE ViPipe, int addr);
 #define IMX335_ERR_MODE_PRINT(pstSensorImageMode, pstSnsState)                    \
 	do {                                                                      \
 		ISP_TRACE(                                                        \
-			HI_DBG_ERR,                                               \
+			MODULE_DBG_ERR,                                           \
 			"Not support! Width:%d, Height:%d, Fps:%f, WDRMode:%d\n", \
 			pstSensorImageMode->u16Width,                             \
 			pstSensorImageMode->u16Height,                            \
 			pstSensorImageMode->f32Fps, pstSnsState->enWDRMode);      \
 	} while (0)
 
-static HI_S32 cmos_get_ae_default(VI_PIPE ViPipe,
+static GK_S32 cmos_get_ae_default(VI_PIPE ViPipe,
 				  AE_SENSOR_DEFAULT_S *pstAeSnsDft)
 {
-	HI_U32 u32Fll = 0;
-	HI_U32 U32MaxFps = 0;
+	GK_U32 u32Fll = 0;
+	GK_U32 U32MaxFps = 0;
 
-	ISP_SNS_STATE_S *pstSnsState = HI_NULL;
+	ISP_SNS_STATE_S *pstSnsState = GK_NULL;
 
 	CMOS_CHECK_POINTER(pstAeSnsDft);
 	IMX335_SENSOR_GET_CTX(ViPipe, pstSnsState);
@@ -260,7 +260,7 @@ static HI_S32 cmos_get_ae_default(VI_PIPE ViPipe,
 	pstAeSnsDft->enMaxIrisFNO = ISP_IRIS_F_NO_1_4;
 	pstAeSnsDft->enMinIrisFNO = ISP_IRIS_F_NO_5_6;
 
-	pstAeSnsDft->bAERouteExValid = HI_FALSE;
+	pstAeSnsDft->bAERouteExValid = GK_FALSE;
 	pstAeSnsDft->stAERouteAttr.u32TotalNum = 0;
 	pstAeSnsDft->stAERouteAttrEx.u32TotalNum = 0;
 
@@ -338,13 +338,13 @@ static HI_S32 cmos_get_ae_default(VI_PIPE ViPipe,
 		pstAeSnsDft->u32MinDgainTarget = 1024;
 		pstAeSnsDft->u32MaxISPDgainTarget =
 			16 << pstAeSnsDft->u32ISPDgainShift;
-		pstAeSnsDft->bDiffGainSupport = HI_TRUE;
+		pstAeSnsDft->bDiffGainSupport = GK_TRUE;
 
 		pstAeSnsDft->u32ExpRatioMin =
 			0x80; // The exposure ration from 2x to convergence
 
 		if (ISP_FSWDR_LONG_FRAME_MODE != genFSWDRMode[ViPipe]) {
-			pstAeSnsDft->u16ManRatioEnable = HI_FALSE;
+			pstAeSnsDft->u16ManRatioEnable = GK_FALSE;
 			pstAeSnsDft->au32Ratio[0] = 0x400;
 			pstAeSnsDft->au32Ratio[1] = 0x40;
 			pstAeSnsDft->au32Ratio[2] = 0x40;
@@ -353,16 +353,16 @@ static HI_S32 cmos_get_ae_default(VI_PIPE ViPipe,
 	}
 	}
 
-	return HI_SUCCESS;
+	return GK_SUCCESS;
 }
 
 /* the function of sensor set fps */
-static HI_VOID cmos_fps_set(VI_PIPE ViPipe, HI_FLOAT f32Fps,
+static GK_VOID cmos_fps_set(VI_PIPE ViPipe, GK_FLOAT f32Fps,
 			    AE_SENSOR_DEFAULT_S *pstAeSnsDft)
 {
-	HI_U32 u32MaxFps;
-	HI_U32 u32Lines;
-	ISP_SNS_STATE_S *pstSnsState = HI_NULL;
+	GK_U32 u32MaxFps;
+	GK_U32 u32Lines;
+	ISP_SNS_STATE_S *pstSnsState = GK_NULL;
 
 	CMOS_CHECK_POINTER_VOID(pstAeSnsDft);
 	IMX335_SENSOR_GET_CTX(ViPipe, pstSnsState);
@@ -378,7 +378,7 @@ static HI_VOID cmos_fps_set(VI_PIPE ViPipe, HI_FLOAT f32Fps,
 				IMX335_VMAX_5M_30FPS_12BIT_LINEAR * 15;
 			pstSnsState->u32FLStd = u32Lines;
 		} else {
-			ISP_TRACE(HI_DBG_ERR, "Not support Fps: %f\n", f32Fps);
+			ISP_TRACE(MODULE_DBG_ERR, "Not support Fps: %f\n", f32Fps);
 			return;
 		}
 		break;
@@ -399,7 +399,7 @@ static HI_VOID cmos_fps_set(VI_PIPE ViPipe, HI_FLOAT f32Fps,
 		}
 
 		else {
-			ISP_TRACE(HI_DBG_ERR, "Not support Fps: %f\n", f32Fps);
+			ISP_TRACE(MODULE_DBG_ERR, "Not support Fps: %f\n", f32Fps);
 			return;
 		}
 		break;
@@ -419,7 +419,7 @@ static HI_VOID cmos_fps_set(VI_PIPE ViPipe, HI_FLOAT f32Fps,
 		}
 
 		else {
-			ISP_TRACE(HI_DBG_ERR, "Not support Fps: %f\n", f32Fps);
+			ISP_TRACE(MODULE_DBG_ERR, "Not support Fps: %f\n", f32Fps);
 			return;
 		}
 		break;
@@ -432,20 +432,20 @@ static HI_VOID cmos_fps_set(VI_PIPE ViPipe, HI_FLOAT f32Fps,
 				   (u32Lines % 2); //VMAX is 2n(n-0,1,2.....)
 			pstSnsState->u32FLStd = u32Lines;
 		} else {
-			ISP_TRACE(HI_DBG_ERR, "Not support Fps: %f\n", f32Fps);
+			ISP_TRACE(MODULE_DBG_ERR, "Not support Fps: %f\n", f32Fps);
 			return;
 		}
 		break;
 
 	default:
-		ISP_TRACE(HI_DBG_ERR, "Not support this Mode!!!\n");
+		ISP_TRACE(MODULE_DBG_ERR, "Not support this Mode!!!\n");
 		return;
 		break;
 	}
 
 	/* SHR 16bit, So limit full_lines as 0xFFFF */
 	if (f32Fps > u32MaxFps) {
-		ISP_TRACE(HI_DBG_ERR, "Not support Fps: %f\n", f32Fps);
+		ISP_TRACE(MODULE_DBG_ERR, "Not support Fps: %f\n", f32Fps);
 		return;
 	}
 
@@ -495,7 +495,7 @@ static HI_VOID cmos_fps_set(VI_PIPE ViPipe, HI_FLOAT f32Fps,
 	}
 
 	pstAeSnsDft->f32Fps = f32Fps;
-	gu32STimeFps = (HI_U32)f32Fps;
+	gu32STimeFps = (GK_U32)f32Fps;
 	pstAeSnsDft->u32LinesPer500ms = pstSnsState->u32FLStd * f32Fps / 2;
 	pstAeSnsDft->u32FullLinesStd = pstSnsState->u32FLStd;
 
@@ -508,11 +508,11 @@ static HI_VOID cmos_fps_set(VI_PIPE ViPipe, HI_FLOAT f32Fps,
 	return;
 }
 
-static HI_VOID cmos_slow_framerate_set(VI_PIPE ViPipe, HI_U32 u32FullLines,
+static GK_VOID cmos_slow_framerate_set(VI_PIPE ViPipe, GK_U32 u32FullLines,
 				       AE_SENSOR_DEFAULT_S *pstAeSnsDft)
 {
-	ISP_SNS_STATE_S *pstSnsState = HI_NULL;
-	HI_U32 u32Fll;
+	ISP_SNS_STATE_S *pstSnsState = GK_NULL;
+	GK_U32 u32Fll;
 	CMOS_CHECK_POINTER_VOID(pstAeSnsDft);
 	IMX335_SENSOR_GET_CTX(ViPipe, pstSnsState);
 	CMOS_CHECK_POINTER_VOID(pstSnsState);
@@ -572,7 +572,7 @@ static HI_VOID cmos_slow_framerate_set(VI_PIPE ViPipe, HI_U32 u32FullLines,
 }
 
 /* Again and Dgain use the same table, Step is 0.3db */
-static HI_U32 ad_gain_table[IMX335_AD_GAIN_TBL_RANGE] = {
+static GK_U32 ad_gain_table[IMX335_AD_GAIN_TBL_RANGE] = {
 	1024,	 1059,	  1097,	   1135,    1175,    1217,    1259,
 	1304,	 1349,	  1397,	   1446,    1497,    1549,    1604, // 3.9dB
 	1660,	 1719,	  1779,	   1842,    1906,    1973,    2043,
@@ -611,25 +611,25 @@ static HI_U32 ad_gain_table[IMX335_AD_GAIN_TBL_RANGE] = {
 };
 
 /* while isp notify ae to update sensor regs, ae call these funcs. */
-static HI_VOID cmos_inttime_update(VI_PIPE ViPipe, HI_U32 u32IntTime)
+static GK_VOID cmos_inttime_update(VI_PIPE ViPipe, GK_U32 u32IntTime)
 {
-	static HI_BOOL bFirst[ISP_MAX_PIPE_NUM] = { [0 ...(ISP_MAX_PIPE_NUM -
+	static GK_BOOL bFirst[ISP_MAX_PIPE_NUM] = { [0 ...(ISP_MAX_PIPE_NUM -
 							   1)] = 1 };
-	static HI_U32 u32LastShortIntTime = 0;
-	static HI_U32 u32ShortIntTime = 0;
-	static HI_U32 u32LongIntTime = 0;
+	static GK_U32 u32LastShortIntTime = 0;
+	static GK_U32 u32ShortIntTime = 0;
+	static GK_U32 u32LongIntTime = 0;
 
-	HI_U32 u32RHS1 = 0;
-	HI_U32 u32SHR0 = 8872;
-	HI_U32 u32SHR1 = 18;
+	GK_U32 u32RHS1 = 0;
+	GK_U32 u32SHR0 = 8872;
+	GK_U32 u32SHR1 = 18;
 
-	HI_U32 u32delta = 0;
-	HI_U32 u32Value = 0;
-	HI_U16 u16ShortExpMod4 = 0;
-	HI_U16 u16ShortExpMod8 = 0;
-	HI_U32 u32RHS1Limit = 0;
+	GK_U32 u32delta = 0;
+	GK_U32 u32Value = 0;
+	GK_U16 u16ShortExpMod4 = 0;
+	GK_U16 u16ShortExpMod8 = 0;
+	GK_U32 u32RHS1Limit = 0;
 
-	ISP_SNS_STATE_S *pstSnsState = HI_NULL;
+	ISP_SNS_STATE_S *pstSnsState = GK_NULL;
 	IMX335_SENSOR_GET_CTX(ViPipe, pstSnsState);
 	CMOS_CHECK_POINTER_VOID(pstSnsState);
 
@@ -638,7 +638,7 @@ static HI_VOID cmos_inttime_update(VI_PIPE ViPipe, HI_U32 u32IntTime)
 			pstSnsState->au32WDRIntTime[0] = u32IntTime;
 			u32ShortIntTime = u32IntTime;
 
-			bFirst[ViPipe] = HI_FALSE;
+			bFirst[ViPipe] = GK_FALSE;
 		} else { /* long exposure */
 			pstSnsState->au32WDRIntTime[1] = u32IntTime;
 			u32LongIntTime = u32IntTime;
@@ -712,7 +712,7 @@ static HI_VOID cmos_inttime_update(VI_PIPE ViPipe, HI_U32 u32IntTime)
 				IMX335_MID_8BITS(u32RHS1);
 			pstSnsState->astRegsInfo[0].astI2cData[13].u32Data =
 				IMX335_HIG_4BITS(u32RHS1);
-			bFirst[ViPipe] = HI_TRUE;
+			bFirst[ViPipe] = GK_TRUE;
 			u32LastShortIntTime = u32ShortIntTime;
 		}
 	} else { // Linear
@@ -731,8 +731,8 @@ static HI_VOID cmos_inttime_update(VI_PIPE ViPipe, HI_U32 u32IntTime)
 	return;
 }
 
-static HI_VOID cmos_again_calc_table(VI_PIPE ViPipe, HI_U32 *pu32AgainLin,
-				     HI_U32 *pu32AgainDb)
+static GK_VOID cmos_again_calc_table(VI_PIPE ViPipe, GK_U32 *pu32AgainLin,
+				     GK_U32 *pu32AgainDb)
 {
 	int i;
 
@@ -756,8 +756,8 @@ static HI_VOID cmos_again_calc_table(VI_PIPE ViPipe, HI_U32 *pu32AgainLin,
 	return;
 }
 
-static HI_VOID cmos_dgain_calc_table(VI_PIPE ViPipe, HI_U32 *pu32DgainLin,
-				     HI_U32 *pu32DgainDb)
+static GK_VOID cmos_dgain_calc_table(VI_PIPE ViPipe, GK_U32 *pu32DgainLin,
+				     GK_U32 *pu32DgainDb)
 {
 	int i;
 
@@ -781,15 +781,15 @@ static HI_VOID cmos_dgain_calc_table(VI_PIPE ViPipe, HI_U32 *pu32DgainLin,
 	return;
 }
 
-static HI_VOID cmos_gains_update(VI_PIPE ViPipe, HI_U32 u32Again,
-				 HI_U32 u32Dgain)
+static GK_VOID cmos_gains_update(VI_PIPE ViPipe, GK_U32 u32Again,
+				 GK_U32 u32Dgain)
 {
-	static HI_BOOL bFirstGain[ISP_MAX_PIPE_NUM] = {
+	static GK_BOOL bFirstGain[ISP_MAX_PIPE_NUM] = {
 		[0 ...(ISP_MAX_PIPE_NUM - 1)] = 1
 	};
-	HI_U32 u32Tmp;
+	GK_U32 u32Tmp;
 
-	ISP_SNS_STATE_S *pstSnsState = HI_NULL;
+	ISP_SNS_STATE_S *pstSnsState = GK_NULL;
 	IMX335_SENSOR_GET_CTX(ViPipe, pstSnsState);
 	CMOS_CHECK_POINTER_VOID(pstSnsState);
 
@@ -802,7 +802,7 @@ static HI_VOID cmos_gains_update(VI_PIPE ViPipe, HI_U32 u32Again,
 				IMX335_LOW_8BITS(u32Tmp);
 			pstSnsState->astRegsInfo[0].astI2cData[4].u32Data =
 				IMX335_MID_8BITS(u32Tmp);
-			bFirstGain[ViPipe] = HI_FALSE;
+			bFirstGain[ViPipe] = GK_FALSE;
 		} else {
 			u32Tmp = u32Again + u32Dgain;
 
@@ -810,7 +810,7 @@ static HI_VOID cmos_gains_update(VI_PIPE ViPipe, HI_U32 u32Again,
 				IMX335_LOW_8BITS(u32Tmp);
 			pstSnsState->astRegsInfo[0].astI2cData[15].u32Data =
 				IMX335_MID_8BITS(u32Tmp);
-			bFirstGain[ViPipe] = HI_TRUE;
+			bFirstGain[ViPipe] = GK_TRUE;
 		}
 	} else {
 		u32Tmp = u32Again + u32Dgain;
@@ -837,20 +837,20 @@ static HI_VOID cmos_gains_update(VI_PIPE ViPipe, HI_U32 u32Again,
                SHR0 4n(n=0,1,2.....) and (RHS1+18) <= SHR0<=(2*VMAX-4)  VMAX :2n (n=0,1,2.....)
 */
 /* Only used in WDR_MODE_2To1_LINE and WDR_MODE_2To1_FRAME mode */
-static HI_VOID cmos_get_inttime_max(VI_PIPE ViPipe, HI_U16 u16ManRatioEnable,
-				    HI_U32 *au32Ratio, HI_U32 *au32IntTimeMax,
-				    HI_U32 *au32IntTimeMin,
-				    HI_U32 *pu32LFMaxIntTime)
+static GK_VOID cmos_get_inttime_max(VI_PIPE ViPipe, GK_U16 u16ManRatioEnable,
+				    GK_U32 *au32Ratio, GK_U32 *au32IntTimeMax,
+				    GK_U32 *au32IntTimeMin,
+				    GK_U32 *pu32LFMaxIntTime)
 {
-	HI_U32 u32IntTimeMaxTmp0 = 0;
-	HI_U32 u32IntTimeMaxTmp = 0;
-	HI_U32 u32RatioTmp = 0x40;
-	HI_U32 u32ShortTimeMinLimit = 4;
-	HI_U32 u32delta;
-	static HI_U32 u32LastIntTimeMaxTmp = 4;
-	HI_U16 u16LimitValue = 0;
+	GK_U32 u32IntTimeMaxTmp0 = 0;
+	GK_U32 u32IntTimeMaxTmp = 0;
+	GK_U32 u32RatioTmp = 0x40;
+	GK_U32 u32ShortTimeMinLimit = 4;
+	GK_U32 u32delta;
+	static GK_U32 u32LastIntTimeMaxTmp = 4;
+	GK_U16 u16LimitValue = 0;
 
-	ISP_SNS_STATE_S *pstSnsState = HI_NULL;
+	ISP_SNS_STATE_S *pstSnsState = GK_NULL;
 
 	CMOS_CHECK_POINTER_VOID(au32Ratio);
 	CMOS_CHECK_POINTER_VOID(au32IntTimeMax);
@@ -1084,7 +1084,7 @@ static HI_VOID cmos_get_inttime_max(VI_PIPE ViPipe, HI_U16 u16ManRatioEnable,
 }
 
 /* Only used in FSWDR mode */
-static HI_VOID cmos_ae_fswdr_attr_set(VI_PIPE ViPipe,
+static GK_VOID cmos_ae_fswdr_attr_set(VI_PIPE ViPipe,
 				      AE_FSWDR_ATTR_S *pstAeFSWDRAttr)
 {
 	CMOS_CHECK_POINTER_VOID(pstAeFSWDRAttr);
@@ -1093,7 +1093,7 @@ static HI_VOID cmos_ae_fswdr_attr_set(VI_PIPE ViPipe,
 	gu32MaxTimeGetCnt[ViPipe] = 0;
 }
 
-static HI_S32 cmos_init_ae_exp_function(AE_SENSOR_EXP_FUNC_S *pstExpFuncs)
+static GK_S32 cmos_init_ae_exp_function(AE_SENSOR_EXP_FUNC_S *pstExpFuncs)
 {
 	CMOS_CHECK_POINTER(pstExpFuncs);
 
@@ -1109,7 +1109,7 @@ static HI_S32 cmos_init_ae_exp_function(AE_SENSOR_EXP_FUNC_S *pstExpFuncs)
 	pstExpFuncs->pfn_cmos_get_inttime_max = cmos_get_inttime_max;
 	pstExpFuncs->pfn_cmos_ae_fswdr_attr_set = cmos_ae_fswdr_attr_set;
 
-	return HI_SUCCESS;
+	return GK_SUCCESS;
 }
 
 /* AWB default parameter and function */
@@ -1130,10 +1130,10 @@ static HI_S32 cmos_init_ae_exp_function(AE_SENSOR_EXP_FUNC_S *pstExpFuncs)
 #define GOLDEN_RGAIN 0
 #define GOLDEN_BGAIN 0
 
-static HI_S32 cmos_get_awb_default(VI_PIPE ViPipe,
+static GK_S32 cmos_get_awb_default(VI_PIPE ViPipe,
 				   AWB_SENSOR_DEFAULT_S *pstAwbSnsDft)
 {
-	ISP_SNS_STATE_S *pstSnsState = HI_NULL;
+	ISP_SNS_STATE_S *pstSnsState = GK_NULL;
 
 	CMOS_CHECK_POINTER(pstAwbSnsDft);
 	IMX335_SENSOR_GET_CTX(ViPipe, pstSnsState);
@@ -1180,10 +1180,10 @@ static HI_S32 cmos_get_awb_default(VI_PIPE ViPipe,
 	pstAwbSnsDft->u16SampleRgain = g_au16SampleRgain[ViPipe];
 	pstAwbSnsDft->u16SampleBgain = g_au16SampleBgain[ViPipe];
 
-	return HI_SUCCESS;
+	return GK_SUCCESS;
 }
 
-static HI_S32 cmos_init_awb_exp_function(AWB_SENSOR_EXP_FUNC_S *pstExpFuncs)
+static GK_S32 cmos_init_awb_exp_function(AWB_SENSOR_EXP_FUNC_S *pstExpFuncs)
 {
 	CMOS_CHECK_POINTER(pstExpFuncs);
 
@@ -1191,22 +1191,22 @@ static HI_S32 cmos_init_awb_exp_function(AWB_SENSOR_EXP_FUNC_S *pstExpFuncs)
 
 	pstExpFuncs->pfn_cmos_get_awb_default = cmos_get_awb_default;
 
-	return HI_SUCCESS;
+	return GK_SUCCESS;
 }
 
 static ISP_CMOS_DNG_COLORPARAM_S g_stDngColorParam = { { 378, 256, 430 },
 						       { 439, 256, 439 } };
 
-static HI_S32 cmos_get_isp_default(VI_PIPE ViPipe, ISP_CMOS_DEFAULT_S *pstDef)
+static GK_S32 cmos_get_isp_default(VI_PIPE ViPipe, ISP_CMOS_DEFAULT_S *pstDef)
 {
-	ISP_SNS_STATE_S *pstSnsState = HI_NULL;
+	ISP_SNS_STATE_S *pstSnsState = GK_NULL;
 
 	CMOS_CHECK_POINTER(pstDef);
 	IMX335_SENSOR_GET_CTX(ViPipe, pstSnsState);
 	CMOS_CHECK_POINTER(pstSnsState);
 
 	memset(pstDef, 0, sizeof(ISP_CMOS_DEFAULT_S));
-#ifdef CONFIG_HI_ISP_CA_SUPPORT
+#ifdef CONFIG_ISP_CA_SUPPORT
 	pstDef->unKey.bit1Ca = 1;
 	pstDef->pstCa = &g_stIspCA;
 #endif
@@ -1328,30 +1328,30 @@ static HI_S32 cmos_get_isp_default(VI_PIPE ViPipe, ISP_CMOS_DEFAULT_S *pstDef)
 	pstDef->stSensorMode.stDngRawFormat.au8CfaPattern[1] = 1;
 	pstDef->stSensorMode.stDngRawFormat.au8CfaPattern[2] = 1;
 	pstDef->stSensorMode.stDngRawFormat.au8CfaPattern[3] = 2;
-	pstDef->stSensorMode.bValidDngRawFormat = HI_TRUE;
+	pstDef->stSensorMode.bValidDngRawFormat = GK_TRUE;
 
-	return HI_SUCCESS;
+	return GK_SUCCESS;
 }
 
-static HI_S32 cmos_get_isp_black_level(VI_PIPE ViPipe,
+static GK_S32 cmos_get_isp_black_level(VI_PIPE ViPipe,
 				       ISP_CMOS_BLACK_LEVEL_S *pstBlackLevel)
 {
-	HI_S32 i;
+	GK_S32 i;
 
-	ISP_SNS_STATE_S *pstSnsState = HI_NULL;
+	ISP_SNS_STATE_S *pstSnsState = GK_NULL;
 
 	IMX335_SENSOR_GET_CTX(ViPipe, pstSnsState);
 	CMOS_CHECK_POINTER(pstSnsState);
 
-	if (HI_NULL == pstBlackLevel) {
+	if (GK_NULL == pstBlackLevel) {
 		printf("null pointer when get isp black level value!\n");
 		return -1;
 	}
 
 	/* Don't need to update black level when iso change */
-	pstBlackLevel->bUpdate = HI_TRUE;
+	pstBlackLevel->bUpdate = GK_TRUE;
 
-	if (HI_TRUE == pstBlackLevel->bUpdate) {
+	if (GK_TRUE == pstBlackLevel->bUpdate) {
 		if (g_u32Imx335AGain[ViPipe] >= 32381) {
 			if (g_u32Imx335DGain[ViPipe] < 12288) {
 				for (i = 0; i < 4; i++) {
@@ -1422,12 +1422,12 @@ static HI_S32 cmos_get_isp_black_level(VI_PIPE ViPipe,
 	return 0;
 }
 
-static HI_VOID cmos_set_pixel_detect(VI_PIPE ViPipe, HI_BOOL bEnable)
+static GK_VOID cmos_set_pixel_detect(VI_PIPE ViPipe, GK_BOOL bEnable)
 {
-	HI_U32 u32FullLines_5Fps = 0;
-	HI_U32 u32MaxIntTime_5Fps = 0;
+	GK_U32 u32FullLines_5Fps = 0;
+	GK_U32 u32MaxIntTime_5Fps = 0;
 
-	ISP_SNS_STATE_S *pstSnsState = HI_NULL;
+	ISP_SNS_STATE_S *pstSnsState = GK_NULL;
 
 	IMX335_SENSOR_GET_CTX(ViPipe, pstSnsState);
 	CMOS_CHECK_POINTER_VOID(pstSnsState);
@@ -1476,20 +1476,20 @@ static HI_VOID cmos_set_pixel_detect(VI_PIPE ViPipe, HI_BOOL bEnable)
 				      IMX335_MID_8BITS(pstSnsState->u32FLStd));
 		IMX335_write_register(ViPipe, IMX335_VMAX_ADDR_H,
 				      IMX335_HIG_4BITS(pstSnsState->u32FLStd));
-		pstSnsState->bSyncInit = HI_FALSE;
+		pstSnsState->bSyncInit = GK_FALSE;
 	}
 
 	return;
 }
 
-static HI_S32 cmos_set_wdr_mode(VI_PIPE ViPipe, HI_U8 u8Mode)
+static GK_S32 cmos_set_wdr_mode(VI_PIPE ViPipe, GK_U8 u8Mode)
 {
-	ISP_SNS_STATE_S *pstSnsState = HI_NULL;
+	ISP_SNS_STATE_S *pstSnsState = GK_NULL;
 
 	IMX335_SENSOR_GET_CTX(ViPipe, pstSnsState);
 	CMOS_CHECK_POINTER(pstSnsState);
 
-	pstSnsState->bSyncInit = HI_FALSE;
+	pstSnsState->bSyncInit = GK_FALSE;
 
 	switch (u8Mode & 0x3F) {
 	case WDR_MODE_NONE:
@@ -1503,28 +1503,28 @@ static HI_S32 cmos_set_wdr_mode(VI_PIPE ViPipe, HI_U8 u8Mode)
 		break;
 
 	default:
-		ISP_TRACE(HI_DBG_ERR, "NOT support this mode!\n");
-		return HI_FAILURE;
+		ISP_TRACE(MODULE_DBG_ERR, "NOT support this mode!\n");
+		return GK_FAILURE;
 	}
 
 	memset(pstSnsState->au32WDRIntTime, 0,
 	       sizeof(pstSnsState->au32WDRIntTime));
 
-	return HI_SUCCESS;
+	return GK_SUCCESS;
 }
 
-static HI_S32 cmos_get_sns_regs_info(VI_PIPE ViPipe,
+static GK_S32 cmos_get_sns_regs_info(VI_PIPE ViPipe,
 				     ISP_SNS_REGS_INFO_S *pstSnsRegsInfo)
 {
-	HI_S32 i;
-	ISP_SNS_STATE_S *pstSnsState = HI_NULL;
+	GK_S32 i;
+	ISP_SNS_STATE_S *pstSnsState = GK_NULL;
 
 	CMOS_CHECK_POINTER(pstSnsRegsInfo);
 	IMX335_SENSOR_GET_CTX(ViPipe, pstSnsState);
 	CMOS_CHECK_POINTER(pstSnsState);
 
-	if ((HI_FALSE == pstSnsState->bSyncInit) ||
-	    (HI_FALSE == pstSnsRegsInfo->bConfig)) {
+	if ((GK_FALSE == pstSnsState->bSyncInit) ||
+	    (GK_FALSE == pstSnsRegsInfo->bConfig)) {
 		pstSnsState->astRegsInfo[0].enSnsType = ISP_SNS_I2C_TYPE;
 		pstSnsState->astRegsInfo[0].unComBus.s8I2cDev =
 			g_aunImx335BusInfo[ViPipe].s8I2cDev;
@@ -1537,7 +1537,7 @@ static HI_S32 cmos_get_sns_regs_info(VI_PIPE ViPipe,
 
 		for (i = 0; i < pstSnsState->astRegsInfo[0].u32RegNum; i++) {
 			pstSnsState->astRegsInfo[0].astI2cData[i].bUpdate =
-				HI_TRUE;
+				GK_TRUE;
 			pstSnsState->astRegsInfo[0].astI2cData[i].u8DevAddr =
 				imx335_i2c_addr;
 			pstSnsState->astRegsInfo[0]
@@ -1639,24 +1639,24 @@ static HI_S32 cmos_get_sns_regs_info(VI_PIPE ViPipe,
 				IMX335_GAIN_SHORT_HIGH;
 		}
 
-		pstSnsState->bSyncInit = HI_TRUE;
+		pstSnsState->bSyncInit = GK_TRUE;
 	} else {
 		for (i = 0; i < pstSnsState->astRegsInfo[0].u32RegNum; i++) {
 			if (pstSnsState->astRegsInfo[0].astI2cData[i].u32Data ==
 			    pstSnsState->astRegsInfo[1].astI2cData[i].u32Data) {
 				pstSnsState->astRegsInfo[0]
 					.astI2cData[i]
-					.bUpdate = HI_FALSE;
+					.bUpdate = GK_FALSE;
 			}
 
 			else {
 				pstSnsState->astRegsInfo[0]
 					.astI2cData[i]
-					.bUpdate = HI_TRUE;
+					.bUpdate = GK_TRUE;
 			}
 		}
 	}
-	pstSnsRegsInfo->bConfig = HI_FALSE;
+	pstSnsRegsInfo->bConfig = GK_FALSE;
 
 	memcpy(pstSnsRegsInfo, &pstSnsState->astRegsInfo[0],
 	       sizeof(ISP_SNS_REGS_INFO_S));
@@ -1665,21 +1665,21 @@ static HI_S32 cmos_get_sns_regs_info(VI_PIPE ViPipe,
 
 	pstSnsState->au32FL[1] = pstSnsState->au32FL[0];
 
-	return HI_SUCCESS;
+	return GK_SUCCESS;
 }
 
-static HI_S32
+static GK_S32
 cmos_set_image_mode(VI_PIPE ViPipe,
 		    ISP_CMOS_SENSOR_IMAGE_MODE_S *pstSensorImageMode)
 {
-	ISP_SNS_STATE_S *pstSnsState = HI_NULL;
-	HI_U8 u8SensorImageMode = 0;
+	ISP_SNS_STATE_S *pstSnsState = GK_NULL;
+	GK_U8 u8SensorImageMode = 0;
 
 	CMOS_CHECK_POINTER(pstSensorImageMode);
 	IMX335_SENSOR_GET_CTX(ViPipe, pstSnsState);
 	CMOS_CHECK_POINTER(pstSnsState);
 
-	pstSnsState->bSyncInit = HI_FALSE;
+	pstSnsState->bSyncInit = GK_FALSE;
 
 	//printf("Lation@ cmos_set_image_mode width: %d, height: %d\n", pstSensorImageMode->u16Width, pstSensorImageMode->u16Height);
 	if (WDR_MODE_2To1_LINE == pstSnsState->enWDRMode) {
@@ -1703,7 +1703,7 @@ cmos_set_image_mode(VI_PIPE ViPipe,
 			pstSnsState->u32FLStd = IMX335_VMAX_4M_30FPS_10BIT_WDR;
 		} else {
 			IMX335_ERR_MODE_PRINT(pstSensorImageMode, pstSnsState);
-			return HI_FAILURE;
+			return GK_FAILURE;
 		}
 	} else if (WDR_MODE_NONE == pstSnsState->enWDRMode) {
 		if (IMX335_RES_IS_5M_12BIT_LINEAR(
@@ -1718,14 +1718,14 @@ cmos_set_image_mode(VI_PIPE ViPipe,
 				IMX335_VMAX_5M_30FPS_12BIT_LINEAR;
 		} else {
 			IMX335_ERR_MODE_PRINT(pstSensorImageMode, pstSnsState);
-			return HI_FAILURE;
+			return GK_FAILURE;
 		}
 	} else {
 		IMX335_ERR_MODE_PRINT(pstSensorImageMode, pstSnsState);
-		return HI_FAILURE;
+		return GK_FAILURE;
 	}
 
-	if ((HI_TRUE == pstSnsState->bInit) &&
+	if ((GK_TRUE == pstSnsState->bInit) &&
 	    (u8SensorImageMode == pstSnsState->u8ImgMode)) {
 		/* Don't need to switch SensorImageMode */
 		return ISP_DO_NOT_NEED_SWITCH_IMAGEMODE;
@@ -1735,18 +1735,18 @@ cmos_set_image_mode(VI_PIPE ViPipe,
 	pstSnsState->au32FL[0] = pstSnsState->u32FLStd;
 	pstSnsState->au32FL[1] = pstSnsState->au32FL[0];
 
-	return HI_SUCCESS;
+	return GK_SUCCESS;
 }
 
-static HI_VOID sensor_global_init(VI_PIPE ViPipe)
+static GK_VOID sensor_global_init(VI_PIPE ViPipe)
 {
-	ISP_SNS_STATE_S *pstSnsState = HI_NULL;
+	ISP_SNS_STATE_S *pstSnsState = GK_NULL;
 
 	IMX335_SENSOR_GET_CTX(ViPipe, pstSnsState);
 	CMOS_CHECK_POINTER_VOID(pstSnsState);
 
-	pstSnsState->bInit = HI_FALSE;
-	pstSnsState->bSyncInit = HI_FALSE;
+	pstSnsState->bInit = GK_FALSE;
+	pstSnsState->bSyncInit = GK_FALSE;
 	pstSnsState->u8ImgMode = IMX335_5M_30FPS_12BIT_LINEAR_MODE;
 	pstSnsState->enWDRMode = WDR_MODE_NONE;
 	pstSnsState->u32FLStd = IMX335_VMAX_5M_30FPS_12BIT_LINEAR;
@@ -1757,7 +1757,7 @@ static HI_VOID sensor_global_init(VI_PIPE ViPipe)
 	memset(&pstSnsState->astRegsInfo[1], 0, sizeof(ISP_SNS_REGS_INFO_S));
 }
 
-static HI_S32
+static GK_S32
 cmos_init_sensor_exp_function(ISP_SENSOR_EXP_FUNC_S *pstSensorExpFunc)
 {
 	CMOS_CHECK_POINTER(pstSensorExpFunc);
@@ -1775,35 +1775,35 @@ cmos_init_sensor_exp_function(ISP_SENSOR_EXP_FUNC_S *pstSensorExpFunc)
 	pstSensorExpFunc->pfn_cmos_set_pixel_detect = cmos_set_pixel_detect;
 	pstSensorExpFunc->pfn_cmos_get_sns_reg_info = cmos_get_sns_regs_info;
 
-	return HI_SUCCESS;
+	return GK_SUCCESS;
 }
 
 /****************************************************************************
  * callback structure                                                       *
  ****************************************************************************/
 
-static HI_S32 IMX335_set_bus_info(VI_PIPE ViPipe,
+static GK_S32 IMX335_set_bus_info(VI_PIPE ViPipe,
 				  ISP_SNS_COMMBUS_U unSNSBusInfo)
 {
 	g_aunImx335BusInfo[ViPipe].s8I2cDev = unSNSBusInfo.s8I2cDev;
 
-	return HI_SUCCESS;
+	return GK_SUCCESS;
 }
 
-static HI_S32 sensor_ctx_init(VI_PIPE ViPipe)
+static GK_S32 sensor_ctx_init(VI_PIPE ViPipe)
 {
-	ISP_SNS_STATE_S *pastSnsStateCtx = HI_NULL;
+	ISP_SNS_STATE_S *pastSnsStateCtx = GK_NULL;
 
 	IMX335_SENSOR_GET_CTX(ViPipe, pastSnsStateCtx);
 
-	if (HI_NULL == pastSnsStateCtx) {
+	if (GK_NULL == pastSnsStateCtx) {
 		pastSnsStateCtx =
 			(ISP_SNS_STATE_S *)malloc(sizeof(ISP_SNS_STATE_S));
-		if (HI_NULL == pastSnsStateCtx) {
-			ISP_TRACE(HI_DBG_ERR,
+		if (GK_NULL == pastSnsStateCtx) {
+			ISP_TRACE(MODULE_DBG_ERR,
 				  "Isp[%d] SnsCtx malloc memory failed!\n",
 				  ViPipe);
-			return HI_ERR_ISP_NOMEM;
+			return ERR_CODE_ISP_NOMEM;
 		}
 	}
 
@@ -1811,22 +1811,22 @@ static HI_S32 sensor_ctx_init(VI_PIPE ViPipe)
 
 	IMX335_SENSOR_SET_CTX(ViPipe, pastSnsStateCtx);
 
-	return HI_SUCCESS;
+	return GK_SUCCESS;
 }
 
-static HI_VOID sensor_ctx_exit(VI_PIPE ViPipe)
+static GK_VOID sensor_ctx_exit(VI_PIPE ViPipe)
 {
-	ISP_SNS_STATE_S *pastSnsStateCtx = HI_NULL;
+	ISP_SNS_STATE_S *pastSnsStateCtx = GK_NULL;
 
 	IMX335_SENSOR_GET_CTX(ViPipe, pastSnsStateCtx);
 	SENSOR_FREE(pastSnsStateCtx);
 	IMX335_SENSOR_RESET_CTX(ViPipe);
 }
 
-static HI_S32 sensor_register_callback(VI_PIPE ViPipe, ALG_LIB_S *pstAeLib,
+static GK_S32 sensor_register_callback(VI_PIPE ViPipe, ALG_LIB_S *pstAeLib,
 				       ALG_LIB_S *pstAwbLib)
 {
-	HI_S32 s32Ret;
+	GK_S32 s32Ret;
 
 	ISP_SENSOR_REGISTER_S stIspRegister;
 	AE_SENSOR_REGISTER_S stAeRegister;
@@ -1838,87 +1838,87 @@ static HI_S32 sensor_register_callback(VI_PIPE ViPipe, ALG_LIB_S *pstAeLib,
 
 	s32Ret = sensor_ctx_init(ViPipe);
 
-	if (HI_SUCCESS != s32Ret) {
-		return HI_FAILURE;
+	if (GK_SUCCESS != s32Ret) {
+		return GK_FAILURE;
 	}
 
 	stSnsAttrInfo.eSensorId = IMX335_ID;
 
 	s32Ret = cmos_init_sensor_exp_function(&stIspRegister.stSnsExp);
-	s32Ret |= HI_MPI_ISP_SensorRegCallBack(ViPipe, &stSnsAttrInfo,
+	s32Ret |= GK_API_ISP_SensorRegCallBack(ViPipe, &stSnsAttrInfo,
 					       &stIspRegister);
 
-	if (HI_SUCCESS != s32Ret) {
-		ISP_TRACE(HI_DBG_ERR,
+	if (GK_SUCCESS != s32Ret) {
+		ISP_TRACE(MODULE_DBG_ERR,
 			  "sensor register callback function failed!\n");
 		return s32Ret;
 	}
 
 	s32Ret = cmos_init_ae_exp_function(&stAeRegister.stSnsExp);
-	s32Ret |= HI_MPI_AE_SensorRegCallBack(ViPipe, pstAeLib, &stSnsAttrInfo,
+	s32Ret |= GK_API_AE_SensorRegCallBack(ViPipe, pstAeLib, &stSnsAttrInfo,
 					      &stAeRegister);
 
-	if (HI_SUCCESS != s32Ret) {
+	if (GK_SUCCESS != s32Ret) {
 		ISP_TRACE(
-			HI_DBG_ERR,
+			MODULE_DBG_ERR,
 			"sensor register callback function to ae lib failed!\n");
 		return s32Ret;
 	}
 
 	s32Ret = cmos_init_awb_exp_function(&stAwbRegister.stSnsExp);
-	s32Ret |= HI_MPI_AWB_SensorRegCallBack(ViPipe, pstAwbLib,
+	s32Ret |= GK_API_AWB_SensorRegCallBack(ViPipe, pstAwbLib,
 					       &stSnsAttrInfo, &stAwbRegister);
 
-	if (HI_SUCCESS != s32Ret) {
+	if (GK_SUCCESS != s32Ret) {
 		ISP_TRACE(
-			HI_DBG_ERR,
+			MODULE_DBG_ERR,
 			"sensor register callback function to awb lib failed!\n");
 		return s32Ret;
 	}
 
-	return HI_SUCCESS;
+	return GK_SUCCESS;
 }
 
-static HI_S32 sensor_unregister_callback(VI_PIPE ViPipe, ALG_LIB_S *pstAeLib,
+static GK_S32 sensor_unregister_callback(VI_PIPE ViPipe, ALG_LIB_S *pstAeLib,
 					 ALG_LIB_S *pstAwbLib)
 {
-	HI_S32 s32Ret;
+	GK_S32 s32Ret;
 
 	CMOS_CHECK_POINTER(pstAeLib);
 	CMOS_CHECK_POINTER(pstAwbLib);
 
-	s32Ret = HI_MPI_ISP_SensorUnRegCallBack(ViPipe, IMX335_ID);
+	s32Ret = GK_API_ISP_SensorUnRegCallBack(ViPipe, IMX335_ID);
 
-	if (HI_SUCCESS != s32Ret) {
-		ISP_TRACE(HI_DBG_ERR,
+	if (GK_SUCCESS != s32Ret) {
+		ISP_TRACE(MODULE_DBG_ERR,
 			  "sensor unregister callback function failed!\n");
 		return s32Ret;
 	}
 
-	s32Ret = HI_MPI_AE_SensorUnRegCallBack(ViPipe, pstAeLib, IMX335_ID);
+	s32Ret = GK_API_AE_SensorUnRegCallBack(ViPipe, pstAeLib, IMX335_ID);
 
-	if (HI_SUCCESS != s32Ret) {
+	if (GK_SUCCESS != s32Ret) {
 		ISP_TRACE(
-			HI_DBG_ERR,
+			MODULE_DBG_ERR,
 			"sensor unregister callback function to ae lib failed!\n");
 		return s32Ret;
 	}
 
-	s32Ret = HI_MPI_AWB_SensorUnRegCallBack(ViPipe, pstAwbLib, IMX335_ID);
+	s32Ret = GK_API_AWB_SensorUnRegCallBack(ViPipe, pstAwbLib, IMX335_ID);
 
-	if (HI_SUCCESS != s32Ret) {
+	if (GK_SUCCESS != s32Ret) {
 		ISP_TRACE(
-			HI_DBG_ERR,
+			MODULE_DBG_ERR,
 			"sensor unregister callback function to awb lib failed!\n");
 		return s32Ret;
 	}
 
 	sensor_ctx_exit(ViPipe);
 
-	return HI_SUCCESS;
+	return GK_SUCCESS;
 }
 
-static HI_S32 sensor_set_init(VI_PIPE ViPipe, ISP_INIT_ATTR_S *pstInitAttr)
+static GK_S32 sensor_set_init(VI_PIPE ViPipe, ISP_INIT_ATTR_S *pstInitAttr)
 {
 	CMOS_CHECK_POINTER(pstInitAttr);
 
@@ -1930,7 +1930,7 @@ static HI_S32 sensor_set_init(VI_PIPE ViPipe, ISP_INIT_ATTR_S *pstInitAttr)
 	g_au16SampleRgain[ViPipe] = pstInitAttr->u16SampleRgain;
 	g_au16SampleBgain[ViPipe] = pstInitAttr->u16SampleBgain;
 
-	return HI_SUCCESS;
+	return GK_SUCCESS;
 }
 
 ISP_SNS_OBJ_S stSnsImx335Obj = {
@@ -1938,7 +1938,7 @@ ISP_SNS_OBJ_S stSnsImx335Obj = {
 	.pfnUnRegisterCallback = sensor_unregister_callback,
 	.pfnStandby = IMX335_standby,
 	.pfnRestart = IMX335_restart,
-	.pfnMirrorFlip = HI_NULL,
+	.pfnMirrorFlip = GK_NULL,
 	.pfnWriteReg = IMX335_write_register,
 	.pfnReadReg = IMX335_read_register,
 	.pfnSetBusInfo = IMX335_set_bus_info,
