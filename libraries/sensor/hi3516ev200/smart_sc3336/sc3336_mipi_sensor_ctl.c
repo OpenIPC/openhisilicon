@@ -23,8 +23,8 @@
 #include <fcntl.h>
 #include <unistd.h>
 
-#include "hi_comm_video.h"
-#include "hi_sns_ctrl.h"
+#include "comm_video.h"
+#include "sns_ctrl.h"
 
 #ifdef HI_GPIO_I2C
 #include "gpioi2c_ex.h"
