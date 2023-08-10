@@ -22,15 +22,17 @@
 #include <stdio.h>
 #include <string.h>
 #include <assert.h>
-#include "hi_comm_sns.h"
-#include "hi_comm_video.h"
-#include "hi_sns_ctrl.h"
-#include "mpi_isp.h"
-#include "mpi_ae.h"
-#include "mpi_awb.h"
-#include "hi_comm_isp.h"
-
+#include "comm_sns.h"
+#include "comm_video.h"
+#include "sns_ctrl.h"
+#include "gk_api_isp.h"
+#include "gk_api_ae.h"
+#include "gk_api_awb.h"
+#include "comm_isp.h"
 #include "sc3336_mipi_cmos_ex.h"
+#include "hicompat.h"
+
+
 #ifdef __cplusplus
 #if __cplusplus
 extern "C" {
