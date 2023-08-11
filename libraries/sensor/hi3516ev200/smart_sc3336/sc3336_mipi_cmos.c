@@ -60,11 +60,11 @@ extern "C" {
 #define MIN(a, b) (((a) > (b)) ?  (b) : (a))
 #endif
 
-ISP_SNS_STATE_S *g_pastSc3336[ISP_MAX_PIPE_NUM] = {HI_NULL};
+ISP_SNS_STATE_S *g_pastSc3336[ISP_MAX_PIPE_NUM] = {GK_NULL};
 
 #define SC3336_SENSOR_GET_CTX(dev, pstCtx)   (pstCtx = g_pastSc3336[dev])
 #define SC3336_SENSOR_SET_CTX(dev, pstCtx)   (g_pastSc3336[dev] = pstCtx)
-#define SC3336_SENSOR_RESET_CTX(dev)         (g_pastSc3336[dev] = HI_NULL)
+#define SC3336_SENSOR_RESET_CTX(dev)         (g_pastSc3336[dev] = GK_NULL)
 
 ISP_SNS_COMMBUS_U g_aunSc3336BusInfo[ISP_MAX_PIPE_NUM] = {
     [0] = { .s8I2cDev = 0},
@@ -75,13 +75,13 @@ static ISP_FSWDR_MODE_E genFSWDRMode[ISP_MAX_PIPE_NUM] = {
     [0 ... ISP_MAX_PIPE_NUM - 1] = ISP_FSWDR_NORMAL_MODE
 };
 
-static HI_U32 gu32MaxTimeGetCnt[ISP_MAX_PIPE_NUM] = {0};
-static HI_U32 g_au32InitExposure[ISP_MAX_PIPE_NUM]  = {0};
-static HI_U32 g_au32LinesPer500ms[ISP_MAX_PIPE_NUM] = {0};
+static GK_U32 gu32MaxTimeGetCnt[ISP_MAX_PIPE_NUM] = {0};
+static GK_U32 g_au32InitExposure[ISP_MAX_PIPE_NUM]  = {0};
+static GK_U32 g_au32LinesPer500ms[ISP_MAX_PIPE_NUM] = {0};
 
-static HI_U16 g_au16InitWBGain[ISP_MAX_PIPE_NUM][3] = {{0}};
-static HI_U16 g_au16SampleRgain[ISP_MAX_PIPE_NUM] = {0};
-static HI_U16 g_au16SampleBgain[ISP_MAX_PIPE_NUM] = {0};
+static GK_U16 g_au16InitWBGain[ISP_MAX_PIPE_NUM][3] = {{0}};
+static GK_U16 g_au16SampleRgain[ISP_MAX_PIPE_NUM] = {0};
+static GK_U16 g_au16SampleBgain[ISP_MAX_PIPE_NUM] = {0};
 
 /****************************************************************************
  * extern                                                                   *
@@ -125,16 +125,16 @@ extern int  smartsens_read_register(VI_PIPE ViPipe, int addr);
 
 
 
-//static HI_U32 gu32MaxShortEXP = SC2336_SEXP_MAX_DEFAULT;
+//static GK_U32 gu32MaxShortEXP = SC2336_SEXP_MAX_DEFAULT;
 
-HI_U16 Dgain_mapping_realgain_to_sensorgain(HI_FLOAT gain_real);
-HI_U16 Dgain_mapping_realgain_to_sensorgain(HI_FLOAT gain_real)
+GK_U16 Dgain_mapping_realgain_to_sensorgain(GK_FLOAT gain_real);
+GK_U16 Dgain_mapping_realgain_to_sensorgain(GK_FLOAT gain_real)
 {
-	HI_U16 u16sensorgain;
-	HI_U32 u32Dgain = gain_real*128;
-	HI_U8 dCoarseGain = 0;
-	HI_U8 dFineGain = 0;
-	HI_U8 u8Reg0x3e06 = 0;
+	GK_U16 u16sensorgain;
+	GK_U32 u32Dgain = gain_real*128;
+	GK_U8 dCoarseGain = 0;
+	GK_U8 dFineGain = 0;
+	GK_U8 u8Reg0x3e06 = 0;
 	for(dCoarseGain = 1; dCoarseGain <= 16; dCoarseGain = dCoarseGain * 2)		//1,2,4,8,16
 	{
 		if(u32Dgain < (128 * 2 * dCoarseGain))
@@ -149,14 +149,14 @@ HI_U16 Dgain_mapping_realgain_to_sensorgain(HI_FLOAT gain_real)
 	{
 		u8Reg0x3e06 = (u8Reg0x3e06 << 1) | 0x01;
 	}
-	u16sensorgain = ((HI_U16)u8Reg0x3e06) << 8;
+	u16sensorgain = ((GK_U16)u8Reg0x3e06) << 8;
 	u16sensorgain += dFineGain;
 	
 	return u16sensorgain;
 }
-static HI_S32 cmos_get_ae_default(VI_PIPE ViPipe, AE_SENSOR_DEFAULT_S *pstAeSnsDft)
+static GK_S32 cmos_get_ae_default(VI_PIPE ViPipe, AE_SENSOR_DEFAULT_S *pstAeSnsDft)
 {
-    ISP_SNS_STATE_S *pstSnsState = HI_NULL;
+    ISP_SNS_STATE_S *pstSnsState = GK_NULL;
 
     CMOS_CHECK_POINTER(pstAeSnsDft);
     SC3336_SENSOR_GET_CTX(ViPipe, pstSnsState);
@@ -185,7 +185,7 @@ static HI_S32 cmos_get_ae_default(VI_PIPE ViPipe, AE_SENSOR_DEFAULT_S *pstAeSnsD
     pstAeSnsDft->enMaxIrisFNO = ISP_IRIS_F_NO_1_0;
     pstAeSnsDft->enMinIrisFNO = ISP_IRIS_F_NO_32_0;
 
-    pstAeSnsDft->bAERouteExValid = HI_FALSE;
+    pstAeSnsDft->bAERouteExValid = GK_FALSE;
     pstAeSnsDft->stAERouteAttr.u32TotalNum = 0;
     pstAeSnsDft->stAERouteAttrEx.u32TotalNum = 0;
 
@@ -225,16 +225,16 @@ static HI_S32 cmos_get_ae_default(VI_PIPE ViPipe, AE_SENSOR_DEFAULT_S *pstAeSnsD
             break;
     }
 
-    return HI_SUCCESS;
+    return GK_SUCCESS;
 }
 
 
 /* the function of sensor set fps */
-static HI_VOID cmos_fps_set(VI_PIPE ViPipe, HI_FLOAT f32Fps, AE_SENSOR_DEFAULT_S *pstAeSnsDft)
+static GK_VOID cmos_fps_set(VI_PIPE ViPipe, GK_FLOAT f32Fps, AE_SENSOR_DEFAULT_S *pstAeSnsDft)
 {
-    HI_U32 u32FullLines;
-    HI_U32 u32VMAX = SC3336_VMAX_1296P30_LINEAR;
-    ISP_SNS_STATE_S *pstSnsState = HI_NULL;
+    GK_U32 u32FullLines;
+    GK_U32 u32VMAX = SC3336_VMAX_1296P30_LINEAR;
+    ISP_SNS_STATE_S *pstSnsState = GK_NULL;
 
     CMOS_CHECK_POINTER_VOID(pstAeSnsDft);
     SC3336_SENSOR_GET_CTX(ViPipe, pstSnsState);
@@ -245,7 +245,7 @@ static HI_VOID cmos_fps_set(VI_PIPE ViPipe, HI_FLOAT f32Fps, AE_SENSOR_DEFAULT_S
             if ((f32Fps <= 20) && (f32Fps >= 4)) {
                 u32VMAX = SC3336_VMAX_1296P30_LINEAR * 20 / DIV_0_TO_1_FLOAT(f32Fps);
             } else {
-                ISP_TRACE(HI_DBG_ERR, "Not support Fps: %f\n", f32Fps);
+                ISP_TRACE(MODULE_DBG_ERR, "Not support Fps: %f\n", f32Fps);
                 return;
             }
             break;
@@ -270,9 +270,9 @@ static HI_VOID cmos_fps_set(VI_PIPE ViPipe, HI_FLOAT f32Fps, AE_SENSOR_DEFAULT_S
     return;
 }
 
-static HI_VOID cmos_slow_framerate_set(VI_PIPE ViPipe, HI_U32 u32FullLines, AE_SENSOR_DEFAULT_S *pstAeSnsDft)
+static GK_VOID cmos_slow_framerate_set(VI_PIPE ViPipe, GK_U32 u32FullLines, AE_SENSOR_DEFAULT_S *pstAeSnsDft)
 {
-    ISP_SNS_STATE_S *pstSnsState = HI_NULL;
+    ISP_SNS_STATE_S *pstSnsState = GK_NULL;
 
     CMOS_CHECK_POINTER_VOID(pstAeSnsDft);
     SC3336_SENSOR_GET_CTX(ViPipe, pstSnsState);
@@ -289,10 +289,10 @@ static HI_VOID cmos_slow_framerate_set(VI_PIPE ViPipe, HI_U32 u32FullLines, AE_S
 }
 
 /* while isp notify ae to update sensor regs, ae call these funcs. */
-static HI_VOID cmos_inttime_update(VI_PIPE ViPipe, HI_U32 u32IntTime)
+static GK_VOID cmos_inttime_update(VI_PIPE ViPipe, GK_U32 u32IntTime)
 {
-    HI_U32 u32Val;
-    ISP_SNS_STATE_S *pstSnsState = HI_NULL;
+    GK_U32 u32Val;
+    ISP_SNS_STATE_S *pstSnsState = GK_NULL;
     SC3336_SENSOR_GET_CTX(ViPipe, pstSnsState);
     CMOS_CHECK_POINTER_VOID(pstSnsState);
 
@@ -306,7 +306,7 @@ static HI_VOID cmos_inttime_update(VI_PIPE ViPipe, HI_U32 u32IntTime)
     return;
 }
 
-static const HI_U16 u16AgainTab[64] =
+static const GK_U16 u16AgainTab[64] =
 {
     1024, 1088, 1152, 1216, 1280, 1344, 1408, 1472, 1536, 1600, 1664, 1728, 1792, 1856,
     1920, 1984, 2048, 2176, 2304, 2432, 2560, 2688, 2816, 2944, 3072, 3200, 3328, 3456,
@@ -315,11 +315,11 @@ static const HI_U16 u16AgainTab[64] =
     11776, 12288, 12800, 13312, 13824, 14336, 14848, 15360, 15872
 };
 
-static HI_VOID cmos_again_calc_table(VI_PIPE ViPipe, HI_U32 *pu32AgainLin, HI_U32 *pu32AgainDb)
+static GK_VOID cmos_again_calc_table(VI_PIPE ViPipe, GK_U32 *pu32AgainLin, GK_U32 *pu32AgainDb)
 {
     int again;
     int i;
-    static HI_U8 againmax = 63;
+    static GK_U8 againmax = 63;
 
     CMOS_CHECK_POINTER_VOID(pu32AgainLin);
     CMOS_CHECK_POINTER_VOID(pu32AgainDb);
@@ -346,7 +346,7 @@ static HI_VOID cmos_again_calc_table(VI_PIPE ViPipe, HI_U32 *pu32AgainLin, HI_U3
     return;
 }
 
-static HI_VOID cmos_dgain_calc_table(VI_PIPE ViPipe, HI_U32 *pu32DgainLin, HI_U32 *pu32DgainDb)
+static GK_VOID cmos_dgain_calc_table(VI_PIPE ViPipe, GK_U32 *pu32DgainLin, GK_U32 *pu32DgainDb)
 {
     CMOS_CHECK_POINTER_VOID(pu32DgainLin);
     CMOS_CHECK_POINTER_VOID(pu32DgainDb);
@@ -371,23 +371,23 @@ static HI_VOID cmos_dgain_calc_table(VI_PIPE ViPipe, HI_U32 *pu32DgainLin, HI_U3
 }
 
 
-static HI_FLOAT Again_real_cal[]={	128,		1,	194.56,		1.52,	194.56*2,		1.52*2,	194.56*4,		1.52*4,	194.56*8,	1.52*8,		194.56*16,		1.52*16,	194.56*32,	1.52*32};
-static HI_FLOAT Again_reg_table[]={	128,	0x00,	194.56,		0x40,	194.56*2,		0x48,	194.56*4,		0x49,	194.56*8,	0x4b,		194.56*16,		0x4f,		194.56*32,	0x5f};
+static GK_FLOAT Again_real_cal[]={	128,		1,	194.56,		1.52,	194.56*2,		1.52*2,	194.56*4,		1.52*4,	194.56*8,	1.52*8,		194.56*16,		1.52*16,	194.56*32,	1.52*32};
+static GK_FLOAT Again_reg_table[]={	128,	0x00,	194.56,		0x40,	194.56*2,		0x48,	194.56*4,		0x49,	194.56*8,	0x4b,		194.56*16,		0x4f,		194.56*32,	0x5f};
 
 
-static HI_VOID cmos_gains_update(VI_PIPE ViPipe, HI_U32 u32Again, HI_U32 u32Dgain)
+static GK_VOID cmos_gains_update(VI_PIPE ViPipe, GK_U32 u32Again, GK_U32 u32Dgain)
 {
-    HI_U8 u8Reg0x3e09, u8Reg0x3e08, u8Reg0x3e07, u8Reg0x3e06;
+    GK_U8 u8Reg0x3e09, u8Reg0x3e08, u8Reg0x3e07, u8Reg0x3e06;
 
-    ISP_SNS_STATE_S *pstSnsState = HI_NULL;
+    ISP_SNS_STATE_S *pstSnsState = GK_NULL;
     SC3336_SENSOR_GET_CTX(ViPipe, pstSnsState);
     CMOS_CHECK_POINTER_VOID(pstSnsState);
 	
-	HI_U16 u16Again,u16Dgain;
-	HI_FLOAT f_Dgain; //f_Again
+	GK_U16 u16Again,u16Dgain;
+	GK_FLOAT f_Dgain; //f_Again
 	
-	//HI_U8 Again_temp;
-	HI_U8 Again_index;
+	//GK_U8 Again_temp;
+	GK_U8 Again_index;
 	for(Again_index = 12; Again_index>=0 ;Again_index-=2)
 	{
 		if(u32Again >= Again_real_cal[Again_index])
@@ -438,13 +438,13 @@ static HI_VOID cmos_gains_update(VI_PIPE ViPipe, HI_U32 u32Again, HI_U32 u32Dgai
     return;
 }
 
-static HI_VOID cmos_get_inttime_max(VI_PIPE ViPipe, HI_U16 u16ManRatioEnable, HI_U32 *au32Ratio, HI_U32 *au32IntTimeMax, HI_U32 *au32IntTimeMin, HI_U32 *pu32LFMaxIntTime)
+static GK_VOID cmos_get_inttime_max(VI_PIPE ViPipe, GK_U16 u16ManRatioEnable, GK_U32 *au32Ratio, GK_U32 *au32IntTimeMax, GK_U32 *au32IntTimeMin, GK_U32 *pu32LFMaxIntTime)
 {
     return;
 }
 
 /* Only used in LINE_WDR mode */
-static HI_VOID cmos_ae_fswdr_attr_set(VI_PIPE ViPipe, AE_FSWDR_ATTR_S *pstAeFSWDRAttr)
+static GK_VOID cmos_ae_fswdr_attr_set(VI_PIPE ViPipe, AE_FSWDR_ATTR_S *pstAeFSWDRAttr)
 {
     CMOS_CHECK_POINTER_VOID(pstAeFSWDRAttr);
 
@@ -454,7 +454,7 @@ static HI_VOID cmos_ae_fswdr_attr_set(VI_PIPE ViPipe, AE_FSWDR_ATTR_S *pstAeFSWD
     return;
 }
 
-static HI_S32 cmos_init_ae_exp_function(AE_SENSOR_EXP_FUNC_S *pstExpFuncs)
+static GK_S32 cmos_init_ae_exp_function(AE_SENSOR_EXP_FUNC_S *pstExpFuncs)
 {
     CMOS_CHECK_POINTER(pstExpFuncs);
 
@@ -470,15 +470,15 @@ static HI_S32 cmos_init_ae_exp_function(AE_SENSOR_EXP_FUNC_S *pstExpFuncs)
     pstExpFuncs->pfn_cmos_get_inttime_max    = cmos_get_inttime_max;
     pstExpFuncs->pfn_cmos_ae_fswdr_attr_set  = cmos_ae_fswdr_attr_set;
 
-    return HI_SUCCESS;
+    return GK_SUCCESS;
 }
 
 /* Rgain and Bgain of the golden sample */
 #define GOLDEN_RGAIN 0
 #define GOLDEN_BGAIN 0
-static HI_S32 cmos_get_awb_default(VI_PIPE ViPipe, AWB_SENSOR_DEFAULT_S *pstAwbSnsDft)
+static GK_S32 cmos_get_awb_default(VI_PIPE ViPipe, AWB_SENSOR_DEFAULT_S *pstAwbSnsDft)
 {
-    ISP_SNS_STATE_S *pstSnsState = HI_NULL;
+    ISP_SNS_STATE_S *pstSnsState = GK_NULL;
 
     CMOS_CHECK_POINTER(pstAwbSnsDft);
     SC3336_SENSOR_GET_CTX(ViPipe, pstSnsState);
@@ -515,17 +515,17 @@ static HI_S32 cmos_get_awb_default(VI_PIPE ViPipe, AWB_SENSOR_DEFAULT_S *pstAwbS
     pstAwbSnsDft->u16SampleRgain = g_au16SampleRgain[ViPipe];
     pstAwbSnsDft->u16SampleBgain = g_au16SampleBgain[ViPipe];
 
-    return HI_SUCCESS;
+    return GK_SUCCESS;
 }
 
-static HI_S32 cmos_init_awb_exp_function(AWB_SENSOR_EXP_FUNC_S *pstExpFuncs)
+static GK_S32 cmos_init_awb_exp_function(AWB_SENSOR_EXP_FUNC_S *pstExpFuncs)
 {
     CMOS_CHECK_POINTER(pstExpFuncs);
 
     memset(pstExpFuncs, 0, sizeof(AWB_SENSOR_EXP_FUNC_S));
     pstExpFuncs->pfn_cmos_get_awb_default = cmos_get_awb_default;
 
-    return HI_SUCCESS;
+    return GK_SUCCESS;
 }
 
 static ISP_CMOS_DNG_COLORPARAM_S g_stDngColorParam = {
@@ -533,9 +533,9 @@ static ISP_CMOS_DNG_COLORPARAM_S g_stDngColorParam = {
     {439, 256, 439}
 };
 
-static HI_S32 cmos_get_isp_default(VI_PIPE ViPipe, ISP_CMOS_DEFAULT_S *pstDef)
+static GK_S32 cmos_get_isp_default(VI_PIPE ViPipe, ISP_CMOS_DEFAULT_S *pstDef)
 {
-    ISP_SNS_STATE_S *pstSnsState = HI_NULL;
+    ISP_SNS_STATE_S *pstSnsState = GK_NULL;
 
     CMOS_CHECK_POINTER(pstDef);
     SC3336_SENSOR_GET_CTX(ViPipe, pstSnsState);
@@ -612,35 +612,35 @@ static HI_S32 cmos_get_isp_default(VI_PIPE ViPipe, ISP_CMOS_DEFAULT_S *pstDef)
     pstDef->stSensorMode.stDngRawFormat.au8CfaPattern[1] = 1;
     pstDef->stSensorMode.stDngRawFormat.au8CfaPattern[2] = 1;
     pstDef->stSensorMode.stDngRawFormat.au8CfaPattern[3] = 2;
-    pstDef->stSensorMode.bValidDngRawFormat = HI_TRUE;
+    pstDef->stSensorMode.bValidDngRawFormat = GK_TRUE;
 
-    return HI_SUCCESS;
+    return GK_SUCCESS;
 }
 
 
-static HI_S32 cmos_get_isp_black_level(VI_PIPE ViPipe, ISP_CMOS_BLACK_LEVEL_S *pstBlackLevel)
+static GK_S32 cmos_get_isp_black_level(VI_PIPE ViPipe, ISP_CMOS_BLACK_LEVEL_S *pstBlackLevel)
 {
-    ISP_SNS_STATE_S *pstSnsState = HI_NULL;
+    ISP_SNS_STATE_S *pstSnsState = GK_NULL;
 
     CMOS_CHECK_POINTER(pstBlackLevel);
     SC3336_SENSOR_GET_CTX(ViPipe, pstSnsState);
     CMOS_CHECK_POINTER(pstSnsState);
 
     /* Don't need to update black level when iso change */
-    pstBlackLevel->bUpdate = HI_FALSE;
+    pstBlackLevel->bUpdate = GK_FALSE;
     pstBlackLevel->au16BlackLevel[0] = 0x104;
     pstBlackLevel->au16BlackLevel[1] = 0x104;
     pstBlackLevel->au16BlackLevel[2] = 0x104;
     pstBlackLevel->au16BlackLevel[3] = 0x104;
 
-    return HI_SUCCESS;
+    return GK_SUCCESS;
 
 }
 
-static HI_VOID cmos_set_pixel_detect(VI_PIPE ViPipe, HI_BOOL bEnable)
+static GK_VOID cmos_set_pixel_detect(VI_PIPE ViPipe, GK_BOOL bEnable)
 {
-    HI_U32 u32FullLines_5Fps, u32MaxIntTime_5Fps;
-    ISP_SNS_STATE_S *pstSnsState = HI_NULL;
+    GK_U32 u32FullLines_5Fps, u32MaxIntTime_5Fps;
+    ISP_SNS_STATE_S *pstSnsState = GK_NULL;
 
     SC3336_SENSOR_GET_CTX(ViPipe, pstSnsState);
     CMOS_CHECK_POINTER_VOID(pstSnsState);
@@ -664,20 +664,20 @@ static HI_VOID cmos_set_pixel_detect(VI_PIPE ViPipe, HI_BOOL bEnable)
         pstSnsState->au32FL[0] = pstSnsState->u32FLStd;
         smartsens_write_register(ViPipe, SC3336_VMAX_H_ADDR, HIGH_8BITS(pstSnsState->u32FLStd >> 1));	/* Standard FPS */
         smartsens_write_register(ViPipe, SC3336_VMAX_L_ADDR, LOW_8BITS(pstSnsState->u32FLStd >> 1));	/* Standard FPS */
-        pstSnsState->bSyncInit = HI_FALSE;
+        pstSnsState->bSyncInit = GK_FALSE;
     }
 
     return;
 }
 
-static HI_S32 cmos_set_wdr_mode(VI_PIPE ViPipe, HI_U8 u8Mode)
+static GK_S32 cmos_set_wdr_mode(VI_PIPE ViPipe, GK_U8 u8Mode)
 {
-    ISP_SNS_STATE_S *pstSnsState = HI_NULL;
+    ISP_SNS_STATE_S *pstSnsState = GK_NULL;
 
     SC3336_SENSOR_GET_CTX(ViPipe, pstSnsState);
     CMOS_CHECK_POINTER(pstSnsState);
 
-    pstSnsState->bSyncInit = HI_FALSE;
+    pstSnsState->bSyncInit = GK_FALSE;
 
     switch (u8Mode) {
         case WDR_MODE_NONE:
@@ -685,32 +685,32 @@ static HI_S32 cmos_set_wdr_mode(VI_PIPE ViPipe, HI_U8 u8Mode)
             printf("linear mode\n");
             break;
         default:
-            ISP_TRACE(HI_DBG_ERR, "cmos_set_wdr_mode_NOT support this mode!\n");
-            return HI_FAILURE;
+            ISP_TRACE(MODULE_DBG_ERR, "cmos_set_wdr_mode_NOT support this mode!\n");
+            return GK_FAILURE;
     }
 
     memset(pstSnsState->au32WDRIntTime, 0, sizeof(pstSnsState->au32WDRIntTime));
 
-    return HI_SUCCESS;
+    return GK_SUCCESS;
 }
 
-static HI_S32 cmos_get_sns_regs_info(VI_PIPE ViPipe, ISP_SNS_REGS_INFO_S *pstSnsRegsInfo)
+static GK_S32 cmos_get_sns_regs_info(VI_PIPE ViPipe, ISP_SNS_REGS_INFO_S *pstSnsRegsInfo)
 {
-    HI_S32 i;
-    ISP_SNS_STATE_S *pstSnsState = HI_NULL;
+    GK_S32 i;
+    ISP_SNS_STATE_S *pstSnsState = GK_NULL;
 
     CMOS_CHECK_POINTER(pstSnsRegsInfo);
     SC3336_SENSOR_GET_CTX(ViPipe, pstSnsState);
     CMOS_CHECK_POINTER(pstSnsState);
 
-    if ((pstSnsState->bSyncInit == HI_FALSE) || (pstSnsRegsInfo->bConfig == HI_FALSE)) {
+    if ((pstSnsState->bSyncInit == GK_FALSE) || (pstSnsRegsInfo->bConfig == GK_FALSE)) {
         pstSnsState->astRegsInfo[0].enSnsType = ISP_SNS_I2C_TYPE;
         pstSnsState->astRegsInfo[0].unComBus.s8I2cDev = g_aunSc3336BusInfo[ViPipe].s8I2cDev;
         pstSnsState->astRegsInfo[0].u8Cfg2ValidDelayMax = 2;
         pstSnsState->astRegsInfo[0].u32RegNum = 9;
 
         for (i = 0; i < pstSnsState->astRegsInfo[0].u32RegNum; i++) {
-            pstSnsState->astRegsInfo[0].astI2cData[i].bUpdate = HI_TRUE;
+            pstSnsState->astRegsInfo[0].astI2cData[i].bUpdate = GK_TRUE;
             pstSnsState->astRegsInfo[0].astI2cData[i].u8DevAddr = smartsens_i2c_addr;
             pstSnsState->astRegsInfo[0].astI2cData[i].u32AddrByteNum = smartsens_addr_byte;
             pstSnsState->astRegsInfo[0].astI2cData[i].u32DataByteNum = smartsens_data_byte;
@@ -749,46 +749,46 @@ static HI_S32 cmos_get_sns_regs_info(VI_PIPE ViPipe, ISP_SNS_REGS_INFO_S *pstSns
         // pstSnsState->astRegsInfo[0].astI2cData[15].u32RegAddr  = 0x5799;
         // pstSnsState->astRegsInfo[0].astI2cData[16].u8DelayFrmNum  = 1;
         // pstSnsState->astRegsInfo[0].astI2cData[16].u32RegAddr  = 0x3812;
-        pstSnsState->bSyncInit = HI_TRUE;
+        pstSnsState->bSyncInit = GK_TRUE;
     } else {
         for (i = 0; i < pstSnsState->astRegsInfo[0].u32RegNum; i++) {
             if (pstSnsState->astRegsInfo[0].astI2cData[i].u32Data == pstSnsState->astRegsInfo[1].astI2cData[i].u32Data) {
-                pstSnsState->astRegsInfo[0].astI2cData[i].bUpdate = HI_FALSE;
+                pstSnsState->astRegsInfo[0].astI2cData[i].bUpdate = GK_FALSE;
             } else {
 
-                pstSnsState->astRegsInfo[0].astI2cData[i].bUpdate = HI_TRUE;
+                pstSnsState->astRegsInfo[0].astI2cData[i].bUpdate = GK_TRUE;
             }
         }
-		// if ( HI_TRUE == (pstSnsState->astRegsInfo[0].astI2cData[10].bUpdate || pstSnsState->astRegsInfo[0].astI2cData[11].bUpdate || pstSnsState->astRegsInfo[0].astI2cData[15].bUpdate)) {
-            // pstSnsState->astRegsInfo[0].astI2cData[9].bUpdate  = HI_TRUE;
-            // pstSnsState->astRegsInfo[0].astI2cData[16].bUpdate = HI_TRUE;
+		// if ( GK_TRUE == (pstSnsState->astRegsInfo[0].astI2cData[10].bUpdate || pstSnsState->astRegsInfo[0].astI2cData[11].bUpdate || pstSnsState->astRegsInfo[0].astI2cData[15].bUpdate)) {
+            // pstSnsState->astRegsInfo[0].astI2cData[9].bUpdate  = GK_TRUE;
+            // pstSnsState->astRegsInfo[0].astI2cData[16].bUpdate = GK_TRUE;
 			// printf("R5787 = 0x%x, R5799 = 0x%x\n", pstSnsState->astRegsInfo[0].astI2cData[11].u32Data, pstSnsState->astRegsInfo[0].astI2cData[15].u32Data);
         // } else {
-            // pstSnsState->astRegsInfo[0].astI2cData[9].bUpdate  = HI_FALSE;
-            // pstSnsState->astRegsInfo[0].astI2cData[16].bUpdate = HI_FALSE;
+            // pstSnsState->astRegsInfo[0].astI2cData[9].bUpdate  = GK_FALSE;
+            // pstSnsState->astRegsInfo[0].astI2cData[16].bUpdate = GK_FALSE;
         // }
     }
 
-    pstSnsRegsInfo->bConfig = HI_FALSE;
+    pstSnsRegsInfo->bConfig = GK_FALSE;
     memcpy(pstSnsRegsInfo, &pstSnsState->astRegsInfo[0], sizeof(ISP_SNS_REGS_INFO_S));
     memcpy(&pstSnsState->astRegsInfo[1], &pstSnsState->astRegsInfo[0], sizeof(ISP_SNS_REGS_INFO_S));
 
     pstSnsState->au32FL[1] = pstSnsState->au32FL[0];
 
-    return HI_SUCCESS;
+    return GK_SUCCESS;
 }
 
-static HI_S32 cmos_set_image_mode(VI_PIPE ViPipe, ISP_CMOS_SENSOR_IMAGE_MODE_S *pstSensorImageMode)
+static GK_S32 cmos_set_image_mode(VI_PIPE ViPipe, ISP_CMOS_SENSOR_IMAGE_MODE_S *pstSensorImageMode)
 {
-    HI_U8 u8SensorImageMode = 0;
-    ISP_SNS_STATE_S *pstSnsState = HI_NULL;
+    GK_U8 u8SensorImageMode = 0;
+    ISP_SNS_STATE_S *pstSnsState = GK_NULL;
 
     CMOS_CHECK_POINTER(pstSensorImageMode);
     SC3336_SENSOR_GET_CTX(ViPipe, pstSnsState);
     CMOS_CHECK_POINTER(pstSnsState);
 
     u8SensorImageMode = pstSnsState->u8ImgMode;
-    pstSnsState->bSyncInit = HI_FALSE;
+    pstSnsState->bSyncInit = GK_FALSE;
 
     if (pstSensorImageMode->f32Fps <= 20) {
         if (pstSnsState->enWDRMode == WDR_MODE_NONE) {
@@ -796,24 +796,24 @@ static HI_S32 cmos_set_image_mode(VI_PIPE ViPipe, ISP_CMOS_SENSOR_IMAGE_MODE_S *
                 u8SensorImageMode     = SC3336_SENSOR_1296P_30FPS_LINEAR_MODE;
                 pstSnsState->u32FLStd = SC3336_VMAX_1296P30_LINEAR;
             } else {
-                ISP_TRACE(HI_DBG_ERR, "Not support! Width:%d, Height:%d, Fps:%f, WDRMode:%d\n",
+                ISP_TRACE(MODULE_DBG_ERR, "Not support! Width:%d, Height:%d, Fps:%f, WDRMode:%d\n",
                           pstSensorImageMode->u16Width,
                           pstSensorImageMode->u16Height,
                           pstSensorImageMode->f32Fps,
                           pstSnsState->enWDRMode);
-                return HI_FAILURE;
+                return GK_FAILURE;
             }
         } else {
-            ISP_TRACE(HI_DBG_ERR, "Not support! Width:%d, Height:%d, Fps:%f, WDRMode:%d\n",
+            ISP_TRACE(MODULE_DBG_ERR, "Not support! Width:%d, Height:%d, Fps:%f, WDRMode:%d\n",
                       pstSensorImageMode->u16Width,
                       pstSensorImageMode->u16Height,
                       pstSensorImageMode->f32Fps,
                       pstSnsState->enWDRMode);
-            return HI_FAILURE;
+            return GK_FAILURE;
         }
     } else {}
 
-    if ((pstSnsState->bInit == HI_TRUE) && (u8SensorImageMode == pstSnsState->u8ImgMode)) {
+    if ((pstSnsState->bInit == GK_TRUE) && (u8SensorImageMode == pstSnsState->u8ImgMode)) {
         /* Don't need to switch SensorImageMode */
         return ISP_DO_NOT_NEED_SWITCH_IMAGEMODE;
     }
@@ -822,18 +822,18 @@ static HI_S32 cmos_set_image_mode(VI_PIPE ViPipe, ISP_CMOS_SENSOR_IMAGE_MODE_S *
     pstSnsState->au32FL[0] = pstSnsState->u32FLStd;
     pstSnsState->au32FL[1] = pstSnsState->au32FL[0];
 
-    return HI_SUCCESS;
+    return GK_SUCCESS;
 }
 
-static HI_VOID sensor_global_init(VI_PIPE ViPipe)
+static GK_VOID sensor_global_init(VI_PIPE ViPipe)
 {
-    ISP_SNS_STATE_S *pstSnsState = HI_NULL;
+    ISP_SNS_STATE_S *pstSnsState = GK_NULL;
 
     SC3336_SENSOR_GET_CTX(ViPipe, pstSnsState);
     CMOS_CHECK_POINTER_VOID(pstSnsState);
 
-    pstSnsState->bInit     = HI_FALSE;
-    pstSnsState->bSyncInit = HI_FALSE;
+    pstSnsState->bInit     = GK_FALSE;
+    pstSnsState->bSyncInit = GK_FALSE;
     pstSnsState->u8ImgMode = SC3336_SENSOR_1296P_30FPS_LINEAR_MODE;
     pstSnsState->enWDRMode = WDR_MODE_NONE;
     pstSnsState->u32FLStd  = SC3336_VMAX_1296P30_LINEAR;
@@ -861,7 +861,7 @@ static HI_VOID sensor_global_init(VI_PIPE ViPipe)
     // pstSnsState->astRegsInfo[0].astI2cData[16].u32Data = 0x30;
 }
 
-static HI_S32 cmos_init_sensor_exp_function(ISP_SENSOR_EXP_FUNC_S *pstSensorExpFunc)
+static GK_S32 cmos_init_sensor_exp_function(ISP_SENSOR_EXP_FUNC_S *pstSensorExpFunc)
 {
     CMOS_CHECK_POINTER(pstSensorExpFunc);
 
@@ -878,31 +878,31 @@ static HI_S32 cmos_init_sensor_exp_function(ISP_SENSOR_EXP_FUNC_S *pstSensorExpF
     pstSensorExpFunc->pfn_cmos_set_pixel_detect = cmos_set_pixel_detect;
     pstSensorExpFunc->pfn_cmos_get_sns_reg_info = cmos_get_sns_regs_info;
 
-    return HI_SUCCESS;
+    return GK_SUCCESS;
 }
 
 /****************************************************************************
  * callback structure                                                       *
  ****************************************************************************/
 
-static HI_S32 sensor_set_bus_info(VI_PIPE ViPipe, ISP_SNS_COMMBUS_U unSNSBusInfo)
+static GK_S32 sensor_set_bus_info(VI_PIPE ViPipe, ISP_SNS_COMMBUS_U unSNSBusInfo)
 {
     g_aunSc3336BusInfo[ViPipe].s8I2cDev = unSNSBusInfo.s8I2cDev;
 
-    return HI_SUCCESS;
+    return GK_SUCCESS;
 }
 
-static HI_S32 sensor_ctx_init(VI_PIPE ViPipe)
+static GK_S32 sensor_ctx_init(VI_PIPE ViPipe)
 {
-    ISP_SNS_STATE_S *pastSnsStateCtx = HI_NULL;
+    ISP_SNS_STATE_S *pastSnsStateCtx = GK_NULL;
 
     SC3336_SENSOR_GET_CTX(ViPipe, pastSnsStateCtx);
 
-    if (pastSnsStateCtx == HI_NULL) {
+    if (pastSnsStateCtx == GK_NULL) {
         pastSnsStateCtx = (ISP_SNS_STATE_S *)malloc(sizeof(ISP_SNS_STATE_S));
-        if (pastSnsStateCtx == HI_NULL) {
-            ISP_TRACE(HI_DBG_ERR, "Isp[%d] SnsCtx malloc memory failed!\n", ViPipe);
-            return HI_ERR_ISP_NOMEM;
+        if (pastSnsStateCtx == GK_NULL) {
+            ISP_TRACE(MODULE_DBG_ERR, "Isp[%d] SnsCtx malloc memory failed!\n", ViPipe);
+            return ERR_ISP_NOMEM;
         }
     }
 
@@ -910,21 +910,21 @@ static HI_S32 sensor_ctx_init(VI_PIPE ViPipe)
 
     SC3336_SENSOR_SET_CTX(ViPipe, pastSnsStateCtx);
 
-    return HI_SUCCESS;
+    return GK_SUCCESS;
 }
 
-static HI_VOID sensor_ctx_exit(VI_PIPE ViPipe)
+static GK_VOID sensor_ctx_exit(VI_PIPE ViPipe)
 {
-    ISP_SNS_STATE_S *pastSnsStateCtx = HI_NULL;
+    ISP_SNS_STATE_S *pastSnsStateCtx = GK_NULL;
 
     SC3336_SENSOR_GET_CTX(ViPipe, pastSnsStateCtx);
     SENSOR_FREE(pastSnsStateCtx);
     SC3336_SENSOR_RESET_CTX(ViPipe);
 }
 
-static HI_S32 sensor_register_callback(VI_PIPE ViPipe, ALG_LIB_S *pstAeLib, ALG_LIB_S *pstAwbLib)
+static GK_S32 sensor_register_callback(VI_PIPE ViPipe, ALG_LIB_S *pstAeLib, ALG_LIB_S *pstAwbLib)
 {
-    HI_S32 s32Ret;
+    GK_S32 s32Ret;
 
     ISP_SENSOR_REGISTER_S stIspRegister;
     AE_SENSOR_REGISTER_S  stAeRegister;
@@ -936,70 +936,70 @@ static HI_S32 sensor_register_callback(VI_PIPE ViPipe, ALG_LIB_S *pstAeLib, ALG_
 
     s32Ret = sensor_ctx_init(ViPipe);
 
-    if (s32Ret != HI_SUCCESS) {
-        return HI_FAILURE;
+    if (s32Ret != GK_SUCCESS) {
+        return GK_FAILURE;
     }
 
     stSnsAttrInfo.eSensorId = SC3336_ID;
 
     s32Ret  = cmos_init_sensor_exp_function(&stIspRegister.stSnsExp);
-    s32Ret |= HI_MPI_ISP_SensorRegCallBack(ViPipe, &stSnsAttrInfo, &stIspRegister);
+    s32Ret |= GK_API_ISP_SensorRegCallBack(ViPipe, &stSnsAttrInfo, &stIspRegister);
 
-    if (s32Ret != HI_SUCCESS) {
-        ISP_TRACE(HI_DBG_ERR, "sensor register callback function failed!\n");
+    if (s32Ret != GK_SUCCESS) {
+        ISP_TRACE(MODULE_DBG_ERR, "sensor register callback function failed!\n");
         return s32Ret;
     }
 
     s32Ret  = cmos_init_ae_exp_function(&stAeRegister.stSnsExp);
-    s32Ret |= HI_MPI_AE_SensorRegCallBack(ViPipe, pstAeLib, &stSnsAttrInfo, &stAeRegister);
+    s32Ret |= GK_API_AE_SensorRegCallBack(ViPipe, pstAeLib, &stSnsAttrInfo, &stAeRegister);
 
-    if (s32Ret != HI_SUCCESS) {
-        ISP_TRACE(HI_DBG_ERR, "sensor register callback function to ae lib failed!\n");
+    if (s32Ret != GK_SUCCESS) {
+        ISP_TRACE(MODULE_DBG_ERR, "sensor register callback function to ae lib failed!\n");
         return s32Ret;
     }
 
     s32Ret  = cmos_init_awb_exp_function(&stAwbRegister.stSnsExp);
-    s32Ret |= HI_MPI_AWB_SensorRegCallBack(ViPipe, pstAwbLib, &stSnsAttrInfo, &stAwbRegister);
+    s32Ret |= GK_API_AWB_SensorRegCallBack(ViPipe, pstAwbLib, &stSnsAttrInfo, &stAwbRegister);
 
-    if (s32Ret != HI_SUCCESS) {
-        ISP_TRACE(HI_DBG_ERR, "sensor register callback function to awb lib failed!\n");
+    if (s32Ret != GK_SUCCESS) {
+        ISP_TRACE(MODULE_DBG_ERR, "sensor register callback function to awb lib failed!\n");
         return s32Ret;
     }
 
-    return HI_SUCCESS;
+    return GK_SUCCESS;
 }
 
-static HI_S32 sensor_unregister_callback(VI_PIPE ViPipe, ALG_LIB_S *pstAeLib, ALG_LIB_S *pstAwbLib)
+static GK_S32 sensor_unregister_callback(VI_PIPE ViPipe, ALG_LIB_S *pstAeLib, ALG_LIB_S *pstAwbLib)
 {
-    HI_S32 s32Ret;
+    GK_S32 s32Ret;
 
     CMOS_CHECK_POINTER(pstAeLib);
     CMOS_CHECK_POINTER(pstAwbLib);
 
-    s32Ret = HI_MPI_ISP_SensorUnRegCallBack(ViPipe, SC3336_ID);
-    if (s32Ret != HI_SUCCESS) {
-        ISP_TRACE(HI_DBG_ERR, "sensor unregister callback function failed!\n");
+    s32Ret = GK_API_ISP_SensorUnRegCallBack(ViPipe, SC3336_ID);
+    if (s32Ret != GK_SUCCESS) {
+        ISP_TRACE(MODULE_DBG_ERR, "sensor unregister callback function failed!\n");
         return s32Ret;
     }
 
-    s32Ret = HI_MPI_AE_SensorUnRegCallBack(ViPipe, pstAeLib, SC3336_ID);
-    if (s32Ret != HI_SUCCESS) {
-        ISP_TRACE(HI_DBG_ERR, "sensor unregister callback function to ae lib failed!\n");
+    s32Ret = GK_API_AE_SensorUnRegCallBack(ViPipe, pstAeLib, SC3336_ID);
+    if (s32Ret != GK_SUCCESS) {
+        ISP_TRACE(MODULE_DBG_ERR, "sensor unregister callback function to ae lib failed!\n");
         return s32Ret;
     }
 
-    s32Ret = HI_MPI_AWB_SensorUnRegCallBack(ViPipe, pstAwbLib, SC3336_ID);
-    if (s32Ret != HI_SUCCESS) {
-        ISP_TRACE(HI_DBG_ERR, "sensor unregister callback function to awb lib failed!\n");
+    s32Ret = GK_API_AWB_SensorUnRegCallBack(ViPipe, pstAwbLib, SC3336_ID);
+    if (s32Ret != GK_SUCCESS) {
+        ISP_TRACE(MODULE_DBG_ERR, "sensor unregister callback function to awb lib failed!\n");
         return s32Ret;
     }
 
     sensor_ctx_exit(ViPipe);
 
-    return HI_SUCCESS;
+    return GK_SUCCESS;
 }
 
-static HI_S32 sensor_set_init(VI_PIPE ViPipe, ISP_INIT_ATTR_S *pstInitAttr)
+static GK_S32 sensor_set_init(VI_PIPE ViPipe, ISP_INIT_ATTR_S *pstInitAttr)
 {
     CMOS_CHECK_POINTER(pstInitAttr);
 
@@ -1011,7 +1011,7 @@ static HI_S32 sensor_set_init(VI_PIPE ViPipe, ISP_INIT_ATTR_S *pstInitAttr)
     g_au16SampleRgain[ViPipe]   = pstInitAttr->u16SampleRgain;
     g_au16SampleBgain[ViPipe]   = pstInitAttr->u16SampleBgain;
 
-    return HI_SUCCESS;
+    return GK_SUCCESS;
 }
 
 ISP_SNS_OBJ_S stSnsSmartsensObj = {
@@ -1019,7 +1019,7 @@ ISP_SNS_OBJ_S stSnsSmartsensObj = {
     .pfnUnRegisterCallback  = sensor_unregister_callback,
     .pfnStandby             = smartsens_standby,
     .pfnRestart             = smartsens_restart,
-    .pfnMirrorFlip          = HI_NULL,
+    .pfnMirrorFlip          = GK_NULL,
     .pfnWriteReg            = smartsens_write_register,
     .pfnReadReg             = smartsens_read_register,
     .pfnSetBusInfo          = sensor_set_bus_info,

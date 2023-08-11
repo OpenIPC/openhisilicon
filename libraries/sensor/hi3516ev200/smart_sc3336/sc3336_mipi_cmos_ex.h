@@ -43,7 +43,7 @@ static const ISP_CMOS_LCAC_S g_stIspLCac = {
     {
         //u8DePurpleCrStr
     	{0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0},
-        //u8DePurpleCbStr    	
+        //u8DePurpleCbStr
     	{3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3}
     }
 };
