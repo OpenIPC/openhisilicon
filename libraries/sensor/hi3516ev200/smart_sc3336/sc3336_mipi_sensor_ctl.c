@@ -26,16 +26,10 @@
 #include "comm_video.h"
 #include "sns_ctrl.h"
 
-#ifdef HI_GPIO_I2C
+#ifdef GPIO_I2C
 #include "gpioi2c_ex.h"
 #else
-#ifdef __HuaweiLite__
 #include "i2c.h"
-#else
-#include "hi_i2c.h"
-#endif
-
-
 #endif
 
 #define LOSCFG_HOST_TYPE_HIBVT
@@ -54,18 +48,18 @@ extern ISP_SNS_COMMBUS_U      g_aunSc3336BusInfo[];
 int smartsens_i2c_init(VI_PIPE ViPipe)
 {
     char acDevFile[16] = {0};
-    HI_U8 u8DevNum;
+    GK_U8 u8DevNum;
 
     if (g_fd[ViPipe] >= 0) {
-        return HI_SUCCESS;
+        return GK_SUCCESS;
     }
-#ifdef HI_GPIO_I2C
+#ifdef GPIO_I2C
     int ret;
 
     g_fd[ViPipe] = open("/dev/gpioi2c_ex", O_RDONLY, S_IRUSR);
     if (g_fd[ViPipe] < 0) {
-        ISP_TRACE(HI_DBG_ERR, "Open gpioi2c_ex error!\n");
-        return HI_FAILURE;
+        ISP_TRACE(MODULE_DBG_ERR, "Open gpioi2c_ex error!\n");
+        return GK_FAILURE;
     }
 #else
     int ret;
@@ -76,20 +70,20 @@ int smartsens_i2c_init(VI_PIPE ViPipe)
     g_fd[ViPipe] = open(acDevFile, O_RDWR, S_IRUSR | S_IWUSR);
 
     if (g_fd[ViPipe] < 0) {
-        ISP_TRACE(HI_DBG_ERR, "Open /dev/hi_i2c_drv-%u error!\n", u8DevNum);
-        return HI_FAILURE;
+        ISP_TRACE(MODULE_DBG_ERR, "Open /dev/hi_i2c_drv-%u error!\n", u8DevNum);
+        return GK_FAILURE;
     }
 
     ret = ioctl(g_fd[ViPipe], I2C_SLAVE_FORCE, (smartsens_i2c_addr >> 1));
     if (ret < 0) {
-        ISP_TRACE(HI_DBG_ERR, "I2C_SLAVE_FORCE error!\n");
+        ISP_TRACE(MODULE_DBG_ERR, "I2C_SLAVE_FORCE error!\n");
         close(g_fd[ViPipe]);
         g_fd[ViPipe] = -1;
         return ret;
     }
 #endif
 
-    return HI_SUCCESS;
+    return GK_SUCCESS;
 }
 
 int smartsens_i2c_exit(VI_PIPE ViPipe)
@@ -97,9 +91,9 @@ int smartsens_i2c_exit(VI_PIPE ViPipe)
     if (g_fd[ViPipe] >= 0) {
         close(g_fd[ViPipe]);
         g_fd[ViPipe] = -1;
-        return HI_SUCCESS;
+        return GK_SUCCESS;
     }
-    return HI_FAILURE;
+    return GK_FAILURE;
 }
 
 struct i2c_rdwr_ioctl_data {
@@ -107,21 +101,21 @@ struct i2c_rdwr_ioctl_data {
 	unsigned int nmsgs;
 };
 
-int smartsens_read_register(VI_PIPE ViPipe, HI_U32 addr)
+int smartsens_read_register(VI_PIPE ViPipe, GK_U32 addr)
 {
-    HI_S32 s32RegVal = 0;
+    GK_S32 s32RegVal = 0;
     if (g_fd[ViPipe] < 0) {
-        ISP_TRACE(HI_DBG_ERR, "smartsens_read_register fd not opened!\n");
-        return HI_FAILURE;
+        ISP_TRACE(MODULE_DBG_ERR, "smartsens_read_register fd not opened!\n");
+        return GK_FAILURE;
     }
 
-    HI_S32 s32Ret = 0;
-    HI_U32 u32RegWidth = smartsens_addr_byte;
-    HI_U32 u32DataWidth = smartsens_data_byte;
-    HI_U8 aRecvbuf[4];
+    GK_S32 s32Ret = 0;
+    GK_U32 u32RegWidth = smartsens_addr_byte;
+    GK_U32 u32DataWidth = smartsens_data_byte;
+    GK_U8 aRecvbuf[4];
 
 #ifdef LOSCFG_HOST_TYPE_HIBVT
-    HI_U32 u32SnsI2cAddr = (smartsens_i2c_addr >> 1);
+    GK_U32 u32SnsI2cAddr = (smartsens_i2c_addr >> 1);
     struct i2c_rdwr_ioctl_data stRdwr;
     struct i2c_msg astMsg[2];
     memset(&stRdwr, 0x0, sizeof(stRdwr));
@@ -164,7 +158,7 @@ int smartsens_read_register(VI_PIPE ViPipe, HI_U32 addr)
 #endif
 
     if (s32Ret < 0) {
-        return HI_FAILURE;
+        return GK_FAILURE;
     }
 
     if (u32DataWidth == 2) {
@@ -177,13 +171,13 @@ int smartsens_read_register(VI_PIPE ViPipe, HI_U32 addr)
 }
 
 
-int smartsens_write_register(VI_PIPE ViPipe, HI_U32 addr, HI_U32 data)
+int smartsens_write_register(VI_PIPE ViPipe, GK_U32 addr, GK_U32 data)
 {
     if (g_fd[ViPipe] < 0) {
-        return HI_SUCCESS;
+        return GK_SUCCESS;
     }
 
-#ifdef HI_GPIO_I2C
+#ifdef GPIO_I2C
     i2c_data.dev_addr = smartsens_i2c_addr;
     i2c_data.reg_addr = addr;
     i2c_data.addr_byte_num = smartsens_addr_byte;
@@ -193,7 +187,7 @@ int smartsens_write_register(VI_PIPE ViPipe, HI_U32 addr, HI_U32 data)
     ret = ioctl(g_fd[ViPipe], GPIO_I2C_WRITE, &i2c_data);
 
     if (ret) {
-        ISP_TRACE(HI_DBG_ERR, "GPIO-I2C write faild!\n");
+        ISP_TRACE(MODULE_DBG_ERR, "GPIO-I2C write faild!\n");
         return ret;
     }
 #else
@@ -217,12 +211,12 @@ int smartsens_write_register(VI_PIPE ViPipe, HI_U32 addr, HI_U32 data)
 
     ret = write(g_fd[ViPipe], buf, smartsens_addr_byte + smartsens_data_byte);
     if (ret < 0) {
-        ISP_TRACE(HI_DBG_ERR, "I2C_WRITE error!\n");
-        return HI_FAILURE;
+        ISP_TRACE(MODULE_DBG_ERR, "I2C_WRITE error!\n");
+        return GK_FAILURE;
     }
 
 #endif
-    return HI_SUCCESS;
+    return GK_SUCCESS;
 }
 
 void smartsens_standby(VI_PIPE ViPipe)
@@ -247,7 +241,7 @@ void smartsens_linear_1296p30_init(VI_PIPE ViPipe);
 
 void smartsens_init(VI_PIPE ViPipe)
 {
-    HI_U32           i;
+    GK_U32           i;
 
     smartsens_i2c_init(ViPipe);
 
@@ -257,7 +251,7 @@ void smartsens_init(VI_PIPE ViPipe)
         smartsens_write_register(ViPipe, g_pastSc3336[ViPipe]->astRegsInfo[0].astI2cData[i].u32RegAddr, g_pastSc3336[ViPipe]->astRegsInfo[0].astI2cData[i].u32Data);
     }
 
-    g_pastSc3336[ViPipe]->bInit = HI_TRUE;
+    g_pastSc3336[ViPipe]->bInit = GK_TRUE;
 
     return;
 }
