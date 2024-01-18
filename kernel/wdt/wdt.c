@@ -91,7 +91,7 @@ static void dog_set_timeout(unsigned int nr)
 	if (nr == 0 || nr > cnt)
 		cnt = ~0x0;
 	else
-		cnt = nr * rate;
+		cnt = nr * rate / 2;
 	/* unlock watchdog registers */
 	wdt_writel(WDT_UNLOCK_VAL, WDT_LOCK);
 	wdt_writel(cnt, WDT_LOAD);
@@ -240,7 +240,7 @@ static int dog_release(void *private_data)
      */
 	//    if (nowayout == 0) {
 	//cur_margin = default_margin;
-	dog_state = DOG_SELFCLR;
+	dog_state = DOG_EXIT;
 	dog_set_heartbeat(cur_margin);
 	//osal_module_put(&__this_module);
 	//    } else {
