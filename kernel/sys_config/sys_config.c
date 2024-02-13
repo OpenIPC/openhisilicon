@@ -769,7 +769,7 @@ int pinmux(const char *chip_name, const char *board, const int cmos_yuv_flag)
 			}
 
 			/*audio*/
-			amp_unmute_mux_gk7205v200_demo();
+			// amp_unmute_mux_gk7205v200_demo();
 		} else if (0 == strncmp("sck", board, BOARD_NAME_LEN)) {
 			i2c0_for_mipi_sensor_pin_mux_gk7205v200();
 			sensor_cfg_for_mipi_sensor_mux();
@@ -782,7 +782,7 @@ int pinmux(const char *chip_name, const char *board, const int cmos_yuv_flag)
 			//vo_8bit_lcd_for_sckb_mux_gk7205v200();
 
 			/*audio*/
-			amp_unmute_mux_gk7205v200_demo();
+			// amp_unmute_mux_gk7205v200_demo();
 			//aic31_reset_gk7205v200_sck();
 			//i2c1_for_aic31_pin_mux_gk7205v200();
 			//i2s0_pin_mux_gk7205v200();
@@ -805,7 +805,7 @@ int pinmux(const char *chip_name, const char *board, const int cmos_yuv_flag)
 			}
 
 			/*audio*/
-			amp_unmute_mux_gk7205v200_demo();
+			// amp_unmute_mux_gk7205v200_demo();
 		} else if (0 == strncmp("sck", board, BOARD_NAME_LEN)) {
 			i2c1_pin_mux();
 			vo_bt1120_mode_mux_gk7205v300();
