@@ -154,10 +154,6 @@ extern int IMX335_read_register(VI_PIPE ViPipe, int addr);
 			pstSensorImageMode->f32Fps, pstSnsState->enWDRMode);      \
 	} while (0)
 
-#ifndef CHIPARCH
-    #error "CHIPARCH is not defined. Please specify CHIPARCH during compilation."
-#endif	
-
 static GK_S32 cmos_get_ae_default(VI_PIPE ViPipe,
 				  AE_SENSOR_DEFAULT_S *pstAeSnsDft)
 {
