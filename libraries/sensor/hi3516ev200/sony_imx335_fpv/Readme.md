@@ -1,11 +1,3 @@
-# OpenHisilicon
-
-Opensource HiSilicon/Goke SoCs SDK
-
-Used by OpenIPC firmware and can be used by your software as well (libraries are MIT and kernel modules are GPL)
-
-## Changes for FPV sensor modes 
-
 # Higher FPS imx335 sensor driver on Goke/Hisilicon SoCs.
 Sensor modes added:
 ### 2592x1520 50fps , slightly cropped vertically to 16:9
@@ -25,3 +17,29 @@ Isp_FrameRate=68 #  # max supported value on hi356ev300 at 1280x720
 
 ### 2592x1944 stock fullscale 30fps mode 
 set Isp_FrameRate=30 to enable this mode
+
+
+# To configure. 
+Copy new driver to camera as ```usr/lib/sensors/libsns_imx335_fpv.so```
+
+Copy imx335_fpv.ini to ```/etc/sensors/imx335_fpv.ini```
+
+in /etc/majestic.yaml set:
+```
+video0:
+  codec: h265
+  rcMode: cbr
+  gopSize: 1.5
+  size: 1920x1080
+  fps: 45
+...
+isp:
+  sensorConfig: /etc/sensors/imx335_fpv.ini
+```
+
+follow instructions in /etc/sensors/imx335_fpv.ini
+
+
+
+### Follow instructions in imx335_fps.ini to set the sensor mode
+All modes will work at fps: 45, some of them can run at higher refresh rate.
