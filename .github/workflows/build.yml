@@ -22,13 +22,12 @@ jobs:
 
     steps:
       - name: Checkout Source
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
 
       - name: Build OpenHisilicon
         run: |
           git clone --depth 1 https://github.com/openipc/firmware ../firmware
           cd ../firmware
           FILE=general/package/hisilicon-opensdk/hisilicon-opensdk.mk
-          sed -i "16i HISILICON_OPENSDK_SITE_METHOD = local" ${FILE}
-          sed -i "17i HISILICON_OPENSDK_SITE = $GITHUB_WORKSPACE" ${FILE}
+          sed -i -z "s|HISILICON_OPENSDK_SITE.*HEAD|HISILICON_OPENSDK_SITE_METHOD = local\nHISILICON_OPENSDK_SITE = $GITHUB_WORKSPACE|g" ${FILE}
           make BOARD=${{matrix.platform}}_lite br-hisilicon-opensdk
