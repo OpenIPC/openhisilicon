@@ -29,6 +29,6 @@ jobs:
           git clone --depth 1 https://github.com/openipc/firmware ../firmware
           cd ../firmware
           FILE=general/package/hisilicon-opensdk/hisilicon-opensdk.mk
-          sed -i "16i HISILICON_OPENSDK_SITE_METHOD = local" ${FILE}
-          sed -i "17i HISILICON_OPENSDK_SITE = $GITHUB_WORKSPACE" ${FILE}
+          sed -i "s/HISILICON_OPENSDK_SITE.*/HISILICON_OPENSDK_SITE_METHOD = local/g" ${FILE}
+          sed -i "s/HISILICON_OPENSDK_VERSION.*/HISILICON_OPENSDK_SITE = $GITHUB_WORKSPACE/g" ${FILE}
           make BOARD=${{matrix.platform}}_lite br-hisilicon-opensdk
