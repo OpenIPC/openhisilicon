@@ -854,7 +854,7 @@ static GK_VOID sensor_mirror_flip(VI_PIPE ViPipe, ISP_SNS_MIRRORFLIP_TYPE_E eSns
         value |= 0;
         FRAME_H_ST = 4;
         FRAME_H_END = 0x3f;
-        FRAME_W_ST = 8;
+        FRAME_W_ST = 9;
         FRAME_W_END = 0x88;
         break;
     case ISP_SNS_MIRROR:
@@ -868,7 +868,7 @@ static GK_VOID sensor_mirror_flip(VI_PIPE ViPipe, ISP_SNS_MIRRORFLIP_TYPE_E eSns
         value |= 0x02;
         FRAME_H_ST = 5;
         FRAME_H_END = 0x40;
-        FRAME_W_ST = 8;
+        FRAME_W_ST = 9;
         FRAME_W_END = 0x88;
         break;
     case ISP_SNS_MIRROR_FLIP:
