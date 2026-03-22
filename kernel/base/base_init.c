@@ -5,6 +5,7 @@
 #include "mod_ext.h"
 
 #include "../../compat/compat.h"
+#include "../../compat/kernel_compat.h"
 
 extern int HI_LOG(GK_S32 s32Level, MOD_ID_E enModId, const char *fmt, ...);
 EXPORT_SYMBOL(HI_LOG);
@@ -60,6 +61,7 @@ static struct ctl_table comm_eproc_table[] = {
 	{}
 };
 
+#ifndef COMPAT_NO_SYSCTL_TABLE
 static struct ctl_table comm_dir_table[] = {
 	{ .procname = "debug", .mode = 0555, .child = comm_eproc_table },
 	{}
@@ -69,12 +71,17 @@ static struct ctl_table comm_parent_tbl[] = {
 	{ .procname = "dev", .mode = 0555, .child = comm_dir_table },
 	{}
 };
+#endif
 
 static struct ctl_table_header *comm_eproc_tbl_head;
 
 int __init COMM_init_proc_ctrl(void)
 {
+#ifdef COMPAT_NO_SYSCTL_TABLE
+	comm_eproc_tbl_head = register_sysctl("dev/debug", comm_eproc_table);
+#else
 	comm_eproc_tbl_head = register_sysctl_table(comm_parent_tbl);
+#endif
 	if (!comm_eproc_tbl_head)
 		return -ENOMEM;
 	return 0;

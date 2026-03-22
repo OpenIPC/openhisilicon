@@ -34,6 +34,8 @@
 #include "osal_mmz.h"
 #include "osal.h"
 
+#include "../../../../compat/kernel_compat.h"
+
 #define error(s...)                                                \
 	do {                                                       \
 		printk(KERN_ERR "mmz_userdev:%s: ", __FUNCTION__); \
@@ -59,7 +61,7 @@ static int mmz_flush_dcache_mmb_dirty(struct dirty_area *p_area)
 	}
 
 #ifdef CONFIG_64BIT
-	__flush_dcache_area(p_area->dirty_virt_start, p_area->dirty_size);
+	compat_flush_dcache_area(p_area->dirty_virt_start, p_area->dirty_size);
 #else
 	/* flush l1 cache, use vir addr */
 	__cpuc_flush_dcache_area(p_area->dirty_virt_start, p_area->dirty_size);
@@ -90,7 +92,7 @@ static int mmz_flush_dcache_mmb(struct mmb_info *pmi)
 	}
 
 #ifdef CONFIG_64BIT
-	__flush_dcache_area(pmi->mapped, (size_t)pmi->size);
+	compat_flush_dcache_area(pmi->mapped, (size_t)pmi->size);
 #else
 	/* flush l1 cache, use vir addr */
 	__cpuc_flush_dcache_area(pmi->mapped, (size_t)pmi->size);
@@ -450,14 +452,14 @@ static int ioctl_mmb_user_unmap(struct file *file, unsigned int iocmd,
 	/* todo,before unmap,refresh cache manually */
 	if (p->map_cached) {
 		struct mm_struct *mm = current->mm;
-		down_read(&mm->mmap_sem);
+		compat_mmap_read_lock(mm);
 		if (mmz_vma_check(addr, addr + len)) {
 			error("mmb<%s> vma is invalid.\n", p->mmb->name);
-			up_read(&mm->mmap_sem);
+			compat_mmap_read_unlock(mm);
 			return -EPERM;
 		}
 #ifdef CONFIG_64BIT
-		__flush_dcache_area((void *)(uintptr_t)addr, (size_t)len);
+		compat_flush_dcache_area((void *)(uintptr_t)addr, (size_t)len);
 #else
 		__cpuc_flush_dcache_area((void *)(uintptr_t)addr, (size_t)len);
 #if defined(CONFIG_CACHE_L2V200) || defined(CONFIG_CACHE_L2X0)
@@ -466,7 +468,7 @@ static int ioctl_mmb_user_unmap(struct file *file, unsigned int iocmd,
 		outer_flush_range(p->phys_addr, p->phys_addr + len);
 #endif
 #endif /* CONFIG_64BIT */
-		up_read(&mm->mmap_sem);
+		compat_mmap_read_unlock(mm);
 	}
 
 	ret = vm_munmap(addr, len);
@@ -700,7 +702,7 @@ static long mmz_userdev_ioctl(struct file *file, unsigned int cmd,
 			goto __error_exit;
 		}
 
-		down_read(&mm->mmap_sem);
+		compat_mmap_read_lock(mm);
 
 		if (mmz_vma_check((uintptr_t)area.dirty_virt_start,
 				  (uintptr_t)area.dirty_virt_start +
@@ -711,7 +713,7 @@ static long mmz_userdev_ioctl(struct file *file, unsigned int cmd,
 			       (unsigned long)(uintptr_t)area.dirty_virt_start +
 				       area.dirty_size);
 			ret = -EFAULT;
-			up_read(&mm->mmap_sem);
+			compat_mmap_read_unlock(mm);
 			goto __error_exit;
 		}
 
@@ -728,7 +730,7 @@ static long mmz_userdev_ioctl(struct file *file, unsigned int cmd,
 			~(CACHE_LINE_SIZE - 1);
 
 		mmz_flush_dcache_mmb_dirty(&area);
-		up_read(&mm->mmap_sem);
+		compat_mmap_read_unlock(mm);
 	} else if (_IOC_TYPE(cmd) == 't') {
 		struct mmb_info mi;
 

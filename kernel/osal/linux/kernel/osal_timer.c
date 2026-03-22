@@ -11,6 +11,8 @@
 #include <linux/rtc.h>
 #include "osal.h"
 
+#include "../../../../compat/kernel_compat.h"
+
 int osal_hrtimer_create(osal_hrtimer_t *phrtimer)
 {
 	return -1;
@@ -23,6 +25,91 @@ int osal_hrtimer_destory(osal_hrtimer_t *phrtimer)
 {
 	return -1;
 }
+
+/*
+ * On kernels 4.15+, timer_setup() replaces init_timer() and the callback
+ * signature changes from void(*)(unsigned long) to void(*)(struct timer_list*).
+ *
+ * We store the OSAL timer in a wrapper struct so the shim callback can
+ * recover the original function pointer and data argument.
+ */
+#ifdef COMPAT_TIMER_SETUP
+
+struct osal_timer_compat {
+	struct timer_list tl;
+	void (*function)(unsigned long);
+	unsigned long data;
+};
+
+static void osal_timer_shim_callback(struct timer_list *t)
+{
+	struct osal_timer_compat *ot =
+		container_of(t, struct osal_timer_compat, tl);
+	if (ot->function)
+		ot->function(ot->data);
+}
+
+int osal_timer_init(osal_timer_t *timer)
+{
+	struct osal_timer_compat *ot = NULL;
+
+	if (timer == NULL) {
+		osal_printk("%s - parameter invalid!\n", __FUNCTION__);
+		return -1;
+	}
+
+	ot = kmalloc(sizeof(struct osal_timer_compat), GFP_KERNEL);
+	if (ot == NULL) {
+		osal_printk("%s - kmalloc error!\n", __FUNCTION__);
+		return -1;
+	}
+
+	memset(ot, 0, sizeof(*ot));
+	timer_setup(&ot->tl, osal_timer_shim_callback, 0);
+	timer->timer = ot;
+	return 0;
+}
+EXPORT_SYMBOL(osal_timer_init);
+
+int osal_set_timer(osal_timer_t *timer, unsigned long interval)
+{
+	struct osal_timer_compat *ot = NULL;
+	if ((timer == NULL) || (timer->timer == NULL) ||
+	    (timer->function == NULL) || (interval == 0)) {
+		osal_printk("%s - parameter invalid!\n", __FUNCTION__);
+		return -1;
+	}
+	ot = timer->timer;
+	ot->function = timer->function;
+	ot->data = timer->data;
+	return mod_timer(&ot->tl, jiffies + msecs_to_jiffies(interval) - 1);
+}
+EXPORT_SYMBOL(osal_set_timer);
+
+int osal_del_timer(osal_timer_t *timer)
+{
+	struct osal_timer_compat *ot = NULL;
+	if ((timer == NULL) || (timer->timer == NULL) ||
+	    (timer->function == NULL)) {
+		osal_printk("%s - parameter invalid!\n", __FUNCTION__);
+		return -1;
+	}
+	ot = timer->timer;
+	return del_timer(&ot->tl);
+}
+EXPORT_SYMBOL(osal_del_timer);
+
+int osal_timer_destory(osal_timer_t *timer)
+{
+	struct osal_timer_compat *ot = timer->timer;
+	del_timer(&ot->tl);
+	kfree(ot);
+	timer->timer = NULL;
+	return 0;
+}
+EXPORT_SYMBOL(osal_timer_destory);
+
+#else /* pre-4.15: original init_timer API */
 
 int osal_timer_init(osal_timer_t *timer)
 {
@@ -83,6 +170,8 @@ int osal_timer_destory(osal_timer_t *timer)
 }
 EXPORT_SYMBOL(osal_timer_destory);
 
+#endif /* COMPAT_TIMER_SETUP */
+
 unsigned long osal_msleep(unsigned int msecs)
 {
 	return msleep_interruptible(msecs);
@@ -115,15 +204,25 @@ EXPORT_SYMBOL(osal_sched_clock);
 
 void osal_gettimeofday(osal_timeval_t *tv)
 {
-	struct timeval t;
 	if (tv == NULL) {
 		osal_printk("%s - parameter invalid!\n", __FUNCTION__);
 		return;
 	}
-	do_gettimeofday(&t);
-
-	tv->tv_sec = t.tv_sec;
-	tv->tv_usec = t.tv_usec;
+#ifdef COMPAT_NO_DO_GETTIMEOFDAY
+	{
+		struct timespec64 ts;
+		ktime_get_real_ts64(&ts);
+		tv->tv_sec = ts.tv_sec;
+		tv->tv_usec = ts.tv_nsec / 1000;
+	}
+#else
+	{
+		struct timeval t;
+		do_gettimeofday(&t);
+		tv->tv_sec = t.tv_sec;
+		tv->tv_usec = t.tv_usec;
+	}
+#endif
 }
 EXPORT_SYMBOL(osal_gettimeofday);
 
@@ -131,7 +230,7 @@ void osal_rtc_time_to_tm(unsigned long time, osal_rtc_time_t *tm)
 {
 	struct rtc_time _tm = { 0 };
 
-	rtc_time_to_tm(time, &_tm);
+	compat_rtc_time_to_tm(time, &_tm);
 
 	tm->tm_sec = _tm.tm_sec;
 	tm->tm_min = _tm.tm_min;
@@ -158,7 +257,7 @@ void osal_rtc_tm_to_time(osal_rtc_time_t *tm, unsigned long *time)
 	_tm.tm_yday = tm->tm_yday;
 	_tm.tm_isdst = tm->tm_isdst;
 
-	rtc_tm_to_time(&_tm, time);
+	compat_rtc_tm_to_time(&_tm, time);
 }
 EXPORT_SYMBOL(osal_rtc_tm_to_time);
 

@@ -7,6 +7,8 @@
 #include "osal.h"
 #include "common.h"
 
+#include "../../compat/kernel_compat.h"
+
 #define PHASE 32
 #define COEFF_BUTT (PHASE / 2 + 1)
 
@@ -16,18 +18,20 @@ char g_pm_mpp_helper[PM_EVENT_HELPER_LEN] = "/root";
 static struct ctl_table_header *ctl_head;
 
 static struct ctl_table pm_mpp_ctl[] = { {
-						 .procname = "mpp_notifier",
-						 .data = &g_pm_mpp_helper,
-						 .maxlen = PM_EVENT_HELPER_LEN,
-						 .mode = 0644,
-						 .proc_handler = proc_dostring,
-					 },
-					 {} };
+					 .procname = "mpp_notifier",
+					 .data = &g_pm_mpp_helper,
+					 .maxlen = PM_EVENT_HELPER_LEN,
+					 .mode = 0644,
+					 .proc_handler = proc_dostring,
+				 },
+				 {} };
 
+#ifndef COMPAT_NO_SYSCTL_PATHS
 static struct ctl_path pm_umh_root[] = { {
-						 .procname = "kernel",
-					 },
-					 {} };
+					 .procname = "kernel",
+				 },
+				 {} };
+#endif
 
 extern int SYS_ModInit(void);
 extern void SYS_ModExit(void);
@@ -58,7 +62,11 @@ static int hi35xx_sys_probe(struct platform_device *pdev)
 		return GK_FAILURE;
 	}
 
+#ifdef COMPAT_NO_SYSCTL_PATHS
+	ctl_head = register_sysctl("kernel", pm_mpp_ctl);
+#else
 	ctl_head = register_sysctl_paths(pm_umh_root, pm_mpp_ctl);
+#endif
 
 	return 0;
 }

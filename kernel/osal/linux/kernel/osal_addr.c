@@ -8,6 +8,8 @@
 #include <asm/uaccess.h>
 #include <linux/version.h>
 
+#include "../../../../compat/kernel_compat.h"
+
 #if LINUX_VERSION_CODE < KERNEL_VERSION(4, 0, 0)
 
 #ifndef CONFIG_64BIT
@@ -24,6 +26,7 @@ EXPORT_SYMBOL(osal_ioremap);
 
 void *osal_ioremap_nocache(unsigned long phys_addr, unsigned long size)
 {
+	/* ioremap_nocache removed in 5.6; compat header aliases it to ioremap */
 	return ioremap_nocache(phys_addr, size);
 }
 EXPORT_SYMBOL(osal_ioremap_nocache);
@@ -65,6 +68,6 @@ EXPORT_SYMBOL(osal_copy_to_user);
 
 int osal_access_ok(int type, const void *addr, unsigned long size)
 {
-	return access_ok(type, addr, size);
+	return compat_access_ok(type, addr, size);
 }
 EXPORT_SYMBOL(osal_access_ok);

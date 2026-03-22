@@ -39,6 +39,7 @@
 #include "allocator.h"
 
 #include "../../../../compat/compat.h"
+#include "../../../../compat/kernel_compat.h"
 
 #define EXPORT_COMPAT_MMZ(common_name)    \
 	EXPORT_SYMBOL(mmz_##common_name); \
@@ -65,7 +66,7 @@ static char __initdata setup_zones[MMZ_SETUP_CMDLINE_LEN] =
 	CONFIG_VENDOR_MMZ_DEFAULT;
 static int __init parse_kern_cmdline(char *line)
 {
-	strlcpy(setup_zones, line, sizeof(setup_zones));
+	compat_strlcpy(setup_zones, line, sizeof(setup_zones));
 
 	return 1;
 }
@@ -74,7 +75,7 @@ __setup("mmz=", parse_kern_cmdline);
 static char __initdata setup_allocator[MMZ_ALLOCATOR_NAME_LEN];
 static int __init parse_kern_allocator(char *line)
 {
-	strlcpy(setup_allocator, line, sizeof(setup_allocator));
+	compat_strlcpy(setup_allocator, line, sizeof(setup_allocator));
 	return 1;
 }
 __setup("mmz_allocator=", parse_kern_allocator);
@@ -118,7 +119,7 @@ mmz_mmz_t *mmz_mmz_create(const char *name, unsigned long gfp,
 	}
 
 	memset(p, 0, sizeof(mmz_mmz_t) + 1);
-	strlcpy(p->name, name, MMZ_MMZ_NAME_LEN);
+	compat_strlcpy(p->name, name, MMZ_MMZ_NAME_LEN);
 	p->gfp = gfp;
 	p->phys_start = phys_start;
 	p->nbytes = nbytes;
@@ -151,7 +152,7 @@ mmz_mmz_t *mmz_mmz_create_v2(const char *name, unsigned long gfp,
 	}
 
 	memset(p, 0, sizeof(mmz_mmz_t));
-	strlcpy(p->name, name, MMZ_MMZ_NAME_LEN);
+	compat_strlcpy(p->name, name, MMZ_MMZ_NAME_LEN);
 	p->gfp = gfp;
 	p->phys_start = phys_start;
 	p->nbytes = nbytes;
@@ -421,7 +422,7 @@ int mmz_mmb_flush_dcache_byaddr(void *kvirt, unsigned long phys_addr,
      */
 
 #ifdef CONFIG_64BIT
-	__flush_dcache_area(kvirt, length);
+	compat_flush_dcache_area(kvirt, length);
 #else
 		/*
      * dmac_map_area is invalid in  hi3518ev200 kernel,
@@ -455,7 +456,7 @@ int mmz_mmb_invalid_cache_byaddr(void *kvirt, unsigned long phys_addr,
 		return -EINVAL;
 
 #ifdef CONFIG_64BIT
-	__flush_dcache_area(kvirt, length);
+	compat_flush_dcache_area(kvirt, length);
 #else
 		/*
      * dmac_map_area is invalid in  hi3518ev200 kernel,
@@ -1029,17 +1030,17 @@ int mmz_mmb_flush_dcache_byaddr_safe(void *kvirt, unsigned long phys_addr,
 	if (kvirt == NULL)
 		return -EINVAL;
 
-	down_read(&mm->mmap_sem);
+	compat_mmap_read_lock(mm);
 
 	if (mmz_vma_check((unsigned long)(uintptr_t)kvirt,
 			  (unsigned long)(uintptr_t)kvirt + length)) {
-		up_read(&mm->mmap_sem);
+		compat_mmap_read_unlock(mm);
 		return -EPERM;
 	}
 
 	ret = mmz_mmb_flush_dcache_byaddr(kvirt, phys_addr, length);
 
-	up_read(&mm->mmap_sem);
+	compat_mmap_read_unlock(mm);
 
 	return ret;
 }

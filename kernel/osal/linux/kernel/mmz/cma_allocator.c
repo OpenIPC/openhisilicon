@@ -21,7 +21,8 @@
 #include "allocator.h"
 #include "mmz_arm.h"
 
-#include "../../compat/compat.h"
+#include "../../../../compat/compat.h"
+#include "../../../../compat/kernel_compat.h"
 
 #define __use_vmalloc_space 1
 
@@ -133,7 +134,7 @@ static mmz_mmb_t *__mmb_alloc(const char *name, unsigned long size,
 	mmb->length = size;
 
 	if (name != NULL) {
-		strlcpy(mmb->name, name, MMZ_MMB_NAME_LEN);
+		compat_strlcpy(mmb->name, name, MMZ_MMB_NAME_LEN);
 	} else {
 		strncpy(mmb->name, "<null>", MMZ_MMB_NAME_LEN - 1);
 	}
@@ -232,7 +233,7 @@ static mmz_mmb_t *__mmb_alloc_v2(const char *name, unsigned long size,
 	mmb->order = order;
 
 	if (name != NULL) {
-		strlcpy(mmb->name, name, MMZ_MMB_NAME_LEN);
+		compat_strlcpy(mmb->name, name, MMZ_MMB_NAME_LEN);
 	} else {
 		strncpy(mmb->name, "<null>", MMZ_MMB_NAME_LEN - 1);
 	}
@@ -521,7 +522,7 @@ static int __allocator_init(char *s)
 				continue;
 			}
 
-			strlcpy(zone->name, argv[0], MMZ_MMZ_NAME_LEN);
+			compat_strlcpy(zone->name, argv[0], MMZ_MMZ_NAME_LEN);
 
 			printk("cmz zone gfp 0x%lx, phys 0x%lx, nbytes 0x%lx\n",
 			       cma_zone->gfp, cma_zone->phys_start,
@@ -541,7 +542,7 @@ static int __allocator_init(char *s)
 				continue;
 			}
 
-			strlcpy(zone->name, argv[0], MMZ_MMZ_NAME_LEN);
+			compat_strlcpy(zone->name, argv[0], MMZ_MMZ_NAME_LEN);
 
 			zone->gfp = cma_zone->gfp;
 			zone->phys_start = cma_zone->phys_start;

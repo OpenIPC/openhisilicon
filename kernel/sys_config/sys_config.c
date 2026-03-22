@@ -9,6 +9,7 @@
 #include <asm/io.h>
 
 #include "../compat/compat.h"
+#include "../compat/kernel_compat.h"
 
 #define SENSOR_NAME_LEN 64
 #define CHIP_NAME_STR_LEN 64

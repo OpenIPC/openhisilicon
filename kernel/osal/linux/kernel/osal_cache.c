@@ -9,6 +9,8 @@
 #include <linux/dma-direction.h>
 #include "osal_mmz.h"
 
+#include "../../../../compat/kernel_compat.h"
+
 void osal_flush_cache_all(void)
 {
 	flush_cache_all();
@@ -18,7 +20,7 @@ EXPORT_SYMBOL(osal_flush_cache_all);
 void osal_cpuc_flush_dcache_area(void *addr, int size)
 {
 #ifdef CONFIG_64BIT
-	__flush_dcache_area(addr, size);
+	compat_flush_dcache_area(addr, size);
 #else
 	__cpuc_flush_dcache_area(addr, size);
 #endif

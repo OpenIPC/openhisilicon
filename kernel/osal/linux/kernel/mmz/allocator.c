@@ -13,6 +13,8 @@
 #include <linux/version.h>
 #include "allocator.h"
 
+#include "../../../../compat/kernel_compat.h"
+
 extern struct osal_list_head mmz_list;
 
 extern int anony;
@@ -283,7 +285,7 @@ static mmz_mmb_t *__mmb_alloc(const char *name, unsigned long size,
 	mmb->phys_addr = fixed_start;
 	mmb->length = size;
 	if (name != NULL) {
-		strlcpy(mmb->name, name, MMZ_MMB_NAME_LEN);
+		compat_strlcpy(mmb->name, name, MMZ_MMB_NAME_LEN);
 	} else {
 		strncpy(mmb->name, "<null>", MMZ_MMB_NAME_LEN);
 	}
@@ -377,7 +379,7 @@ static mmz_mmb_t *__mmb_alloc_v2(const char *name, unsigned long size,
 	mmb->order = order;
 
 	if (name != NULL) {
-		strlcpy(mmb->name, name, MMZ_MMB_NAME_LEN);
+		compat_strlcpy(mmb->name, name, MMZ_MMB_NAME_LEN);
 	} else {
 		strncpy(mmb->name, "<null>", MMZ_MMB_NAME_LEN);
 	}
@@ -437,7 +439,7 @@ static void __mmb_free(mmz_mmb_t *mmb)
 {
 	if (mmb->flags & MMZ_MMB_MAP2KERN_CACHED) {
 #ifdef CONFIG_64BIT
-		__flush_dcache_area((void *)mmb->kvirt, (size_t)mmb->length);
+		compat_flush_dcache_area((void *)mmb->kvirt, (size_t)mmb->length);
 #else
 		__cpuc_flush_dcache_area((void *)mmb->kvirt,
 					 (size_t)mmb->length);
@@ -455,7 +457,7 @@ static int __mmb_unmap(mmz_mmb_t *mmb)
 
 	if (mmb->flags & MMZ_MMB_MAP2KERN_CACHED) {
 #ifdef CONFIG_64BIT
-		__flush_dcache_area((void *)mmb->kvirt, (size_t)mmb->length);
+		compat_flush_dcache_area((void *)mmb->kvirt, (size_t)mmb->length);
 #else
 		__cpuc_flush_dcache_area((void *)mmb->kvirt,
 					 (size_t)mmb->length);
@@ -521,7 +523,7 @@ static int __allocator_init(char *s)
 			if (zone == NULL) {
 				continue;
 			}
-			strlcpy(zone->name, argv[0], MMZ_MMZ_NAME_LEN);
+			compat_strlcpy(zone->name, argv[0], MMZ_MMZ_NAME_LEN);
 			zone->gfp = _strtoul_ex(argv[1], NULL, 0);
 			zone->phys_start = _strtoul_ex(argv[2], NULL, 0);
 			zone->nbytes = _strtoul_ex(argv[3], NULL, 0);
@@ -534,7 +536,7 @@ static int __allocator_init(char *s)
 				continue;
 			}
 
-			strlcpy(zone->name, argv[0], MMZ_MMZ_NAME_LEN);
+			compat_strlcpy(zone->name, argv[0], MMZ_MMZ_NAME_LEN);
 			zone->gfp = _strtoul_ex(argv[1], NULL, 0);
 			zone->phys_start = _strtoul_ex(argv[2], NULL, 0);
 			zone->nbytes = _strtoul_ex(argv[3], NULL, 0);

@@ -5,6 +5,8 @@
 #include <linux/module.h>
 #include <linux/slab.h>
 
+#include "../compat/kernel_compat.h"
+
 struct rng_state *st;
 
 struct rng_state {

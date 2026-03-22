@@ -8,6 +8,8 @@
 #include <linux/string.h>
 #include <linux/version.h>
 
+#include "../../../../compat/kernel_compat.h"
+
 char *osal_strcpy(char *dest, const char *src)
 {
 	return strcpy(dest, src);
@@ -20,7 +22,7 @@ char *osal_strncpy(char *dest, const char *src, int count)
 EXPORT_SYMBOL(osal_strncpy);
 int osal_strlcpy(char *dest, const char *src, int size)
 {
-	return strlcpy(dest, src, size);
+	return compat_strlcpy(dest, src, size);
 }
 EXPORT_SYMBOL(osal_strlcpy);
 char *osal_strcat(char *dest, const char *src)
