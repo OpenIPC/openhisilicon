@@ -172,7 +172,11 @@ extern "C" {
 
 #define VI_MAX_DEV_NUM 1
 #define VI_MAX_PHY_PIPE_NUM 2
+#ifdef hi3516ev200
+#define VI_MAX_VIR_PIPE_NUM 0
+#else
 #define VI_MAX_VIR_PIPE_NUM 2
+#endif
 #define VI_MAX_PIPE_NUM (VI_MAX_PHY_PIPE_NUM + VI_MAX_VIR_PIPE_NUM)
 #define VI_MAX_STITCH_GRP_NUM 1
 #define VI_MAX_WDR_NUM 2
