@@ -488,6 +488,56 @@ static void __mmf_unmap(void *virt)
 	}
 }
 
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(5, 16, 0)
+/*
+ * On 6.x, use the kernel's default CMA area (configured via DT
+ * reserved-memory with "shared-dma-pool" + "reusable"). No vendor
+ * hi_cma.c needed — the DTS declares the region and the kernel
+ * manages it as mainline CMA.
+ */
+#include <linux/cma.h>
+
+static int __allocator_init(char *s)
+{
+	mmz_mmz_t *zone;
+	struct cma *default_cma = dev_get_cma_area(NULL);
+	phys_addr_t cma_base;
+	unsigned long cma_size;
+
+	if (!default_cma) {
+		printk(KERN_ERR "MMZ: no default CMA area — check DT reserved-memory\n");
+		return -ENOMEM;
+	}
+
+	cma_base = cma_get_base(default_cma);
+	cma_size = cma_get_size(default_cma);
+
+	printk(KERN_INFO "MMZ: using default CMA area: base=0x%pa size=%luMB\n",
+	       &cma_base, cma_size >> 20);
+
+	zone = mmz_mmz_create("null", 0, 0, 0);
+	if (!zone)
+		return -ENOMEM;
+
+	compat_strlcpy(zone->name, "anonymous", MMZ_MMZ_NAME_LEN);
+	zone->gfp = 0;
+	zone->phys_start = cma_base;
+	zone->nbytes = cma_size;
+	zone->cma_dev = NULL; /* NULL = use default CMA area */
+
+	if (zone->nbytes > max_malloc_size)
+		max_malloc_size = zone->nbytes;
+
+	if (mmz_mmz_register(zone)) {
+		printk(KERN_WARNING "MMZ: failed to register CMA zone\n");
+		mmz_mmz_destroy(zone);
+		return -EINVAL;
+	}
+
+	return 0;
+}
+#else
+/* Pre-5.16: use vendor GET_CMA_ZONE from hi_cma.c */
 static int __allocator_init(char *s)
 {
 	mmz_mmz_t *zone = NULL;
@@ -498,52 +548,36 @@ static int __allocator_init(char *s)
 		int i;
 		char *argv[6];
 		extern struct cma_zone *GET_CMA_ZONE(const char *name);
-		/*
-         * FIXME: We got 4 args in "line", formated as
-         * "argv[0],argv[1],argv[2],argv[3],argv[4]".
-         * eg: "<mmz_name>,<gfp>,<phys_start>,<size>,<alloc_type>"
-         * For more convenient, "hard code" are used such as "arg[0]", i.e.
-         */
+
 		for (i = 0; (argv[i] = strsep(&line, ",")) != NULL;)
-			if (++i == ARRAY_SIZE(argv)) {
+			if (++i == ARRAY_SIZE(argv))
 				break;
-			}
 
 		cma_zone = GET_CMA_ZONE(argv[0]);
 		if (cma_zone == NULL) {
-			printk(KERN_ERR "can't get cma zone info:%s\n",
-			       argv[0]);
+			printk(KERN_ERR "can't get cma zone info:%s\n", argv[0]);
 			continue;
 		}
 
 		if (i == 4) {
 			zone = mmz_mmz_create("null", 0, 0, 0);
-			if (zone == NULL) {
+			if (zone == NULL)
 				continue;
-			}
 
 			compat_strlcpy(zone->name, argv[0], MMZ_MMZ_NAME_LEN);
-
-			printk("cmz zone gfp 0x%lx, phys 0x%lx, nbytes 0x%lx\n",
-			       cma_zone->gfp, cma_zone->phys_start,
-			       cma_zone->nbytes);
 			zone->gfp = cma_zone->gfp;
 			zone->phys_start = cma_zone->phys_start;
 			zone->nbytes = cma_zone->nbytes;
 			zone->cma_dev = &cma_zone->pdev;
 
-			if (zone->nbytes > max_malloc_size) {
+			if (zone->nbytes > max_malloc_size)
 				max_malloc_size = zone->nbytes;
-			}
 		} else if (i == 6) {
 			zone = mmz_mmz_create_v2("null", 0, 0, 0, 0, 0);
-
-			if (zone == NULL) {
+			if (zone == NULL)
 				continue;
-			}
 
 			compat_strlcpy(zone->name, argv[0], MMZ_MMZ_NAME_LEN);
-
 			zone->gfp = cma_zone->gfp;
 			zone->phys_start = cma_zone->phys_start;
 			zone->nbytes = cma_zone->nbytes;
@@ -551,17 +585,15 @@ static int __allocator_init(char *s)
 			zone->block_align = cma_zone->block_align;
 			zone->cma_dev = &cma_zone->pdev;
 
-			if (zone->nbytes > max_malloc_size) {
+			if (zone->nbytes > max_malloc_size)
 				max_malloc_size = zone->nbytes;
-			}
 		} else {
 			printk(KERN_ERR "Input parameter num incorrect!\n");
 			continue;
 		}
 
 		if (mmz_mmz_register(zone)) {
-			printk(KERN_WARNING "Add MMZ failed: " MMZ_MMZ_FMT_S
-					    "\n",
+			printk(KERN_WARNING "Add MMZ failed: " MMZ_MMZ_FMT_S "\n",
 			       mmz_mmz_fmt_arg(zone));
 			mmz_mmz_destroy(zone);
 		}
@@ -571,6 +603,7 @@ static int __allocator_init(char *s)
 
 	return 0;
 }
+#endif
 
 int cma_allocator_setopt(struct mmz_allocator *allocator)
 {

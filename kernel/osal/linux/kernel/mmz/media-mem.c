@@ -1225,12 +1225,22 @@ int __init media_mem_init(void)
 		return -EINVAL;
 	}
 
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(5, 16, 0) && defined(CONFIG_CMA)
+	/*
+	 * On 6.x with CMA enabled (via DT reserved-memory), always use
+	 * CMA allocator regardless of bootargs. The DTS declares the
+	 * memory region — no mmz_allocator= or mmz= params needed.
+	 */
+	ret = cma_allocator_setopt(&the_allocator);
+	allocator_type = 1;
+	printk(KERN_INFO "MMZ: using CMA allocator (DT reserved-memory)\n");
+#else
 	if (strcmp(setup_allocator, "cma") == 0) {
-#if LINUX_VERSION_CODE < KERNEL_VERSION(5, 16, 0) && defined(CONFIG_CMA)
+#ifdef CONFIG_CMA
 		ret = cma_allocator_setopt(&the_allocator);
 		allocator_type = 1;
 #else
-		printk("CMA allocator not available on this kernel, using " DEFAULT_ALLOCATOR "\n");
+		printk("CMA allocator not available, using " DEFAULT_ALLOCATOR "\n");
 		ret = allocator_setopt(&the_allocator);
 #endif
 	} else if (strcmp(setup_allocator, DEFAULT_ALLOCATOR) == 0) {
@@ -1242,6 +1252,7 @@ int __init media_mem_init(void)
 		mmz_exit_check();
 		return -EINVAL;
 	}
+#endif
 
 	// ret = media_mem_parse_cmdline(setup_zones);
 	ret = the_allocator.init(setup_zones);
