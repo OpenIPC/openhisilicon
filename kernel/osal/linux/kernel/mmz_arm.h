@@ -36,11 +36,15 @@ static pgprot_t arch_kern_pgprot(int cache)
 #include <asm/highmem.h>
 #include <asm/pgtable.h>
 
-extern void __dma_clear_buffer(struct page *page, size_t size);
-
 static void dma_buffer_clear(struct page *page, size_t size)
 {
-	__dma_clear_buffer(page, size);
+	/* __dma_clear_buffer is not exported in 6.x — use memset + cache flush */
+	void *ptr = page_address(page);
+	if (ptr) {
+		memset(ptr, 0, size);
+		__cpuc_flush_dcache_area(ptr, size);
+		outer_flush_range(page_to_phys(page), page_to_phys(page) + size);
+	}
 }
 
 static void mmb_dcache_flush(mmz_mmb_t *mmb)
