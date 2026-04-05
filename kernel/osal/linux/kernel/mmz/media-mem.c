@@ -13,6 +13,7 @@
 #include <linux/miscdevice.h>
 #include <linux/proc_fs.h>
 #include <linux/device.h>
+#include <linux/cma.h>
 #include <linux/fs.h>
 #include <linux/slab.h>
 #include <linux/init.h>
@@ -1227,14 +1228,24 @@ int __init media_mem_init(void)
 
 #if LINUX_VERSION_CODE >= KERNEL_VERSION(5, 16, 0) && defined(CONFIG_CMA)
 	/*
-	 * On 6.x with CMA enabled (via DT reserved-memory), always use
-	 * CMA allocator regardless of bootargs. The DTS declares the
-	 * memory region — no mmz_allocator= or mmz= params needed.
+	 * On 6.x, prefer CMA from DT reserved-memory. If CMA isn't
+	 * available (e.g. mem=32M too small for 96MB reservation),
+	 * fall back to bootarg-based allocator selection.
 	 */
-	ret = cma_allocator_setopt(&the_allocator);
-	allocator_type = 1;
-	printk(KERN_INFO "MMZ: using CMA allocator (DT reserved-memory)\n");
-#else
+	{
+		struct cma *default_cma = dev_get_cma_area(NULL);
+		if (default_cma) {
+			ret = cma_allocator_setopt(&the_allocator);
+			allocator_type = 1;
+			printk(KERN_INFO "MMZ: using CMA allocator (DT reserved-memory)\n");
+		} else {
+			printk(KERN_INFO "MMZ: CMA not available, falling back to bootargs\n");
+			goto bootarg_allocator;
+		}
+	}
+	goto allocator_selected;
+bootarg_allocator:
+#endif
 	if (strcmp(setup_allocator, "cma") == 0) {
 #ifdef CONFIG_CMA
 		ret = cma_allocator_setopt(&the_allocator);
@@ -1252,6 +1263,8 @@ int __init media_mem_init(void)
 		mmz_exit_check();
 		return -EINVAL;
 	}
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(5, 16, 0) && defined(CONFIG_CMA)
+allocator_selected:
 #endif
 
 	// ret = media_mem_parse_cmdline(setup_zones);
