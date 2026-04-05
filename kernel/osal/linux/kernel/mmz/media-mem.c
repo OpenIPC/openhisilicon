@@ -205,7 +205,12 @@ static int _check_mmz(mmz_mmz_t *zone)
 		return -1;
 	}
 
-	if (!((new_start >= __pa((uintptr_t)high_memory)) ||
+	/*
+	 * CMA zones are inside kernel RAM by design (reusable memory).
+	 * Only check for conflicts with static (non-CMA) allocator zones.
+	 */
+	if (!allocator_type &&
+	    !((new_start >= __pa((uintptr_t)high_memory)) ||
 	      ((new_start < PHYS_OFFSET) && (new_end <= PHYS_OFFSET)))) {
 		printk(KERN_ERR "ERROR: Conflict MMZ:\n");
 		printk(KERN_ERR MMZ_MMZ_FMT_S "\n", mmz_mmz_fmt_arg(zone));
