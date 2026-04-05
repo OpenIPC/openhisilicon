@@ -437,12 +437,8 @@ static int pwm_init(void)
 	int ret;
 
 	if (!reg_pwmI_base_va) {
-#if LINUX_VERSION_CODE < KERNEL_VERSION(5, 0, 0)
 		reg_pwmI_base_va =
 			(void __iomem *)osal_ioremap(PWMI_ADRESS_BASE, 0x100);
-#else
-		reg_pwmI_base_va = NULL;
-#endif
 	}
 
 #ifdef CONFIG_SNAPSHOT_BOOT
@@ -471,14 +467,10 @@ static int pwm_init(void)
 static void __exit pwm_exit(void)
 {
 
-#if LINUX_VERSION_CODE < KERNEL_VERSION(5, 0, 0)
 	if (reg_pwmI_base_va) {
 		osal_iounmap((GK_VOID *)reg_pwmI_base_va);
 		reg_pwmI_base_va = GK_NULL;
 	}
-#else
-	reg_pwmI_base_va = NULL;
-#endif
 
 #ifdef CONFIG_SNAPSHOT_BOOT
 	media_unregister(&s_stPwmDevice);
