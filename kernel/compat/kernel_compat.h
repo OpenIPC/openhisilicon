@@ -272,3 +272,9 @@ static inline struct spi_controller *compat_spi_busnum_to_controller(u16 bus_num
 #include <linux/timer.h>
 
 #endif /* >= 7.0 */
+
+/* del_timer renamed to timer_delete in 7.0 */
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(7, 0, 0)
+#define del_timer timer_delete
+#define del_timer_sync timer_delete_sync
+#endif
