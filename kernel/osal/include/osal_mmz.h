@@ -135,7 +135,7 @@ typedef struct mmz_media_memory_block mmz_mmb_t;
 #define mmz_length2grain(len) (mmz_grain_align(len) / MMZ_GRAIN)
 
 #define begin_list_for_each_mmz(p, gfp, mmz_name)                 \
-	list_for_each_entry(p, &mmz_list, list) {                 \
+	osal_list_for_each_entry(p, &mmz_list, list) {                 \
 		if (gfp == 0 ? 0 : (p)->gfp != (gfp))             \
 			continue;                                 \
 		if ((mmz_name == NULL) || (*mmz_name == '\0')) {  \

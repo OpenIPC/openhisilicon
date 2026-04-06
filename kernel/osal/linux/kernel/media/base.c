@@ -56,7 +56,11 @@ static struct device_attribute media_dev_attrs[] = {
 #endif
 
 /* bus match & uevent */
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(7, 0, 0)
+static int media_match(struct device *dev, const struct device_driver *drv)
+#else
 static int media_match(struct device *dev, struct device_driver *drv)
+#endif
 {
 	struct media_device *pdev = to_media_device(dev);
 	return (strncmp(pdev->devfs_name, drv->name,

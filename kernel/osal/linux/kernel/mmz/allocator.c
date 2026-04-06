@@ -64,7 +64,7 @@ static unsigned long find_fixed_region(unsigned long *region_len,
 	start = mmz_align2(mmz->phys_start, align);
 	len = mmz_grain_align(size);
 
-	list_for_each_entry(p, &mmz->mmb_list, list) {
+	osal_list_for_each_entry(p, &mmz->mmb_list, list) {
 		mmz_mmb_t *next = NULL;
 		mmz_trace(4, "p->phys_addr=0x%08lX p->length = %luKB \t",
 			  p->phys_addr, p->length / SZ_1K);

@@ -259,3 +259,16 @@ static inline struct spi_controller *compat_spi_busnum_to_controller(u16 bus_num
 #define spi_busnum_to_controller spi_busnum_to_master
 #endif
 #endif /* KERNEL_COMPAT_H */
+
+/*
+ * Linux 7.0+ API changes
+ */
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(7, 0, 0)
+
+/* platform_device.h no longer implicitly included */
+#include <linux/platform_device.h>
+
+/* del_timer moved to linux/timer.h (explicit include needed) */
+#include <linux/timer.h>
+
+#endif /* >= 7.0 */
