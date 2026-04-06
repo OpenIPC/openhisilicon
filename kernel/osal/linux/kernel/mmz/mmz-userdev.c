@@ -908,7 +908,7 @@ static int mmz_userdev_release(struct inode *inode, struct file *file)
 	struct mmz_userdev_info *pmu = file->private_data;
 	struct mmb_info *p = NULL, *n = NULL;
 
-	list_for_each_entry_safe(p, n, &pmu->list, list) {
+	osal_list_for_each_entry_safe(p, n, &pmu->list, list) {
 		mmz_error("MMB LEAK(pid=%d): 0x%lX, %lu bytes, '%s'\n", pmu->pid,
 		      mmz_mmb_phys(p->mmb), mmz_mmb_length(p->mmb),
 		      mmz_mmb_name(p->mmb));

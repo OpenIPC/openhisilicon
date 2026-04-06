@@ -43,10 +43,10 @@ static int wdg_probe(struct platform_device *pdev)
 	return watchdog_init();
 }
 
-static int wdg_remove(struct platform_device *pdev)
+static void wdg_remove(struct platform_device *pdev)
 {
 	watchdog_exit();
-	return 0;
+	return;
 }
 
 static const struct of_device_id wdg_match[] = {

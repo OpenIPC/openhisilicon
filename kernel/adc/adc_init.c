@@ -35,10 +35,10 @@ static int adc_probe(struct platform_device *pdev)
 	return lsadc_init();
 }
 
-static int adc_remove(struct platform_device *pdev)
+static void adc_remove(struct platform_device *pdev)
 {
 	lsadc_exit();
-	return 0;
+	return;
 }
 
 static const struct of_device_id adc_match[] = {
