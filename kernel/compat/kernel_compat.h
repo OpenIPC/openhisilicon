@@ -303,3 +303,13 @@ static inline struct spi_controller *compat_spi_busnum_to_controller(u16 bus_num
 #define from_timer(var, callback_timer, timer_fieldname) \
 	container_of(callback_timer, typeof(*var), timer_fieldname)
 #endif
+
+/* 7.0: register_sysctl() validates sentinel entries, causing spurious errors.
+ * Use register_sysctl_sz() with explicit count to exclude sentinel. */
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(7, 0, 0)
+#define compat_register_sysctl(path, table) \
+    register_sysctl_sz(path, table, ARRAY_SIZE(table) - 1)
+#else
+#define compat_register_sysctl(path, table) \
+    register_sysctl(path, table)
+#endif

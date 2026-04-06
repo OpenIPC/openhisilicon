@@ -63,7 +63,7 @@ static int hi35xx_sys_probe(struct platform_device *pdev)
 	}
 
 #ifdef COMPAT_NO_SYSCTL_PATHS
-	ctl_head = register_sysctl("kernel", pm_mpp_ctl);
+	ctl_head = compat_register_sysctl("kernel", pm_mpp_ctl);
 #else
 	ctl_head = register_sysctl_paths(pm_umh_root, pm_mpp_ctl);
 #endif

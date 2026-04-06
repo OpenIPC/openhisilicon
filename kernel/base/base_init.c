@@ -78,7 +78,7 @@ static struct ctl_table_header *comm_eproc_tbl_head;
 int __init COMM_init_proc_ctrl(void)
 {
 #ifdef COMPAT_NO_SYSCTL_TABLE
-	comm_eproc_tbl_head = register_sysctl("dev/debug", comm_eproc_table);
+	comm_eproc_tbl_head = compat_register_sysctl("dev/debug", comm_eproc_table);
 #else
 	comm_eproc_tbl_head = register_sysctl_table(comm_parent_tbl);
 #endif
