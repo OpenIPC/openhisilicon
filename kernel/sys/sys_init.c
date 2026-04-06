@@ -71,13 +71,13 @@ static int hi35xx_sys_probe(struct platform_device *pdev)
 	return 0;
 }
 
-static int hi35xx_sys_remove(struct platform_device *pdev)
+static compat_platform_remove_ret hi35xx_sys_remove(struct platform_device *pdev)
 {
 	unregister_sysctl_table(ctl_head);
 
 	SYS_ModExit();
 
-	return 0;
+	compat_platform_remove_return;
 }
 
 static const struct of_device_id hi35xx_sys_match[] = {

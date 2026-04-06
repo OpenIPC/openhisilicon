@@ -43,12 +43,12 @@ static int hi35xx_ive_probe(struct platform_device *pf_dev)
 	return ive_std_mod_init();
 }
 
-static int hi35xx_ive_remove(struct platform_device *pf_dev)
+static compat_platform_remove_ret hi35xx_ive_remove(struct platform_device *pf_dev)
 {
 	ive_std_mod_exit();
 	g_ive_regs = NULL;
 
-	return 0;
+	compat_platform_remove_return;
 }
 
 static const struct of_device_id hi35xx_ive_match[] = {

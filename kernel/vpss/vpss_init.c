@@ -38,13 +38,13 @@ static int hi35xx_vpss_probe(struct platform_device *pdev)
 	return 0;
 }
 
-static int hi35xx_vpss_remove(struct platform_device *pdev)
+static compat_platform_remove_ret hi35xx_vpss_remove(struct platform_device *pdev)
 {
 	VPSS_ModExit();
 
 	g_pVpssReg[0] = NULL;
 
-	return 0;
+	compat_platform_remove_return;
 }
 
 static const struct of_device_id hi35xx_vpss_match[] = {

@@ -42,12 +42,12 @@ static int hi35xx_mipi_rx_probe(struct platform_device *pdev)
 	return mipi_rx_mod_init();
 }
 
-static int hi35xx_mipi_rx_remove(struct platform_device *pdev)
+static compat_platform_remove_ret hi35xx_mipi_rx_remove(struct platform_device *pdev)
 {
 	mipi_rx_mod_exit();
 	mipi_rx_regs_va = NULL;
 
-	return 0;
+	compat_platform_remove_return;
 }
 
 static const struct of_device_id hi35xx_mipi_rx_match[] = {

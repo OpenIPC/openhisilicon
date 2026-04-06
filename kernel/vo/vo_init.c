@@ -44,11 +44,11 @@ static int hi35xx_vo_probe(struct platform_device *pdev)
 	return 0;
 }
 
-static int hi35xx_vo_remove(struct platform_device *pdev)
+static compat_platform_remove_ret hi35xx_vo_remove(struct platform_device *pdev)
 {
 	VOU_ModExit();
 	g_pVoReg = NULL;
-	return 0;
+	compat_platform_remove_return;
 }
 
 static const struct of_device_id g_hi35xx_vo_match[] = {

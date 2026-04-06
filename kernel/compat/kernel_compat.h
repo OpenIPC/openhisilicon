@@ -278,3 +278,12 @@ static inline struct spi_controller *compat_spi_busnum_to_controller(u16 bus_num
 #define del_timer timer_delete
 #define del_timer_sync timer_delete_sync
 #endif
+
+/* platform_driver.remove returns void since 6.11 */
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 11, 0)
+#define compat_platform_remove_ret void
+#define compat_platform_remove_return return
+#else
+#define compat_platform_remove_ret int
+#define compat_platform_remove_return return 0
+#endif

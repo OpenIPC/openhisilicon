@@ -73,7 +73,7 @@ static int hi35xx_vi_probe(struct platform_device *pdev)
 	return 0;
 }
 
-static int hi35xx_vi_remove(struct platform_device *pdev)
+static compat_platform_remove_ret hi35xx_vi_remove(struct platform_device *pdev)
 {
 	GK_U32 i;
 	VI_ModExit();
@@ -86,7 +86,7 @@ static int hi35xx_vi_remove(struct platform_device *pdev)
 		g_pastViProcReg[i] = NULL;
 	}
 
-	return 0;
+	compat_platform_remove_return;
 }
 
 static const struct of_device_id hi35xx_vi_match[] = {

@@ -110,10 +110,10 @@ static int hi35xx_vpu_probe(struct platform_device *pdev)
 	return s32Ret;
 }
 
-static int hi35xx_vpu_remove(struct platform_device *pdev)
+static compat_platform_remove_ret hi35xx_vpu_remove(struct platform_device *pdev)
 {
 	VPU_ModExit();
-	return 0;
+	compat_platform_remove_return;
 }
 
 static const struct of_device_id hi35xx_vpu_match[] = {

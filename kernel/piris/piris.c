@@ -707,11 +707,11 @@ static int piris_probe(struct platform_device *pdev)
 	return 0;
 }
 
-static int piris_remove(struct platform_device *pdev)
+static compat_platform_remove_ret piris_remove(struct platform_device *pdev)
 {
 	osal_printk("<%s> is called\n", __FUNCTION__);
 	piris_exit();
-	return 0;
+	compat_platform_remove_return;
 }
 
 static const struct of_device_id piris_match[] = {
