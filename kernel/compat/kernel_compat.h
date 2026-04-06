@@ -229,13 +229,17 @@
  */
 #if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 4, 0)
 #include <linux/spi/spi.h>
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(7, 0, 0)
+extern const struct class spi_controller_class;
+#else
 extern struct class spi_master_class;
+#endif
 static inline struct spi_controller *compat_spi_busnum_to_controller(u16 bus_num)
 {
 	struct device *dev;
 	char name[32];
 	snprintf(name, sizeof(name), "spi%u", bus_num);
-	dev = class_find_device_by_name(&spi_master_class, name);
+	dev = class_find_device_by_name(&spi_controller_class, name);
 	if (!dev)
 		return NULL;
 	return container_of(dev, struct spi_controller, dev);
