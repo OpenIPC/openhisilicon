@@ -262,7 +262,6 @@ static inline struct spi_controller *compat_spi_busnum_to_controller(u16 bus_num
 #if LINUX_VERSION_CODE < KERNEL_VERSION(5, 0, 0)
 #define spi_busnum_to_controller spi_busnum_to_master
 #endif
-#endif /* KERNEL_COMPAT_H */
 
 /*
  * Linux 7.0+ API changes
@@ -313,3 +312,5 @@ static inline struct spi_controller *compat_spi_busnum_to_controller(u16 bus_num
 #define compat_register_sysctl(path, table) \
     register_sysctl(path, table)
 #endif
+
+#endif /* KERNEL_COMPAT_H */
