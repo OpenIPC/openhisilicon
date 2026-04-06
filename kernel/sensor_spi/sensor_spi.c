@@ -51,7 +51,7 @@ MODULE_PARM_DESC(sensor, "sensor name");
 #ifndef __LITEOS__
 struct spi_master *spi_master[SPI_MAX_NUM];
 struct spi_device *spi_dev[SPI_MAX_NUM][2];
-extern struct bus_type spi_bus_type;
+extern const struct bus_type spi_bus_type;
 
 #define SPI_MSG_NUM 30
 typedef struct _spi_message_s {
