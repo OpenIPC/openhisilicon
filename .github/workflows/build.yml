@@ -24,6 +24,12 @@ jobs:
           - platform: hi3516ev300
             board: hi3516ev300_neo
             kernel: "6.6"
+          - platform: hi3516ev300
+            board: hi3516ev300_neo
+            kernel: "6.18"
+          - platform: hi3516ev300
+            board: hi3516ev300_neo
+            kernel: "7.0"
 
     steps:
       - name: Checkout Source
@@ -82,6 +88,48 @@ jobs:
           done
 
           # Fragment comes before defconfig so defconfig can override
+          sed -i 's|cat $(CONFIG) $(PWD)/general/openipc.fragment|cat $(PWD)/general/openipc.fragment $(CONFIG)|' Makefile
+
+      - name: Setup neo target (6.18/7.0 kernel)
+        if: matrix.kernel == '6.18' || matrix.kernel == '7.0'
+        run: |
+          cd ../firmware
+          BRANCH="upstream-patches"
+
+          # Use the upstream-patches branch (7.0-rc6 base + BVT patches)
+          if [ ! -f br-ext-chip-hisilicon/configs/hi3516ev300_neo_defconfig ]; then
+            cp br-ext-chip-hisilicon/configs/hi3516ev300_lite_defconfig \
+               br-ext-chip-hisilicon/configs/hi3516ev300_neo_defconfig
+          fi
+
+          # Point to upstream-patches kernel
+          sed -i "s|BR2_LINUX_KERNEL_CUSTOM_TARBALL_LOCATION=.*|BR2_LINUX_KERNEL_CUSTOM_TARBALL_LOCATION=\"https://github.com/openipc/linux/archive/${BRANCH}.tar.gz\"|" \
+             br-ext-chip-hisilicon/configs/hi3516ev300_neo_defconfig
+          sed -i 's|BR2_LINUX_KERNEL_UIMAGE=y|BR2_LINUX_KERNEL_IMAGE_TARGET_CUSTOM=y\nBR2_LINUX_KERNEL_IMAGE_TARGET_NAME="zImage"|' \
+             br-ext-chip-hisilicon/configs/hi3516ev300_neo_defconfig
+          sed -i 's|VARIANT="lite"|VARIANT="neo"|' \
+             br-ext-chip-hisilicon/configs/hi3516ev300_neo_defconfig
+          echo 'BR2_GLOBAL_PATCH_DIR="$(BR2_EXTERNAL)/package/all-patches-neo"' >> \
+             br-ext-chip-hisilicon/configs/hi3516ev300_neo_defconfig
+
+          # Kernel config
+          cp br-ext-chip-hisilicon/board/hi3516ev200/hi3516ev300.generic.config \
+             br-ext-chip-hisilicon/board/hi3516ev200/hi3516ev300.neo.config
+          printf '%s\n' \
+            '# CONFIG_DEBUG_KERNEL is not set' \
+            'CONFIG_CMDLINE="earlycon=pl011,0x12040000"' \
+            'CONFIG_CMDLINE_EXTEND=y' \
+            >> br-ext-chip-hisilicon/board/hi3516ev200/hi3516ev300.neo.config
+          sed -i 's|hi3516ev300.generic.config|hi3516ev300.neo.config|' \
+             br-ext-chip-hisilicon/configs/hi3516ev300_neo_defconfig
+
+          # Neo patches dir
+          mkdir -p general/package/all-patches-neo/linux
+          for d in general/package/all-patches/*/; do
+            name=$(basename "$d")
+            [ "$name" != "linux" ] && ln -sf "../all-patches/$name" "general/package/all-patches-neo/$name"
+          done
+
           sed -i 's|cat $(CONFIG) $(PWD)/general/openipc.fragment|cat $(PWD)/general/openipc.fragment $(CONFIG)|' Makefile
 
       - name: Build OpenHisilicon
