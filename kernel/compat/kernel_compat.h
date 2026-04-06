@@ -287,3 +287,15 @@ static inline struct spi_controller *compat_spi_busnum_to_controller(u16 bus_num
 #define compat_platform_remove_ret int
 #define compat_platform_remove_return return 0
 #endif
+
+/* spi_master typedef removed in 7.0 */
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(7, 0, 0)
+#define spi_master spi_controller
+#endif
+
+/* from_timer macro removed in 7.0, use timer_container_of */
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(7, 0, 0)
+#include <linux/timer.h>
+#define from_timer(var, callback_timer, timer_fieldname) \
+	container_of(callback_timer, typeof(*var), timer_fieldname)
+#endif
