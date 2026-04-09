@@ -1,0 +1,1950 @@
+// SPDX-License-Identifier: GPL-2.0
+/*
+ * ive_neo — Clean-room IVE/XNN kernel driver for Hi3516EV200/EV300
+ *
+ * Open-source replacement for the vendor open_ive.ko binary.
+ * Handles OMS model loading, XNN CNN inference via HW task nodes,
+ * and CPU-based YUV preprocessing (VGS bypass).
+ *
+ * Build with -DIVE_STANDALONE to remove all HiSilicon OSAL/CMPI
+ * dependencies. Standalone mode uses standard Linux APIs and can
+ * run in QEMU without vendor kernel modules.
+ */
+
+#include <linux/module.h>
+#include <linux/kernel.h>
+#include <linux/io.h>
+#include <linux/string.h>
+#include <linux/delay.h>
+#include <linux/interrupt.h>
+#include <linux/completion.h>
+
+#ifdef IVE_STANDALONE
+#include <linux/miscdevice.h>
+#include <linux/fs.h>
+#include <linux/slab.h>
+#include <linux/uaccess.h>
+#include <asm/cacheflush.h>
+#else
+#include "osal.h"
+#include "common.h"
+#include "mod_ext.h"
+#include "sys_ext.h"
+#include "mm_ext.h"
+#endif
+
+#define IVE_NEO_TAG "ive_neo"
+#define ive_log(fmt, ...) printk(KERN_INFO IVE_NEO_TAG ": " fmt, ##__VA_ARGS__)
+#define ive_err(fmt, ...) printk(KERN_ERR  IVE_NEO_TAG ": " fmt, ##__VA_ARGS__)
+
+/* ---- Ioctl command codes ---- */
+#define IVE_IOC_ALLOC_BUF      0xc0184600u /* standalone: alloc+copy_in {u64 phys, u64 udata, u32 sz} */
+#define IVE_IOC_READ_BUF       0xc0184601u /* standalone: copy_out {u64 phys, u64 udata, u32 sz} */
+#define IVE_IOC_SVP_INIT       0x8010463bu
+#define IVE_IOC_XNN_LOADMODEL  0xc8a04636u
+#define IVE_IOC_XNN_UNLOADMODEL 0xc0044637u
+#define IVE_IOC_XNN_FWD_SLICE  0xc9704638u
+#define IVE_IOC_XNN_FORWARD    0xc620463au
+#define IVE_IOC_QUERY          0xc00c462cu
+#define IVE_IOC_OPEN_DEV       0x801046c8u
+#define IVE_IOC_SVP_EXIT       0x0000463eu
+/* libive.so SVP_ALG_PROC ioctls — allocate/free a shared 4KB buffer that
+ * userspace mmaps via /dev/ive's mmap callback. */
+#define IVE_IOC_SVP_ALG_PROC_INIT  0x800b463bu
+#define IVE_IOC_SVP_ALG_PROC_EXIT  0x0000463du
+#define IVE_IOC_SVP_ALG_PROC_BEGIN 0x0000464au
+#define IVE_IOC_SVP_ALG_PROC_END   0x0000464bu
+
+/* ---- Globals ---- */
+
+#ifdef IVE_STANDALONE
+static void __iomem *g_ive_regs;
+#else
+/* Shared with ive_init.c platform probe */
+void *g_ive_regs;
+unsigned int g_ive_irq;
+unsigned char g_ive_power_save_en;
+unsigned short g_ive_node_num = 512;
+unsigned int g_vendor_task_phys;
+unsigned char g_skip_hw_init;
+module_param_named(vendor_task, g_vendor_task_phys, uint, S_IRUGO | S_IWUSR);
+module_param_named(skip_init, g_skip_hw_init, byte, S_IRUGO);
+#endif
+
+/* ---- Model context ---- */
+#define MAX_XNN_MODELS 4
+struct xnn_model_ctx {
+	u64 model_phys;
+	u32 model_size;
+	u32 weight_off;
+	u32 weight_size;
+	u32 tmp_buf_size;
+	u16 layer_num;
+	u8  src_num, dst_num;
+	u8  in_use;
+	u64 task_phys;
+	void *task_virt;
+	u32 task_size;
+	u16 node_count;
+};
+static struct xnn_model_ctx g_models[MAX_XNN_MODELS];
+
+static u64 g_mmz_base;
+
+/* Shared IRQ / completion state for both DMA selftest and fwd_slice */
+static u32 g_ive_last_status;
+static u32 g_ive_irq_count;
+static DECLARE_COMPLETION(g_ive_done);
+
+/* Shared 4KB MMZ buffers that libive.so allocates via init ioctls and
+ * then mmaps via /dev/ive to get userspace virt pointers.
+ *  - svp_alg: cmd 0x8010463b (vendor's svp_alg_proc_init)
+ *  - ivp:     cmd 0x801046c8 (vendor's ivp_proc_init) */
+static u64 g_svp_alg_phys;
+static void *g_svp_alg_virt;
+static u64 g_ivp_proc_phys;
+static void *g_ivp_proc_virt;
+
+/* Pre-allocated 256-byte MMZ buffer for non-XNN task nodes.
+ * Each non-XNN IVE op builds a single 208-byte task node here,
+ * submits it, and waits for completion before returning. */
+static u64 g_ive_task_phys;
+static void *g_ive_task_virt;
+
+/* Shared hw_init guard — called from either svp_init or first non-XNN submit */
+static int g_hw_init_done;
+
+/* ---- Helpers ---- */
+
+static inline u32 ive_cvt(u64 phys)
+{
+	return (u32)(phys - g_mmz_base);
+}
+
+static inline int ive_layer_desc_off(u8 src_num, u8 dst_num)
+{
+	return ((-2 * (src_num + dst_num)) & 0xF) +
+	       2 * (src_num + dst_num) + 80 +
+	       32 * src_num + 32 * dst_num;
+}
+
+static inline int ive_layer_desc_size(u8 type)
+{
+	static const int sizes[] = {80, 48, 64, 96, 64, 48, 32};
+	return type <= 6 ? sizes[type] : -1;
+}
+
+static inline s8 ive_normalize(u8 pixel)
+{
+	int v = ((pixel * 33796 - 131072) >> 20) - 1;
+	return (s8)(v < -128 ? -128 : v > 127 ? 127 : v);
+}
+
+static inline void ive_link_node(u8 *node_buf, int node_idx, u32 node_phys)
+{
+	if (node_idx > 0)
+		*(u32 *)(node_buf + (node_idx - 1) * 0x80) =
+			ive_cvt(node_phys + node_idx * 0x80);
+}
+
+/* ---- Platform abstraction ---- */
+
+static void *ive_dma_alloc(u64 *phys, u32 size)
+{
+#ifdef IVE_STANDALONE
+	void *virt = kmalloc(size, GFP_KERNEL);
+	if (virt)
+		*phys = virt_to_phys(virt);
+	return virt;
+#else
+	void *virt = NULL;
+	if (CMPI_MmzMallocNocache(NULL, "Xnn_Neo", phys, &virt, size))
+		return NULL;
+	return virt;
+#endif
+}
+
+static void ive_dma_free(u64 phys, void *virt)
+{
+#ifdef IVE_STANDALONE
+	kfree(virt);
+#else
+	CMPI_MmzFree(phys, virt);
+#endif
+}
+
+static void *ive_map_nocache(u64 phys, u32 size)
+{
+#ifdef IVE_STANDALONE
+	return phys_to_virt(phys);
+#else
+	return CMPI_Remap_Nocache(phys, size);
+#endif
+}
+
+static void ive_unmap_flush(void *virt, u32 size)
+{
+#ifdef IVE_STANDALONE
+	/* Flush dcache so DMA/QEMU sees our writes */
+	__cpuc_flush_dcache_area(virt, size);
+	outer_flush_range(virt_to_phys(virt), virt_to_phys(virt) + size);
+#else
+	CMPI_Unmap(virt);
+#endif
+}
+
+/* ---- Build HW task nodes from OMS layer descriptors ---- */
+
+static int ive_build_task_nodes(struct xnn_model_ctx *m,
+				u8 *oms, u64 tmp_phys, u64 model_phys)
+{
+	u8 *desc;
+	u8 *node_buf = (u8 *)m->task_virt;
+	u32 node_phys = (u32)m->task_phys;
+	int node_idx = 0;
+	int i;
+	u8 src_num = oms[52];
+	u8 dst_num = oms[53];
+	u16 layer_num = *(u16 *)(oms + 50);
+
+	desc = oms + ive_layer_desc_off(src_num, dst_num);
+	memset(node_buf, 0, m->task_size);
+
+	for (i = 0; i < layer_num; i++) {
+		u8 type = desc[0];
+		u8 *node = node_buf + node_idx * 0x80;
+		int sz = ive_layer_desc_size(type);
+
+		if (sz < 0)
+			return -EINVAL;
+
+		switch (type) {
+		case 5: /* Preproc — CPU handles this, no HW node needed */
+			break;
+		case 1: /* Flatten */
+			ive_link_node(node_buf, node_idx, node_phys);
+			*(u8 *)(node + 9) = desc[3];
+			*(u8 *)(node + 10) = 0x36;
+			*(u8 *)(node + 11) = 1;
+			*(u32 *)(node + 16) = ive_cvt(tmp_phys + *(u32 *)(desc + 12));
+			*(u32 *)(node + 20) = ive_cvt(tmp_phys + *(u32 *)(desc + 16));
+			*(u32 *)(node + 32) = *(u16 *)(desc + 8) * *(u16 *)(desc + 20);
+			*(u16 *)(node + 40) = *(u16 *)(desc + 10);
+			*(u16 *)(node + 42) = *(u16 *)(desc + 8);
+			*(u16 *)(node + 44) = *(u16 *)(desc + 20);
+			*(u16 *)(node + 46) = *(u16 *)(desc + 22);
+			*(u16 *)(node + 48) = *(u16 *)(desc + 6);
+			*(u16 *)(node + 50) = 1;
+			*(u32 *)(node + 52) = *(u32 *)(desc + 28);
+			*(u32 *)(node + 56) = *(u32 *)(desc + 32);
+			*(u8 *)(node + 63) = 1;
+			node_idx++;
+			break;
+		case 2: /* FC */
+			ive_link_node(node_buf, node_idx, node_phys);
+			*(u8 *)(node + 8) = desc[3];
+			*(u8 *)(node + 9) = desc[4];
+			*(u8 *)(node + 10) = 0x36;
+			*(u8 *)(node + 11) = 2;
+			*(u32 *)(node + 12) = *(u32 *)(desc + 32);
+			*(u32 *)(node + 16) = ive_cvt(tmp_phys + *(u32 *)(desc + 24));
+			*(u32 *)(node + 20) = ive_cvt(tmp_phys + *(u32 *)(desc + 28));
+			*(u32 *)(node + 24) = ive_cvt(model_phys + *(u32 *)(desc + 20));
+			*(u32 *)(node + 28) = *(u32 *)(desc + 16);
+			/* Per-tile fields that vendor patches in ive_start_task.
+			 * For a non-tiled FC these match values captured via kprobe:
+			 * node+32 = 0x400 (total in bytes / 0x20 units * 0x20?)
+			 * node+44 = 0x20 (in_stride = 32-byte HW alignment) */
+			*(u32 *)(node + 32) = 0x400;  /* TEMP: hardcoded from vendor capture */
+			*(u16 *)(node + 40) = 1;
+			*(u16 *)(node + 42) = 1;
+			*(u16 *)(node + 44) = 0x20;   /* TEMP: hardcoded from vendor capture */
+			*(u16 *)(node + 46) = *(u16 *)(desc + 14);
+			*(u16 *)(node + 48) = *(u16 *)(desc + 8);
+			*(u16 *)(node + 50) = *(u16 *)(desc + 10);
+			*(u32 *)(node + 52) = *(u32 *)(desc + 44);
+			*(u32 *)(node + 56) = *(u32 *)(desc + 48);
+			*(u8 *)(node + 60) = desc[6];
+			*(u8 *)(node + 63) = desc[5];
+			*(u32 *)(node + 64) = *(u32 *)(desc + 40);
+			*(u32 *)(node + 68) = *(u32 *)(desc + 36);
+			node_idx++;
+			break;
+		case 4: { /* Unpack */
+			u16 out_c = *(u16 *)(desc + 6);
+			u16 out_h = *(u16 *)(desc + 8);
+			u16 in_stride = *(u16 *)(desc + 12);
+			/* Vendor uses in_stride for BOTH in and out stride */
+			u16 out_stride = in_stride;
+			ive_link_node(node_buf, node_idx, node_phys);
+			*(u8 *)(node + 8) = desc[3];
+			*(u8 *)(node + 9) = desc[4];
+			*(u8 *)(node + 10) = 0x36;
+			*(u8 *)(node + 11) = 4;
+			*(u32 *)(node + 12) = *(u32 *)(desc + 32);
+			*(u32 *)(node + 16) = ive_cvt(tmp_phys + *(u32 *)(desc + 24));
+			*(u32 *)(node + 20) = ive_cvt(tmp_phys + *(u32 *)(desc + 28));
+			*(u32 *)(node + 24) = ive_cvt(model_phys + *(u32 *)(desc + 52));
+			*(u32 *)(node + 28) = *(u32 *)(desc + 48);
+			*(u32 *)(node + 32) = (u32)out_h * in_stride;
+			*(u32 *)(node + 36) = (u32)out_h * out_stride;
+			*(u16 *)(node + 40) = *(u16 *)(desc + 10);
+			*(u16 *)(node + 42) = *(u16 *)(desc + 8);
+			*(u16 *)(node + 44) = in_stride;
+			*(u16 *)(node + 46) = out_stride;
+			*(u16 *)(node + 48) = out_c;
+			*(u16 *)(node + 50) = out_c;
+			*(u32 *)(node + 52) = *(u32 *)(desc + 40);
+			*(u32 *)(node + 56) = *(u32 *)(desc + 44);
+			*(u8 *)(node + 63) = 1;
+			*(u32 *)(node + 64) = *(u32 *)(desc + 36);
+			*(u8 *)(node + 78) = 8;
+			*(u32 *)(node + 116) = (u32)out_h * out_stride * out_c;
+			node_idx++;
+			break;
+		}
+		case 0: { /* Conv — IDA ive_xnn_parse_conv_constprop_40 line 4642
+			 * Desc field map (from s[] packing in IDA):
+			 * desc[3]=in_fmt, [4]=out_fmt, [5]=pool, [6]=af, [7]=is_pad
+			 * desc[8..9]=in_c, [10..11]=in_h, [12..13]=in_w
+			 * desc[14..15]=out_c, [16..17]=out_h, [18..19]=out_w
+			 * desc[20..23]=arg_len, [24..27]=arg_off
+			 * desc[40..43]=in_tmp, [44..47]=out_tmp
+			 * desc[48..49]=in_stride, [50..51]=out_stride
+			 * desc[61]=kernel_size, [62]=in_bond_num
+			 */
+			u16 in_c = *(u16 *)(desc + 8);
+			u16 in_h = *(u16 *)(desc + 10);
+			u16 in_w = *(u16 *)(desc + 12);
+			u16 out_c = *(u16 *)(desc + 14);
+			u8 ksize = desc[61];
+			u8 bond = desc[62];
+			/* Compute tiling params (IDA lines 4704-4770)
+			 * v44=in_bond_num==1, v32=in_w, v30=in_h, v45=ksize */
+			int tile_w, tile_h;
+			if (bond == 1) {
+				tile_w = 64; tile_h = 4;
+			} else if (in_w <= 16) {
+				tile_w = 16; tile_h = 16;
+			} else {
+				tile_w = 32; tile_h = 8;
+			}
+			int rows, cols;
+			if (ksize == 3) {
+				cols = ((int)in_w + tile_w - 3) / tile_w;
+				rows = (tile_h + (int)in_h - 3) / tile_h;
+			} else {
+				cols = ((int)in_w + tile_w - 1) / tile_w;
+				rows = (tile_h + (int)in_h - 1) / tile_h;
+			}
+
+			ive_link_node(node_buf, node_idx, node_phys);
+			*(u8  *)(node + 8) = desc[3];  /* in_fmt */
+			*(u8  *)(node + 9) = desc[4];  /* out_fmt */
+			*(u8  *)(node + 10) = 0x36;
+			*(u8  *)(node + 11) = 0; /* Conv: type 0, HW handles tiling internally */
+			*(u32 *)(node + 12) = *(u32 *)(desc + 28); /* s[8] */
+			*(u32 *)(node + 16) = ive_cvt(tmp_phys + *(u32 *)(desc + 40));
+			*(u32 *)(node + 20) = ive_cvt(tmp_phys + *(u32 *)(desc + 44));
+			*(u32 *)(node + 24) = ive_cvt(model_phys + *(u32 *)(desc + 24));
+			*(u32 *)(node + 28) = *(u32 *)(desc + 20); /* arg_len */
+			*(u32 *)(node + 32) = (u32)in_w * (u32)*(u16 *)(desc + 48);
+			*(u32 *)(node + 36) = (u32)*(u16 *)(desc + 16) *
+					      (u32)*(u16 *)(desc + 50);
+			*(u16 *)(node + 40) = in_w;  /* HIWORD(s[3]) */
+			*(u16 *)(node + 42) = in_h;  /* LOWORD(s[3]) */
+			*(u16 *)(node + 44) = *(u16 *)(desc + 48); /* in_stride */
+			*(u16 *)(node + 46) = *(u16 *)(desc + 50); /* out_stride */
+			*(u16 *)(node + 48) = in_c;  /* HIWORD(s[2]) */
+			*(u16 *)(node + 50) = out_c;
+			*(u32 *)(node + 52) = *(u32 *)(desc + 64); /* s[17] */
+			*(u32 *)(node + 56) = *(u32 *)(desc + 68); /* s[18] */
+			*(u8  *)(node + 60) = desc[6]; /* af_mode */
+			*(u8  *)(node + 61) = desc[5]; /* pool_mode */
+			*(u8  *)(node + 62) = desc[3]; /* in_fmt */
+			*(u8  *)(node + 63) = 1;
+			*(u32 *)(node + 64) = *(u32 *)(desc + 36); /* s[10] */
+			*(u32 *)(node + 68) = *(u32 *)(desc + 32); /* s[9] */
+			*(u8  *)(node + 72) = desc[60];
+			*(u8  *)(node + 73) = ksize;
+			*(u8  *)(node + 74) = (u8)rows;
+			*(u8  *)(node + 75) = (u8)cols;
+			*(u8  *)(node + 76) = (u8)tile_h;
+			*(u8  *)(node + 77) = (u8)tile_w;
+			*(u8  *)(node + 78) = bond;
+			*(u32 *)(node + 112) = 0;
+			*(u32 *)(node + 116) = *(u32 *)(node + 36) *
+				(((-out_c & 7) + out_c) >> 3);
+			node_idx++;
+
+			ive_log("conv: %ux%ux%u k=%u tiles=%dx%d=%d\n",
+				in_c, in_h, in_w, ksize,
+				rows, cols, rows * cols);
+			break;
+		}
+		case 3: case 6:
+			break;
+		}
+		desc += sz;
+	}
+	return node_idx;
+}
+
+/* ---- HW init ---- */
+
+static void ive_hw_init(void)
+{
+	u32 hw_id;
+
+#ifndef IVE_STANDALONE
+	{
+		SYS_EXPORT_FUNC_S *sys;
+		MPP_CHN_S chn = { .enModId = 29, .s32DevId = 0, .s32ChnId = 0 };
+		GK_S32 val;
+
+		sys = (SYS_EXPORT_FUNC_S *)CMPI_GetModuleFuncById(2);
+		if (sys && sys->pfnSysDrvIoCtrl) {
+			/* Full reset cycle: assert reset → enable clock →
+			 * release reset. This recovers from the HW-dead state
+			 * libive.so's HI_MPI_SYS_Exit leaves the block in. */
+			val = 1; sys->pfnSysDrvIoCtrl(&chn, 144, &val); /* reset(1) */
+			udelay(1000);
+			val = 1; sys->pfnSysDrvIoCtrl(&chn, 145, &val); /* clk en */
+			val = 0; sys->pfnSysDrvIoCtrl(&chn, 144, &val); /* reset(0) */
+		}
+	}
+#endif
+
+	g_mmz_base = 0;
+
+	hw_id = readl(g_ive_regs + 0x80);
+	if (hw_id == 0) {
+		ive_err("hw_init: HW not responding\n");
+		return;
+	}
+
+	writel(6, g_ive_regs + 0x04);           /* drv_ive_en_int */
+	writel(7, g_ive_regs + 0x08);           /* drv_ive_clear_int */
+	writel(0xffffffff, g_ive_regs + 0x60);  /* drv_ive_write_timeout_regs(-1) */
+	writel(readl(g_ive_regs + 0x34) | 1, g_ive_regs + 0x34);  /* drv_ive_en_clk_gt */
+	writel((readl(g_ive_regs + 0x54) & 0xfffffff0) | 7, g_ive_regs + 0x54);
+	writel(readl(g_ive_regs + 0x54) | 0xf00, g_ive_regs + 0x54);  /* set_outstanding */
+
+	/* drv_ive_set_mem_speed — memory arbitration register [0x90].
+	 * Vendor init applies a long bit-field sequence that lands on a
+	 * specific priority/latency config. Without this [0x90] stays 0
+	 * and Conv HW hangs waiting for DRAM. */
+	{
+		u32 v = readl(g_ive_regs + 0x90);
+		v = (v & 0xFC7FFFFF) | 0x1800000;
+		v = (v & 0xFF9FFFFF) | 0x200000;
+		v = (v & 0xFFE7FFFF) | 0x80000;
+		v = (v & 0xFFF8FFFF) | 0x30000;
+		v = (v & 0xFFFF3FFF) | 0x4000;
+		v = (v & 0xFFFFCFFF) | 0x1000;
+		v = (v & 0xFFFFF3FF);
+		v = (v & 0xFFFFFCFF) | 0x100;
+		v = (v & 0xFFFFFF3F) | 0x40;
+		v = (v & 0xFFFFFFCF) | 0x10;
+		v = (v & 0xFFFFFFF3) | 8;
+		v = (v & 0xFFFFFFFC) | 1;
+		writel(v, g_ive_regs + 0x90);
+	}
+
+	writel(0, g_ive_regs + 0x8C);  /* drv_ive_set_base_addr(mmz_base>>12)=0 */
+
+	ive_log("hw_init: HW ID=0x%08x [0x90]=0x%08x\n",
+		hw_id, readl(g_ive_regs + 0x90));
+}
+
+/* ---- Ioctl handlers (work on kernel buffer, no copy_from/to_user) ---- */
+
+static long ive_svp_init(unsigned long arg)
+{
+	u8 *buf = (u8 *)arg;
+
+	if (!g_ive_regs)
+		g_ive_regs = ioremap(0x11320000, 0x10000);
+	/* Run hw_init on first svp_init call, and re-run if HW went offline
+	 * (HI_MPI_SYS_Exit disables the IVE clock between sessions). */
+	if (g_ive_regs && !g_skip_hw_init) {
+		u32 hw_id = readl(g_ive_regs + 0x80);
+		u32 en    = readl(g_ive_regs + 0x04);
+		if (!g_hw_init_done || hw_id == 0 || (en & 6) != 6) {
+			ive_hw_init();
+			g_hw_init_done = 1;
+		}
+	} else if (g_ive_regs && g_skip_hw_init && !g_hw_init_done) {
+		ive_log("hw_init SKIPPED (skip_init=1)\n");
+		g_hw_init_done = 1;
+	}
+
+	/* Vendor's cmd 0x8010463b (which we called IVE_IOC_SVP_INIT) is
+	 * actually svp_alg_proc_init: allocate a 4 KB MMZ buffer that
+	 * libive.so then mmaps via /dev/ive's mmap callback.
+	 *
+	 * Return layout (matches vendor IDA lines 7470-7487):
+	 *   buf[0..3] = 4095 (size - 1)
+	 *   buf[8..15] = phys (u64)
+	 */
+	if (!g_svp_alg_virt) {
+		g_svp_alg_virt = ive_dma_alloc(&g_svp_alg_phys, 4096);
+		if (!g_svp_alg_virt) {
+			ive_err("svp_init: svp_alg alloc failed\n");
+			return -ENOMEM;
+		}
+		memset(g_svp_alg_virt, 0, 4096);
+	}
+	*(u32 *)(buf + 0) = 4095;
+	*(u64 *)(buf + 8) = g_svp_alg_phys;
+	ive_log("svp_init: svp_alg phys=0x%llx\n", g_svp_alg_phys);
+	return 0;
+}
+
+#define XNN_MODEL_PARAMS_OFF 12
+#define OMS_TMP_BUF_SIZE  12
+#define OMS_DATA_SLICE    20
+#define OMS_ROI_BATCH     22
+#define OMS_SCALE_NUM     48
+#define OMS_LAYER_NUM     50
+#define OMS_SRC_NUM       52
+#define OMS_DST_NUM       53
+
+static u32 g_model_id_counter;
+
+static u32 ive_alloc_model_slot(void)
+{
+	u32 i;
+	for (i = 0; i < MAX_XNN_MODELS; i++)
+		if (!g_models[i].in_use)
+			return i;
+	return (u32)-1;
+}
+
+static long ive_xnn_loadmodel(unsigned long arg)
+{
+	u32 *buf = (u32 *)arg;
+	u64 model_phys = *(u64 *)(buf + 0);
+	u32 model_size = buf[4];
+	u8 *oms, *preproc;
+	u32 *mp, tmp_buf_size;
+	u16 scale_num, layer_num;
+	u8 src_num, dst_num;
+
+	if (model_size < 0x50)
+		return -EINVAL;
+
+	oms = phys_to_virt(model_phys);
+	if (!oms)
+		return -ENOMEM;
+
+	tmp_buf_size = *(u32 *)(oms + OMS_TMP_BUF_SIZE);
+	scale_num    = *(u16 *)(oms + OMS_SCALE_NUM);
+	layer_num    = *(u16 *)(oms + OMS_LAYER_NUM);
+	src_num      = oms[OMS_SRC_NUM];
+	dst_num      = oms[OMS_DST_NUM];
+
+	ive_log("loadmodel: phys=0x%llx size=%u layers=%u\n",
+		model_phys, model_size, layer_num);
+
+	mp = buf + XNN_MODEL_PARAMS_OFF;
+	memset(mp, 0, 2160);
+	/* Use lowest free slot instead of a monotonic counter so repeated
+	 * loadmodel calls across user-space sessions get mid=0 first. */
+	mp[0] = ive_alloc_model_slot();
+	if (mp[0] == (u32)-1)
+		return -ENOMEM;
+	g_model_id_counter = mp[0] + 1;
+	mp[1] = tmp_buf_size;
+	mp[2] = scale_num;
+	*(u16 *)((u8 *)mp + 12) = src_num;
+	*(u16 *)((u8 *)mp + 14) = dst_num;
+
+	preproc = oms + ive_layer_desc_off(src_num, dst_num);
+	if (preproc[0] == 5) {
+		mp[4] = *(u32 *)(preproc + 40);
+		mp[5] = *(u16 *)(preproc + 8);
+		mp[6] = *(u16 *)(preproc + 6);
+		mp[7] = 3;
+		mp[17] = 1;
+	}
+
+	/* Fill dst node params from Unpack descriptor (for forward validation) */
+	{
+		u8 *d = oms + ive_layer_desc_off(src_num, dst_num);
+		int li;
+		for (li = 0; li < layer_num; li++) {
+			u8 lt = d[0];
+			if (lt == 4) { /* Unpack — this is the output layer */
+				u32 *dst = (u32 *)((u8 *)mp + 1232);
+				dst[0] = 7;  /* blob_type = U8 */
+				dst[1] = *(u16 *)(d + 10); /* width */
+				dst[2] = *(u16 *)(d + 8);  /* height */
+				dst[3] = *(u16 *)(d + 6);  /* chn */
+				dst[4] = li;  /* output layer index */
+				break;
+			}
+			d += ive_layer_desc_size(lt);
+		}
+	}
+
+	*((u8 *)mp + 2152) = oms[OMS_DATA_SLICE];
+	*((u8 *)mp + 2153) = oms[OMS_ROI_BATCH];
+
+	{
+		u32 mid = mp[0];
+		struct xnn_model_ctx *m;
+
+		if (mid >= MAX_XNN_MODELS)
+			return -ENOMEM;
+
+		m = &g_models[mid];
+		m->model_phys = model_phys;
+		m->model_size = model_size;
+		m->weight_off = *(u32 *)(oms + 60);
+		m->weight_size = *(u32 *)(oms + 56);
+		m->tmp_buf_size = tmp_buf_size;
+		m->layer_num = layer_num;
+		m->src_num = src_num;
+		m->dst_num = dst_num;
+
+		{
+			/* Each HW task node is 0x80 bytes. Worst case: one node
+			 * per OMS layer (Conv/FC/Flatten/Unpack each emit one;
+			 * types 3/5/6 emit none — overshoot is harmless). Round
+			 * up to a page. The old fixed 4096 only fit 32 nodes and
+			 * overran for models with >32 layers. */
+			u32 need = ((u32)layer_num * 0x80 + 4095) & ~4095u;
+			if (need < 4096)
+				need = 4096;
+			if (m->task_virt && m->task_size < need) {
+				ive_dma_free(m->task_phys, m->task_virt);
+				m->task_virt = NULL;
+			}
+			if (!m->task_virt) {
+				m->task_size = need;
+				m->task_virt = ive_dma_alloc(&m->task_phys,
+							     m->task_size);
+				if (!m->task_virt)
+					return -ENOMEM;
+			}
+		}
+		m->in_use = 1;
+
+		{
+			u64 tmp_phys = *(u64 *)((u8 *)buf + 24);
+			int rc = ive_build_task_nodes(m, oms, tmp_phys, model_phys);
+			if (rc < 0)
+				return rc;
+			m->node_count = (u16)rc;
+		}
+	}
+	return 0;
+}
+
+/* Vendor cmd 0x801046c8 = ivp_proc_init: allocate a 4KB MMZ buffer
+ * "IVPProc". Returns buf[0]=4095, buf[8..15]=phys. Parallels
+ * svp_init's svp_alg_proc handling but for a different global. */
+static long ive_open_dev(unsigned long arg)
+{
+	u8 *buf = (u8 *)arg;
+
+	if (!buf)
+		return -EINVAL;
+	if (!g_ivp_proc_virt) {
+		g_ivp_proc_virt = ive_dma_alloc(&g_ivp_proc_phys, 4096);
+		if (!g_ivp_proc_virt) {
+			ive_err("ivp_proc_init: alloc failed\n");
+			return -ENOMEM;
+		}
+		memset(g_ivp_proc_virt, 0, 4096);
+	}
+	*(u32 *)(buf + 0) = 4095;
+	*(u64 *)(buf + 8) = g_ivp_proc_phys;
+	ive_log("ivp_proc_init: phys=0x%llx\n", g_ivp_proc_phys);
+	return 0;
+}
+
+static long ive_xnn_fwd_slice(unsigned long arg)
+{
+	u8 *buf = (u8 *)arg;
+	u32 model_id = *(u32 *)(buf + 0x338);
+	u64 src_phys = *(u64 *)(buf + 0x018);
+	u32 src_stride = *(u32 *)(buf + 0x00C);
+	u32 src_w = *(u32 *)(buf + 0x028);
+	u32 src_h = *(u32 *)(buf + 0x02C);
+	u64 dst_phys = *(u64 *)(buf + 0x650);
+	u64 tmp_phys = *(u64 *)(buf + 0x940);
+	u32 tmp_size = *(u32 *)(buf + 0x950);
+	struct xnn_model_ctx *m;
+	u32 node_phys, status;
+	int timeout, ni;
+
+	if (model_id >= MAX_XNN_MODELS || !g_models[model_id].in_use)
+		return -EINVAL;
+	m = &g_models[model_id];
+	if (!m->task_virt)
+		return -ENOMEM;
+
+	node_phys = (u32)m->task_phys;
+
+	/* Patch Unpack output → dst. Walk the actual node count from
+	 * loadmodel; the old hardcoded 32 missed Unpack nodes in models
+	 * with many Conv layers (the IVP model has Unpack near index 44). */
+	for (ni = 0; ni < m->node_count; ni++) {
+		u8 *nd = (u8 *)m->task_virt + ni * 0x80;
+		if (nd[10] != 0x36)
+			break;
+		if (nd[11] == 4) {
+			*(u32 *)(nd + 20) = (u32)dst_phys;
+			break;
+		}
+	}
+
+	/* CPU preprocessing: YUV420SP → 3ch normalized S8.
+	 * The loop below writes exactly 3 planes (Y, U, V) each of size
+	 * src_w * src_h. The old `32 * src_w * src_h` was a ~10x overshoot
+	 * that walked memset off the end of the mapped TMP region. */
+	{
+		u32 pp_size = 3 * src_w * src_h;
+		void *nc = ive_map_nocache(tmp_phys,
+				pp_size < tmp_size ? pp_size : tmp_size);
+		/* Source frame: use virt addr from blob (buf+0x10 = virt field).
+		 * In OSAL mode the ioctl buf is kernel-copied so virt is the
+		 * userspace mapping of MMZ — but phys_to_virt works for MMZ.
+		 * In standalone mode, phys_to_virt may fail for user-allocated
+		 * pages, so fall back to the virt pointer from the blob. */
+		u64 src_virt_u = *(u64 *)(buf + 0x010);
+		u8 *sv = phys_to_virt(src_phys);
+#ifdef IVE_STANDALONE
+		/* In standalone mode, virt pointer from ioctl is the user's
+		 * virtual address. Use copy_from_user via a kernel buffer. */
+		{
+			u32 frm_size = src_stride * src_h + src_stride * src_h / 2;
+			u8 *frm_buf = kmalloc(frm_size, GFP_KERNEL);
+			if (frm_buf && !copy_from_user(frm_buf,
+					(void __user *)(uintptr_t)src_virt_u, frm_size))
+				sv = frm_buf;
+			else {
+				kfree(frm_buf);
+				sv = NULL;
+			}
+		}
+#endif
+		if (nc && sv) {
+			u8 *out = nc, *uv = sv + src_stride * src_h;
+			u32 plane = src_w * src_h;
+			int y, x;
+
+			memset(nc, 0, pp_size);
+			/* Write RAW YUV planes (no normalization). Vendor's
+			 * VGS preproc also writes raw pixel values to tmp; the
+			 * Conv HW handles scaling via per-layer requant regs
+			 * d[64..71]. Normalizing here produced garbage input. */
+			for (y = 0; y < src_h; y++)
+				for (x = 0; x < src_w; x++) {
+					int uv_off = (y / 2) * src_stride + (x & ~1);
+					out[y * src_w + x] =
+						sv[y * src_stride + x];
+					out[plane + y * src_w + x] =
+						uv[uv_off];
+					out[2 * plane + y * src_w + x] =
+						uv[uv_off + 1];
+				}
+			ive_unmap_flush(nc, pp_size);
+		}
+#ifdef IVE_STANDALONE
+		if (sv) kfree(sv);
+#endif
+	}
+
+	/* Ensure Conv-critical regs are set (OSAL rmmod clears 0x84/0x88) */
+	if (g_ive_regs) {
+		writel(1, g_ive_regs + 0x84);
+		writel(1, g_ive_regs + 0x88);
+	}
+
+	/* Submit chain — use vendor's known-good address if available */
+	if (g_vendor_task_phys)
+		node_phys = g_vendor_task_phys;
+
+	/* Submit and wait briefly for IRQ. Vendor's forward path is async —
+	 * it kicks HW and returns a handle. For this SoC XNN HW is currently
+	 * non-functional (confirmed empirically — vendor's [0x18] task counter
+	 * never moves either), so the short wait is effectively a no-op and
+	 * we return success regardless. Kept for eventual HW that works. */
+	reinit_completion(&g_ive_done);
+	g_ive_last_status = 0;
+	writel(7, g_ive_regs + 0x08);  /* clear stale int state */
+
+	writel(node_phys, g_ive_regs + 0x10);
+	isb(); dsb(); dmb();
+	writel(1, g_ive_regs + 0x00);
+
+	(void)wait_for_completion_timeout(&g_ive_done, msecs_to_jiffies(5));
+	status = g_ive_last_status;
+	(void)status; (void)timeout; (void)ni;
+
+	/* Match vendor semantics: return success regardless — caller's
+	 * query ioctl will confirm completion. Buf[0] is the "handle"
+	 * that libive.so checks; 0 means "already done". */
+	*(u32 *)buf = 0;
+	return 0;
+}
+
+static long ive_xnn_query(unsigned long arg)
+{
+	((u32 *)arg)[1] = 1;
+	return 0;
+}
+
+/* libive.so svp_alg_proc_init (cmd 0x800b463b):
+ * Allocate a 4 KB MMZ buffer. Return buf[0]=4095 (size-1) and
+ * buf[8..15]=phys (u64). Userspace then mmaps /dev/ive with offset=phys
+ * to get a virt pointer. */
+static long ive_svp_alg_proc_init(unsigned long arg)
+{
+	u8 *buf = (u8 *)arg;
+
+	if (!buf)
+		return -EINVAL;
+	if (!g_svp_alg_virt) {
+		g_svp_alg_virt = ive_dma_alloc(&g_svp_alg_phys, 4096);
+		if (!g_svp_alg_virt) {
+			ive_err("svp_alg_proc_init: alloc failed\n");
+			return -ENOMEM;
+		}
+		memset(g_svp_alg_virt, 0, 4096);
+	}
+	*(u32 *)(buf + 0) = 4095;
+	*(u64 *)(buf + 8) = g_svp_alg_phys;
+	ive_log("svp_alg_proc_init: phys=0x%llx virt=%p\n",
+		g_svp_alg_phys, g_svp_alg_virt);
+	return 0;
+}
+
+static long ive_svp_alg_proc_exit(unsigned long arg)
+{
+	if (g_svp_alg_virt) {
+		ive_dma_free(g_svp_alg_phys, g_svp_alg_virt);
+		g_svp_alg_virt = NULL;
+		g_svp_alg_phys = 0;
+	}
+	return 0;
+}
+
+static long ive_xnn_unloadmodel(unsigned long arg)
+{
+	u32 model_id = ((u32 *)arg)[0];
+
+	if (model_id < MAX_XNN_MODELS) {
+		struct xnn_model_ctx *m = &g_models[model_id];
+		if (m->task_virt) {
+			ive_dma_free(m->task_phys, m->task_virt);
+			m->task_virt = NULL;
+		}
+		m->in_use = 0;
+	}
+	return 0;
+}
+
+/* ==== Non-XNN IVE ops ==== */
+
+/* IVE_IMAGE_S field offsets (72-byte struct):
+ *   +0: u64 phys[3]  +24: u64 virt[3]  +48: u32 stride[3]
+ *  +60: u32 width   +64: u32 height   +68: u32 enType
+ * Vendor reads src/dst structs from the ioctl arg buffer at fixed offsets
+ * (e.g. arg+8 for src, arg+80 for dst) and fills a 208-byte HW task node.
+ */
+#define IMG_PHYS(img)   (*(u32 *)(img))         /* low 32-bit phys */
+#define IMG_STRIDE(img) (*(u32 *)((img) + 48))  /* stride[0] */
+#define IMG_WIDTH(img)  (*(u32 *)((img) + 60))
+#define IMG_HEIGHT(img) (*(u32 *)((img) + 64))
+#define IMG_TYPE(img)   (*(u32 *)((img) + 68))
+
+/* Submit a pre-filled 208-byte non-XNN task node. Copies the
+ * stack-local node to the pre-allocated MMZ task buffer, kicks HW,
+ * and waits briefly for the completion IRQ. Returns 0. */
+static long ive_submit_nonxnn(u8 *node, u8 *arg_buf)
+{
+	/* Always ensure HW is initialized. On first call, full init.
+	 * Keep a dirty flag: if a previous submit timed out (HW stuck),
+	 * force a full reset-cycle hw_init on the next call. */
+	if (!g_ive_regs)
+		g_ive_regs = ioremap(0x11320000, 0x10000);
+	if (g_ive_regs && !g_hw_init_done) {
+		ive_hw_init();
+		g_hw_init_done = 1;
+	}
+
+	if (!g_ive_task_virt) {
+		g_ive_task_virt = ive_dma_alloc(&g_ive_task_phys, 4096);
+		if (!g_ive_task_virt)
+			return -ENOMEM;
+	}
+	memcpy(g_ive_task_virt, node, 208);
+	/* node+0..3 = next ptr (0 = end of chain) — already set by caller */
+
+	reinit_completion(&g_ive_done);
+	g_ive_last_status = 0;
+	writel(6, g_ive_regs + 0x04);   /* drv_ive_en_int */
+	writel(7, g_ive_regs + 0x08);   /* drv_ive_clear_int */
+	writel((u32)g_ive_task_phys, g_ive_regs + 0x10);
+	isb(); dsb(); dmb();
+	writel(1, g_ive_regs + 0x00);
+
+	{
+		unsigned long to = wait_for_completion_timeout(
+			&g_ive_done, msecs_to_jiffies(100));
+		if (to == 0) {
+			/* HW stuck — force a reset cycle on next call to
+			 * recover from the HI_MPI_SYS_Exit dead state. */
+			g_hw_init_done = 0;
+		}
+	}
+
+	/* arg_buf[0..3] = handle out; set 0 = "already done" */
+	if (arg_buf)
+		*(u32 *)arg_buf = 0;
+	return 0;
+}
+
+/* Ioctl cmd codes for non-XNN ops (type='F'=0x46, nr=op_code) */
+#define IVE_IOC_DMA       0xc0684600u
+#define IVE_IOC_FILTER    0xc0b84601u
+#define IVE_IOC_DILATE    0xc0b84606u
+#define IVE_IOC_ERODE     0xc0b84607u
+#define IVE_IOC_THRESH    0xc0a84608u
+#define IVE_IOC_AND       0xc0e84609u
+#define IVE_IOC_SUB       0xc0e8460au
+#define IVE_IOC_OR        0xc0e8460bu
+#define IVE_IOC_HIST      0xc070460du
+#define IVE_IOC_THRESH_S16 0xc0a8460eu
+#define IVE_IOC_THRESH_U16 0xc0a8460fu
+#define IVE_IOC_INTEG     0xc0a0460cu
+#define IVE_IOC_ORDSTAT   0xc0a04611u
+#define IVE_IOC_ADD       0xc0e84614u
+#define IVE_IOC_CCL       0xc0784617u
+#define IVE_IOC_MAP       0xc0b84613u
+
+/* ---- Thresh (op=8): arg = {handle(8), src(72), dst(72), ctrl(12+)} ---- */
+static long ive_op_thresh(unsigned long arg)
+{
+	u8 *buf = (u8 *)arg;
+	u8 *src = buf + 8, *dst = buf + 80, *ctrl = buf + 152;
+	u8 node[208];
+
+	memset(node, 0, sizeof(node));
+	node[10]  = 8;  /* op = Thresh */
+	node[11]  = ctrl[0]; /* enMode */
+	node[12]  = ctrl[4]; /* u8LowThr */
+	node[14]  = ctrl[5]; /* u8HighThr */
+	node[56]  = ctrl[6]; /* u8MinVal */
+	node[57]  = ctrl[7]; /* u8MidVal */
+	node[58]  = ctrl[8]; /* u8MaxVal */
+	*(u32 *)(node + 16) = IMG_PHYS(src);
+	*(u32 *)(node + 20) = IMG_PHYS(dst);
+	*(u16 *)(node + 40) = (u16)IMG_WIDTH(src);
+	*(u16 *)(node + 42) = (u16)IMG_HEIGHT(src);
+	*(u16 *)(node + 44) = (u16)IMG_STRIDE(src);
+	*(u16 *)(node + 50) = (u16)IMG_STRIDE(dst);
+	return ive_submit_nonxnn(node, buf);
+}
+
+/* ---- Dilate (op=6): arg = {handle(8), src(72), dst(72), ctrl(25 mask)} ---- */
+static long ive_op_dilate(unsigned long arg)
+{
+	u8 *buf = (u8 *)arg;
+	u8 *src = buf + 8, *dst = buf + 80, *mask = buf + 152;
+	u8 node[208];
+
+	memset(node, 0, sizeof(node));
+	node[10] = 6; /* op = Dilate */
+	*(u32 *)(node + 16) = IMG_PHYS(src);
+	*(u32 *)(node + 20) = IMG_PHYS(dst);
+	*(u16 *)(node + 40) = (u16)IMG_WIDTH(src);
+	*(u16 *)(node + 42) = (u16)IMG_HEIGHT(src);
+	*(u16 *)(node + 44) = (u16)IMG_STRIDE(src);
+	*(u16 *)(node + 50) = (u16)IMG_STRIDE(dst);
+	memcpy(node + 56, mask, 25);
+	return ive_submit_nonxnn(node, buf);
+}
+
+/* ---- Erode (op=7): same layout as Dilate ---- */
+static long ive_op_erode(unsigned long arg)
+{
+	u8 *buf = (u8 *)arg;
+	u8 *src = buf + 8, *dst = buf + 80, *mask = buf + 152;
+	u8 node[208];
+
+	memset(node, 0, sizeof(node));
+	node[10] = 7; /* op = Erode */
+	*(u32 *)(node + 16) = IMG_PHYS(src);
+	*(u32 *)(node + 20) = IMG_PHYS(dst);
+	*(u16 *)(node + 40) = (u16)IMG_WIDTH(src);
+	*(u16 *)(node + 42) = (u16)IMG_HEIGHT(src);
+	*(u16 *)(node + 44) = (u16)IMG_STRIDE(src);
+	*(u16 *)(node + 50) = (u16)IMG_STRIDE(dst);
+	memcpy(node + 56, mask, 25);
+	return ive_submit_nonxnn(node, buf);
+}
+
+/* ---- DMA (op=0): arg = {handle(8), src_data(32), dst_data(32), ctrl(24+)} ----
+ * Uses IVE_DATA_S (not IVE_IMAGE_S): phys@0, stride@16, width@20, height@24 */
+static long ive_op_dma(unsigned long arg)
+{
+	u8 *buf = (u8 *)arg;
+	u8 *src = buf + 8, *dst = buf + 40, *ctrl = buf + 72;
+	u8 node[208];
+
+	memset(node, 0, sizeof(node));
+	node[10] = 0;           /* op = DMA */
+	node[11] = ctrl[0];     /* enMode */
+	*(u32 *)(node + 16) = *(u32 *)src;             /* src phys */
+	*(u16 *)(node + 40) = *(u16 *)(src + 20);      /* width */
+	*(u16 *)(node + 42) = *(u16 *)(src + 24);      /* height */
+	*(u16 *)(node + 44) = *(u16 *)(src + 16);      /* src stride */
+	*(u32 *)(node + 20) = *(u32 *)dst;             /* dst phys */
+	*(u16 *)(node + 50) = *(u16 *)(dst + 16);      /* dst stride */
+	return ive_submit_nonxnn(node, buf);
+}
+
+/* ---- And/Or/Xor (op=9/11/21): arg = {handle(8), src1(72), src2(72), dst(72)} ---- */
+static long ive_op_logic(unsigned long arg, u8 opcode)
+{
+	u8 *buf = (u8 *)arg;
+	u8 *src1 = buf + 8, *src2 = buf + 80, *dst = buf + 152;
+	u8 node[208];
+
+	memset(node, 0, sizeof(node));
+	node[10] = opcode;
+	*(u32 *)(node + 16) = IMG_PHYS(src1);
+	*(u32 *)(node + 24) = IMG_PHYS(src2);
+	*(u32 *)(node + 20) = IMG_PHYS(dst);
+	*(u16 *)(node + 40) = (u16)IMG_WIDTH(src1);
+	*(u16 *)(node + 42) = (u16)IMG_HEIGHT(src1);
+	*(u16 *)(node + 44) = (u16)IMG_STRIDE(src1);
+	*(u16 *)(node + 46) = (u16)IMG_STRIDE(src2);
+	*(u16 *)(node + 50) = (u16)IMG_STRIDE(dst);
+	return ive_submit_nonxnn(node, buf);
+}
+
+/* ---- Sub (op=10): arg = {handle(8), src1(72), src2(72), dst(72), ctrl(4)} ---- */
+static long ive_op_sub(unsigned long arg)
+{
+	u8 *buf = (u8 *)arg;
+	u8 *src1 = buf + 8, *src2 = buf + 80, *dst = buf + 152, *ctrl = buf + 224;
+	u8 node[208];
+
+	memset(node, 0, sizeof(node));
+	node[10] = 10;
+	node[11] = ctrl[0]; /* enMode */
+	*(u32 *)(node + 16) = IMG_PHYS(src1);
+	*(u32 *)(node + 24) = IMG_PHYS(src2);
+	*(u32 *)(node + 20) = IMG_PHYS(dst);
+	*(u16 *)(node + 40) = (u16)IMG_WIDTH(src1);
+	*(u16 *)(node + 42) = (u16)IMG_HEIGHT(src1);
+	*(u16 *)(node + 44) = (u16)IMG_STRIDE(src1);
+	*(u16 *)(node + 46) = (u16)IMG_STRIDE(src2);
+	*(u16 *)(node + 50) = (u16)IMG_STRIDE(dst);
+	return ive_submit_nonxnn(node, buf);
+}
+
+/* ---- Add (op=20): arg = {handle(8), src1(72), src2(72), dst(72), ctrl(4)} ---- */
+static long ive_op_add(unsigned long arg)
+{
+	u8 *buf = (u8 *)arg;
+	u8 *src1 = buf + 8, *src2 = buf + 80, *dst = buf + 152, *ctrl = buf + 224;
+	u8 node[208];
+
+	memset(node, 0, sizeof(node));
+	node[10] = 20;
+	*(u32 *)(node + 16) = IMG_PHYS(src1);
+	*(u32 *)(node + 24) = IMG_PHYS(src2);
+	*(u32 *)(node + 20) = IMG_PHYS(dst);
+	*(u16 *)(node + 40) = (u16)IMG_WIDTH(src1);
+	*(u16 *)(node + 42) = (u16)IMG_HEIGHT(src1);
+	*(u16 *)(node + 44) = (u16)IMG_STRIDE(src1);
+	*(u16 *)(node + 46) = (u16)IMG_STRIDE(src2);
+	*(u16 *)(node + 50) = (u16)IMG_STRIDE(dst);
+	*(u16 *)(node + 88) = *(u16 *)ctrl;       /* u0q16X */
+	*(u16 *)(node + 90) = *(u16 *)(ctrl + 2); /* u0q16Y */
+	return ive_submit_nonxnn(node, buf);
+}
+
+/* ---- Filter (op=1): arg = {handle(8), src(72), dst(72), ctrl(26+)} ---- */
+static long ive_op_filter(unsigned long arg)
+{
+	u8 *buf = (u8 *)arg;
+	u8 *src = buf + 8, *dst = buf + 80, *ctrl = buf + 152;
+	u8 node[208];
+
+	memset(node, 0, sizeof(node));
+	node[10] = 1;  /* op = Filter */
+	*(u32 *)(node + 16) = IMG_PHYS(src);
+	*(u32 *)(node + 20) = IMG_PHYS(dst);
+	*(u16 *)(node + 40) = (u16)IMG_WIDTH(src);
+	*(u16 *)(node + 42) = (u16)IMG_HEIGHT(src);
+	*(u16 *)(node + 44) = (u16)IMG_STRIDE(src);
+	*(u16 *)(node + 50) = (u16)IMG_STRIDE(dst);
+	memcpy(node + 56, ctrl, 25);  /* 5x5 mask coefficients */
+	node[81] = ctrl[25];          /* norm byte */
+	return ive_submit_nonxnn(node, buf);
+}
+
+/* ---- Hist (op=13): arg = {handle(8), src(72), dst_mem(24+)} ---- */
+static long ive_op_hist(unsigned long arg)
+{
+	u8 *buf = (u8 *)arg;
+	u8 *src = buf + 8, *dst_mem = buf + 80;
+	u8 node[208];
+
+	memset(node, 0, sizeof(node));
+	node[10] = 13; /* op = Hist */
+	*(u32 *)(node + 16) = IMG_PHYS(src);
+	*(u32 *)(node + 20) = *(u32 *)dst_mem;  /* IVE_MEM_INFO_S phys */
+	*(u16 *)(node + 40) = (u16)IMG_WIDTH(src);
+	*(u16 *)(node + 42) = (u16)IMG_HEIGHT(src);
+	*(u16 *)(node + 44) = (u16)IMG_STRIDE(src);
+	return ive_submit_nonxnn(node, buf);
+}
+
+/* ---- Thresh_S16 (op=14): arg = {handle(8), src(72), dst(72), ctrl(12+)} ---- */
+static long ive_op_thresh_s16(unsigned long arg)
+{
+	u8 *buf = (u8 *)arg;
+	u8 *src = buf + 8, *dst = buf + 80, *ctrl = buf + 152;
+	u8 node[208];
+
+	memset(node, 0, sizeof(node));
+	node[6]  = 1;  /* s16 flag */
+	node[10] = 14; /* op = Thresh_S16 */
+	node[11] = ctrl[0]; /* enMode */
+	*(u16 *)(node + 12) = *(u16 *)(ctrl + 4); /* s16LowThr */
+	*(u16 *)(node + 14) = *(u16 *)(ctrl + 6); /* s16HighThr */
+	node[56] = ctrl[8];  /* u8MinVal */
+	node[57] = ctrl[9];  /* u8MidVal */
+	node[58] = ctrl[10]; /* u8MaxVal */
+	*(u32 *)(node + 16) = IMG_PHYS(src);
+	*(u32 *)(node + 20) = IMG_PHYS(dst);
+	*(u16 *)(node + 40) = (u16)IMG_WIDTH(src);
+	*(u16 *)(node + 42) = (u16)IMG_HEIGHT(src);
+	*(u16 *)(node + 44) = (u16)IMG_STRIDE(src);
+	*(u16 *)(node + 50) = (u16)IMG_STRIDE(dst);
+	return ive_submit_nonxnn(node, buf);
+}
+
+/* ---- Thresh_U16 (op=15): same layout as Thresh_S16 ---- */
+static long ive_op_thresh_u16(unsigned long arg)
+{
+	u8 *buf = (u8 *)arg;
+	u8 *src = buf + 8, *dst = buf + 80, *ctrl = buf + 152;
+	u8 node[208];
+
+	memset(node, 0, sizeof(node));
+	node[6]  = 1;
+	node[10] = 15; /* op = Thresh_U16 */
+	node[11] = ctrl[0];
+	*(u16 *)(node + 12) = *(u16 *)(ctrl + 4);
+	*(u16 *)(node + 14) = *(u16 *)(ctrl + 6);
+	node[56] = ctrl[8];
+	node[57] = ctrl[9];
+	node[58] = ctrl[10];
+	*(u32 *)(node + 16) = IMG_PHYS(src);
+	*(u32 *)(node + 20) = IMG_PHYS(dst);
+	*(u16 *)(node + 40) = (u16)IMG_WIDTH(src);
+	*(u16 *)(node + 42) = (u16)IMG_HEIGHT(src);
+	*(u16 *)(node + 44) = (u16)IMG_STRIDE(src);
+	*(u16 *)(node + 50) = (u16)IMG_STRIDE(dst);
+	return ive_submit_nonxnn(node, buf);
+}
+
+/* ---- 16BitTo8Bit (op=16): arg = {handle(8), src(72), dst(72), ctrl(8+)} ---- */
+static long ive_op_16to8(unsigned long arg)
+{
+	u8 *buf = (u8 *)arg;
+	u8 *src = buf + 8, *dst = buf + 80, *ctrl = buf + 152;
+	u8 node[208];
+	u32 gain = 0;
+
+	/* Compute gain = (numerator << 16) / denominator, capped at 0xFFFF */
+	if (ctrl[6]) { /* numerator != 0 */
+		u16 denom = *(u16 *)(ctrl + 4);
+		gain = ((u32)ctrl[6] << 16) / (denom ? denom : 1);
+		if (gain > 0xFFFF) gain = 0xFFFF;
+	}
+
+	memset(node, 0, sizeof(node));
+	node[6]  = 1;
+	node[10] = 16; /* op = 16BitTo8Bit */
+	node[11] = ctrl[0]; /* enMode */
+	node[56] = ctrl[7]; /* s8Bias */
+	*(u16 *)(node + 110) = (u16)gain;
+	*(u32 *)(node + 16) = IMG_PHYS(src);
+	*(u32 *)(node + 20) = IMG_PHYS(dst);
+	*(u16 *)(node + 40) = (u16)IMG_WIDTH(src);
+	*(u16 *)(node + 42) = (u16)IMG_HEIGHT(src);
+	*(u16 *)(node + 44) = (u16)IMG_STRIDE(src);
+	*(u16 *)(node + 50) = (u16)IMG_STRIDE(dst);
+	return ive_submit_nonxnn(node, buf);
+}
+
+/* ---- OrdStatFilter (op=17): arg = {handle(8), src(72), dst(72), ctrl(4+)} ---- */
+static long ive_op_ordstat(unsigned long arg)
+{
+	u8 *buf = (u8 *)arg;
+	u8 *src = buf + 8, *dst = buf + 80, *ctrl = buf + 152;
+	u8 node[208];
+
+	memset(node, 0, sizeof(node));
+	node[10] = 17;
+	node[11] = ctrl[0]; /* enMode */
+	*(u32 *)(node + 16) = IMG_PHYS(src);
+	*(u32 *)(node + 20) = IMG_PHYS(dst);
+	*(u16 *)(node + 40) = (u16)IMG_WIDTH(src);
+	*(u16 *)(node + 42) = (u16)IMG_HEIGHT(src);
+	*(u16 *)(node + 44) = (u16)IMG_STRIDE(src);
+	*(u16 *)(node + 50) = (u16)IMG_STRIDE(dst);
+	return ive_submit_nonxnn(node, buf);
+}
+
+/* ---- Integ (op=12): arg = {handle(8), src(72), dst(72), ctrl(4+)} ---- */
+static long ive_op_integ(unsigned long arg)
+{
+	u8 *buf = (u8 *)arg;
+	u8 *src = buf + 8, *dst = buf + 80, *ctrl = buf + 152;
+	u8 node[208];
+
+	memset(node, 0, sizeof(node));
+	node[10] = 12;
+	node[9]  = ctrl[0]; /* enOutCtrl */
+	*(u32 *)(node + 16) = IMG_PHYS(src);
+	*(u32 *)(node + 20) = IMG_PHYS(dst);
+	*(u16 *)(node + 40) = (u16)IMG_WIDTH(src);
+	*(u16 *)(node + 42) = (u16)IMG_HEIGHT(src);
+	*(u16 *)(node + 44) = (u16)IMG_STRIDE(src);
+	*(u16 *)(node + 50) = (u16)IMG_STRIDE(dst);
+	return ive_submit_nonxnn(node, buf);
+}
+
+/* ---- Sobel (op=4): arg = {handle(8), src(72), dst_h(72), dst_v(72), ctrl(4+mask)} ---- */
+static long ive_op_sobel(unsigned long arg)
+{
+	u8 *buf = (u8 *)arg;
+	u8 *src = buf + 8, *dst_h = buf + 80, *dst_v = buf + 152, *ctrl = buf + 224;
+	u8 node[208];
+	u8 mode = ctrl[0]; /* enOutCtrl: 0=both, 1=H only, 2=V only */
+
+	memset(node, 0, sizeof(node));
+	node[10] = 4;
+	node[9]  = mode;
+	*(u32 *)(node + 16) = IMG_PHYS(src);
+	*(u16 *)(node + 40) = (u16)IMG_WIDTH(src);
+	*(u16 *)(node + 42) = (u16)IMG_HEIGHT(src);
+	*(u16 *)(node + 44) = (u16)IMG_STRIDE(src);
+	if (mode == 1) { /* H only */
+		*(u32 *)(node + 20) = IMG_PHYS(dst_h);
+		*(u16 *)(node + 50) = (u16)IMG_STRIDE(dst_h);
+	} else if (mode == 2) { /* V only */
+		*(u32 *)(node + 20) = IMG_PHYS(dst_v);
+		*(u16 *)(node + 50) = (u16)IMG_STRIDE(dst_v);
+	} else { /* both */
+		*(u32 *)(node + 20) = IMG_PHYS(dst_h);
+		*(u32 *)(node + 28) = IMG_PHYS(dst_v);
+		*(u16 *)(node + 50) = (u16)IMG_STRIDE(dst_h);
+		*(u16 *)(node + 52) = (u16)IMG_STRIDE(dst_v);
+	}
+	memcpy(node + 56, ctrl + 4, 25); /* 5x5 mask */
+	return ive_submit_nonxnn(node, buf);
+}
+
+/* ---- MagAndAng (op=5): arg = {handle(8), src(72), mag(72), ang(72), ctrl(4+mask)} ---- */
+static long ive_op_mag_and_ang(unsigned long arg)
+{
+	u8 *buf = (u8 *)arg;
+	u8 *src = buf + 8, *mag = buf + 80, *ang = buf + 152, *ctrl = buf + 224;
+	u8 node[208];
+	u8 mode = ctrl[0]; /* enOutCtrl: 0=mag only, 1=mag+ang */
+
+	memset(node, 0, sizeof(node));
+	node[10] = 5;
+	node[9]  = mode;
+	*(u16 *)(node + 12) = *(u16 *)(ctrl + 4); /* u16Thr */
+	*(u32 *)(node + 16) = IMG_PHYS(src);
+	*(u16 *)(node + 40) = (u16)IMG_WIDTH(src);
+	*(u16 *)(node + 42) = (u16)IMG_HEIGHT(src);
+	*(u16 *)(node + 44) = (u16)IMG_STRIDE(src);
+	if (mode == 0) { /* mag only */
+		*(u32 *)(node + 20) = IMG_PHYS(mag);
+		*(u16 *)(node + 50) = (u16)IMG_STRIDE(mag);
+	} else { /* mag + ang */
+		*(u32 *)(node + 20) = IMG_PHYS(mag);
+		*(u32 *)(node + 28) = IMG_PHYS(ang);
+		*(u16 *)(node + 50) = (u16)IMG_STRIDE(mag);
+		*(u16 *)(node + 52) = (u16)IMG_STRIDE(ang);
+	}
+	memcpy(node + 56, ctrl + 24, 25); /* as8Mask at ctrl offset 24 (after enOutCtrl+u16Thr+padding) */
+	return ive_submit_nonxnn(node, buf);
+}
+
+/* ---- Map (op=19): arg = {handle(8), src(72), map_mem(24), dst(72), ctrl(4)} ---- */
+static long ive_op_map(unsigned long arg)
+{
+	u8 *buf = (u8 *)arg;
+	u8 *src = buf + 8, *map_mem = buf + 80, *dst = buf + 104, *ctrl = buf + 176;
+	u8 node[208];
+
+	memset(node, 0, sizeof(node));
+	node[10] = 19;
+	node[11] = ctrl[0]; /* enMode */
+	*(u32 *)(node + 16) = IMG_PHYS(src);
+	*(u32 *)(node + 32) = *(u32 *)map_mem; /* map table phys (not +24!) */
+	*(u32 *)(node + 20) = IMG_PHYS(dst);
+	*(u16 *)(node + 40) = (u16)IMG_WIDTH(src);
+	*(u16 *)(node + 42) = (u16)IMG_HEIGHT(src);
+	*(u16 *)(node + 44) = (u16)IMG_STRIDE(src);
+	*(u16 *)(node + 50) = (u16)IMG_STRIDE(dst);
+	*(u32 *)(node + 84) = ctrl[0] ? 512 : 256; /* LUT size */
+	return ive_submit_nonxnn(node, buf);
+}
+
+/* ---- NormGrad (op=27): arg = {handle(8), src(72), dst_h(72), dst_v(72), dst_comb(72), ctrl(30+)} ---- */
+static long ive_op_norm_grad(unsigned long arg)
+{
+	u8 *buf = (u8 *)arg;
+	u8 *src = buf + 8, *dst_h = buf + 80, *dst_v = buf + 152;
+	u8 *dst_c = buf + 224, *ctrl = buf + 296;
+	u8 node[208];
+	u8 mode = ctrl[0]; /* enOutCtrl: 0=H+V, 1=H, 2=V, 3=combine */
+
+	memset(node, 0, sizeof(node));
+	node[10] = 27;
+	node[9]  = mode;
+	*(u32 *)(node + 16) = IMG_PHYS(src);
+	*(u16 *)(node + 40) = (u16)IMG_WIDTH(src);
+	*(u16 *)(node + 42) = (u16)IMG_HEIGHT(src);
+	*(u16 *)(node + 44) = (u16)IMG_STRIDE(src);
+	switch (mode) {
+	case 0: /* H + V */
+		*(u32 *)(node + 20) = IMG_PHYS(dst_h);
+		*(u16 *)(node + 50) = (u16)IMG_STRIDE(dst_h);
+		*(u32 *)(node + 28) = IMG_PHYS(dst_v);
+		*(u16 *)(node + 52) = (u16)IMG_STRIDE(dst_v);
+		break;
+	case 1: /* H only */
+		*(u32 *)(node + 20) = IMG_PHYS(dst_h);
+		*(u16 *)(node + 50) = (u16)IMG_STRIDE(dst_h);
+		break;
+	case 2: /* V only */
+		*(u32 *)(node + 20) = IMG_PHYS(dst_v);
+		*(u16 *)(node + 50) = (u16)IMG_STRIDE(dst_v);
+		break;
+	case 3: /* combine */
+		*(u32 *)(node + 20) = IMG_PHYS(dst_c);
+		*(u16 *)(node + 50) = (u16)IMG_STRIDE(dst_c);
+		break;
+	}
+	memcpy(node + 56, ctrl + 4, 25); /* mask coefficients */
+	node[81] = ctrl[29]; /* norm byte */
+	return ive_submit_nonxnn(node, buf);
+}
+
+/* ---- SAD (op=46): arg = {handle(8), src1(72), src2(72), sad(72), thr(72), ctrl(12)} ---- */
+static long ive_op_sad(unsigned long arg)
+{
+	u8 *buf = (u8 *)arg;
+	u8 *src1 = buf + 8, *src2 = buf + 80, *sad_out = buf + 152;
+	u8 *thr_out = buf + 224, *ctrl = buf + 296;
+	u8 node[208];
+	u8 out_ctrl = ctrl[4]; /* enOutCtrl */
+
+	memset(node, 0, sizeof(node));
+	node[10] = 46;
+	node[9]  = out_ctrl;
+	node[11] = ctrl[0]; /* enMode */
+	*(u16 *)(node + 12) = *(u16 *)(ctrl + 8);  /* u16Thr */
+	node[56] = ctrl[10]; /* u8MinVal */
+	node[57] = ctrl[11]; /* u8MaxVal */
+	*(u32 *)(node + 16) = IMG_PHYS(src1);
+	*(u32 *)(node + 24) = IMG_PHYS(src2);
+	*(u16 *)(node + 40) = (u16)IMG_WIDTH(src1);
+	*(u16 *)(node + 42) = (u16)IMG_HEIGHT(src1);
+	*(u16 *)(node + 44) = (u16)IMG_STRIDE(src1);
+	*(u16 *)(node + 46) = (u16)IMG_STRIDE(src2);
+	switch (out_ctrl) {
+	case 0: case 1: /* sad + thr */
+		*(u32 *)(node + 20) = IMG_PHYS(sad_out);
+		*(u16 *)(node + 50) = (u16)IMG_STRIDE(sad_out);
+		*(u32 *)(node + 28) = IMG_PHYS(thr_out);
+		*(u16 *)(node + 52) = (u16)IMG_STRIDE(thr_out);
+		break;
+	case 2: case 3: /* sad only */
+		*(u32 *)(node + 20) = IMG_PHYS(sad_out);
+		*(u16 *)(node + 50) = (u16)IMG_STRIDE(sad_out);
+		break;
+	case 4: /* thr only */
+		*(u32 *)(node + 20) = IMG_PHYS(thr_out);
+		*(u16 *)(node + 50) = (u16)IMG_STRIDE(thr_out);
+		break;
+	}
+	return ive_submit_nonxnn(node, buf);
+}
+
+/* ---- STCandiCorner (op=30): arg = {handle(8), src(72), dst(72), ctrl(4+)} ---- */
+static long ive_op_st_candi_corner(unsigned long arg)
+{
+	u8 *buf = (u8 *)arg;
+	u8 *src = buf + 8, *src2 = buf + 80, *dst = buf + 152;
+	u8 node[208];
+
+	memset(node, 0, sizeof(node));
+	node[10] = 30;
+	*(u32 *)(node + 16) = IMG_PHYS(src);
+	*(u32 *)(node + 24) = IMG_PHYS(src2);
+	*(u32 *)(node + 20) = IMG_PHYS(dst);
+	*(u16 *)(node + 40) = (u16)IMG_WIDTH(src);
+	*(u16 *)(node + 42) = (u16)IMG_HEIGHT(src);
+	*(u16 *)(node + 44) = (u16)IMG_STRIDE(src);
+	*(u16 *)(node + 46) = (u16)IMG_STRIDE(src2);
+	*(u16 *)(node + 50) = (u16)IMG_STRIDE(dst);
+	return ive_submit_nonxnn(node, buf);
+}
+
+/* ---- CannyHysEdge (2-stage chained pipeline) ----
+ *
+ * Signature: HI_MPI_IVE_CannyHysEdge(h, src, edge, stack, ctrl, bInstant)
+ *
+ * arg layout:
+ *   arg+0..7:     handle (8)
+ *   arg+8..79:    IVE_IMAGE_S src (72)
+ *   arg+80..151:  IVE_IMAGE_S edge dst (72)
+ *   arg+152..175: IVE_MEM_INFO_S stack (24) — canny internal stack
+ *   arg+176..199: IVE_CANNY_HYS_EDGE_CTRL_S.stMem (24) — mag/ang buffer
+ *   arg+200..201: ctrl.lowThr
+ *   arg+202..203: ctrl.highThr
+ *   arg+204..228: ctrl.mask[25]
+ *
+ * Vendor builds TWO task nodes in a single 416-byte chain and submits
+ * once — HW auto-advances via node[0..3] next_ptr.
+ *   Node 0: mag_and_ang on src → writes mag + ang into ctrl.stMem
+ *   Node 1: canny_hys_edge reads mag+ang → writes edge map to dst
+ */
+static long ive_op_canny_hys(unsigned long arg)
+{
+	u8 *buf = (u8 *)arg;
+	u8 *src  = buf + 8;
+	u8 *edge = buf + 80;
+	u8 *stack_info = buf + 152;  /* pstStack — IVE_MEM_INFO_S */
+	u8 *ctrl_mem = buf + 176;    /* ctrl.stMem — IVE_MEM_INFO_S (mag/ang) */
+	u16 low_thr  = *(u16 *)(buf + 200);
+	u16 high_thr = *(u16 *)(buf + 202);
+	u8 *mask = buf + 204;
+	u16 w = (u16)IMG_WIDTH(src);
+	u16 h = (u16)IMG_HEIGHT(src);
+	u16 src_stride = (u16)IMG_STRIDE(src);
+	u16 edge_stride = (u16)IMG_STRIDE(edge);
+	u32 stride16 = (w + 15u) & ~15u;     /* 16-aligned, vendor ive_calc_stride */
+	u32 mag_bytes = 2u * (u32)h * stride16;  /* mag is int16 */
+	u32 mag_phys = *(u32 *)ctrl_mem;
+	u32 ang_phys = mag_phys + mag_bytes;
+	u32 stack_phys = *(u32 *)stack_info;
+	u8 chain[416];  /* 2 × 208-byte nodes */
+	(void)stack_phys; /* reserved for future canny stack use */
+	u8 *n0 = chain;         /* mag_and_ang */
+	u8 *n1 = chain + 208;   /* canny_hys_edge */
+
+	if (!g_ive_task_virt) {
+		g_ive_task_virt = ive_dma_alloc(&g_ive_task_phys, 4096);
+		if (!g_ive_task_virt)
+			return -ENOMEM;
+	}
+
+	memset(chain, 0, sizeof(chain));
+
+	/* ---- Node 0: mag_and_ang ---- */
+	/* next_ptr = phys of node 1 (chain[208]) in the MMZ task buffer */
+	*(u32 *)(n0 + 0)  = (u32)(g_ive_task_phys + 208);
+	n0[10] = 5;  /* op = mag_and_ang */
+	n0[9]  = 1;  /* mode: mag + ang */
+	*(u32 *)(n0 + 16) = IMG_PHYS(src);
+	*(u32 *)(n0 + 20) = mag_phys;
+	*(u32 *)(n0 + 28) = ang_phys;
+	*(u16 *)(n0 + 40) = w;
+	*(u16 *)(n0 + 42) = h;
+	*(u16 *)(n0 + 44) = src_stride;
+	*(u16 *)(n0 + 50) = (u16)stride16;
+	*(u16 *)(n0 + 52) = (u16)stride16;
+	memcpy(n0 + 56, mask, 25);
+
+	/* ---- Node 1: canny_hys_edge ---- */
+	*(u32 *)(n1 + 0) = 0;  /* end of chain */
+	n1[10] = 25; /* op = canny_hys_edge */
+	*(u32 *)(n1 + 16) = ang_phys;          /* reads ang */
+	*(u32 *)(n1 + 20) = IMG_PHYS(edge);    /* writes edge map */
+	*(u32 *)(n1 + 24) = mag_phys;          /* mag source */
+	*(u32 *)(n1 + 28) = mag_phys;
+	*(u16 *)(n1 + 12) = low_thr;
+	*(u16 *)(n1 + 14) = high_thr;
+	*(u16 *)(n1 + 40) = w;
+	*(u16 *)(n1 + 42) = h;
+	*(u16 *)(n1 + 44) = (u16)stride16;
+	*(u16 *)(n1 + 46) = (u16)stride16;
+	*(u16 *)(n1 + 50) = edge_stride;
+
+	/* Copy both nodes into the MMZ task buffer and submit node 0 — HW
+	 * will auto-advance to node 1 via n0's next_ptr. */
+	memcpy(g_ive_task_virt, chain, 416);
+#ifndef IVE_STANDALONE
+	osal_flush_dcache_area(g_ive_task_virt, g_ive_task_phys, 416);
+#endif
+
+	/* Ensure HW init (same logic as ive_submit_nonxnn) */
+	if (!g_ive_regs)
+		g_ive_regs = ioremap(0x11320000, 0x10000);
+	if (g_ive_regs && !g_hw_init_done) {
+		ive_hw_init();
+		g_hw_init_done = 1;
+	}
+
+	reinit_completion(&g_ive_done);
+	g_ive_last_status = 0;
+	writel(6, g_ive_regs + 0x04);
+	writel(7, g_ive_regs + 0x08);
+	writel((u32)g_ive_task_phys, g_ive_regs + 0x10);
+	isb(); dsb(); dmb();
+	writel(1, g_ive_regs + 0x00);
+
+	if (wait_for_completion_timeout(&g_ive_done,
+				       msecs_to_jiffies(100)) == 0)
+		g_hw_init_done = 0;
+
+	*(u32 *)buf = 0;
+	return 0;
+}
+
+/* ---- GMM2 (op=49): 6-image background model
+ *
+ *   HI_MPI_IVE_GMM2(h, src, factor, fg, bg, match, model, ctrl, bInstant)
+ *
+ * arg layout:
+ *   +0..7:    handle
+ *   +8..79:   src (72)
+ *   +80..151: factor (72)
+ *   +152..223: fg (72)
+ *   +224..295: bg (72)
+ *   +296..367: match (72)
+ *   +368..391: model IVE_MEM_INFO_S (24)
+ *   +392..?:   IVE_GMM2_CTRL_S
+ */
+static long ive_op_gmm2(unsigned long arg)
+{
+	u8 *buf = (u8 *)arg;
+	u8 *src    = buf + 8;
+	u8 *factor = buf + 80;
+	u8 *fg     = buf + 152;
+	u8 *bg     = buf + 224;
+	u8 *match  = buf + 296;
+	u8 *model  = buf + 368;   /* IVE_MEM_INFO_S */
+	u8 *ctrl   = buf + 392;   /* IVE_GMM2_CTRL_S */
+	u16 w = (u16)IMG_WIDTH(src);
+	u16 h = (u16)IMG_HEIGHT(src);
+	u8 node[208];
+
+	memset(node, 0, sizeof(node));
+	node[10] = 49; /* op = GMM2 */
+	node[11] = ctrl[27]; /* u8ModelNum */
+	*(u32 *)(node + 16) = IMG_PHYS(src);
+	/* factor used only if model-num or u8SensiFactor are non-zero */
+	if (ctrl[0] || ctrl[4]) {
+		*(u32 *)(node + 24) = IMG_PHYS(factor);
+		*(u16 *)(node + 46) = (u16)IMG_STRIDE(factor);
+	}
+	*(u32 *)(node + 20) = IMG_PHYS(fg);
+	*(u32 *)(node + 28) = *(u32 *)model;    /* model phys -> node+28 (also +32) */
+	*(u32 *)(node + 32) = *(u32 *)model;
+	*(u32 *)(node + 36) = IMG_PHYS(bg);
+	*(u32 *)(node + 120) = IMG_PHYS(match);
+	*(u16 *)(node + 40) = w;
+	*(u16 *)(node + 42) = h;
+	*(u16 *)(node + 44) = (u16)IMG_STRIDE(src);
+	*(u16 *)(node + 50) = (u16)IMG_STRIDE(fg);
+	*(u16 *)(node + 54) = (u16)IMG_STRIDE(bg);
+	/* ctrl fields mapped verbatim from vendor fill */
+	node[94]  = ctrl[0];
+	node[95]  = ctrl[4];
+	*(u16 *)(node + 110) = *(u16 *)(ctrl + 8);
+	*(u16 *)(node + 12)  = *(u16 *)(ctrl + 10);
+	*(u16 *)(node + 108) = *(u16 *)(ctrl + 12);
+	*(u16 *)(node + 88)  = *(u16 *)(ctrl + 14);
+	*(u16 *)(node + 90)  = *(u16 *)(ctrl + 16);
+	*(u16 *)(node + 14)  = *(u16 *)(ctrl + 18);
+	*(u16 *)(node + 102) = *(u16 *)(ctrl + 20);
+	*(u32 *)(node + 116) = *(u16 *)(ctrl + 22);
+	*(u32 *)(node + 112) = *(u16 *)(ctrl + 24);
+	node[92] = ctrl[26];
+	*(u32 *)(node + 136) = (u32)ctrl[27] * h * w;
+	return ive_submit_nonxnn(node, buf);
+}
+
+/* ---- NCC (op=?): arg = {handle(8), src1(72), src2(72), dst_mem(24+)} ---- */
+static long ive_op_ncc(unsigned long arg)
+{
+	u8 *buf = (u8 *)arg;
+	u8 *src1 = buf + 8, *src2 = buf + 80, *dst_mem = buf + 152;
+	u8 node[208];
+
+	memset(node, 0, sizeof(node));
+	node[10] = 18; /* NCC op code (guessed from nr=0x15, nearby Hist=13) */
+	*(u32 *)(node + 16) = IMG_PHYS(src1);
+	*(u32 *)(node + 24) = IMG_PHYS(src2);
+	*(u32 *)(node + 20) = *(u32 *)dst_mem; /* output mem phys */
+	*(u16 *)(node + 40) = (u16)IMG_WIDTH(src1);
+	*(u16 *)(node + 42) = (u16)IMG_HEIGHT(src1);
+	*(u16 *)(node + 44) = (u16)IMG_STRIDE(src1);
+	*(u16 *)(node + 46) = (u16)IMG_STRIDE(src2);
+	return ive_submit_nonxnn(node, buf);
+}
+
+/* ---- CCL (op=23): arg = {handle(8), src(72), blob_mem(24), ctrl(8+)} ---- */
+static long ive_op_ccl(unsigned long arg)
+{
+	u8 *buf = (u8 *)arg;
+	u8 *src = buf + 8;
+	u8 *blob = buf + 80;    /* IVE_MEM_INFO_S: u64 phys, u64 virt, u32 size */
+	u8 *ctrl = buf + 104;   /* IVE_CCL_CTRL_S: u32 enMode, u16 initAreaThr, u16 step */
+	u8 node[208];
+
+	memset(node, 0, sizeof(node));
+	node[10] = 23; /* op = CCL */
+	node[11] = ctrl[0]; /* enMode */
+	*(u32 *)(node + 16) = IMG_PHYS(src);       /* src phys */
+	*(u32 *)(node + 20) = *(u32 *)blob;        /* blob output phys */
+	*(u32 *)(node + 28) = IMG_PHYS(src);       /* src phys again (vendor does this) */
+	*(u16 *)(node + 40) = (u16)IMG_WIDTH(src);
+	*(u16 *)(node + 42) = (u16)IMG_HEIGHT(src);
+	*(u16 *)(node + 44) = (u16)IMG_STRIDE(src);
+	*(u16 *)(node + 50) = (u16)IMG_STRIDE(src); /* dst stride = src stride */
+	*(u16 *)(node + 52) = (u16)IMG_STRIDE(src); /* another stride copy */
+	*(u16 *)(node + 98) = *(u16 *)(ctrl + 4);   /* u16InitAreaThr */
+	*(u16 *)(node + 100) = *(u16 *)(ctrl + 6);  /* u16Step */
+	return ive_submit_nonxnn(node, buf);
+}
+
+/* ---- Ioctl dispatch (on kernel buffer — OSAL or our wrapper pre-copied) ---- */
+
+/* ---- ALLOC_BUF / FREE_BUF (standalone only) ---- */
+#ifdef IVE_STANDALONE
+static long ive_alloc_buf(unsigned long arg)
+{
+	/* arg = {u64 phys_out, u64 user_data_ptr, u32 size} → 24 bytes
+	 * Allocate physically-contiguous kernel memory.
+	 * If user_data_ptr != 0, copy user data into the buffer.
+	 * Returns phys addr in phys_out. */
+	u64 *p64 = (u64 *)arg;
+	u32 size = *(u32 *)((u8 *)arg + 16);
+	void __user *udata = (void __user *)(uintptr_t)p64[1];
+	void *virt;
+
+	if (size > 4 * 1024 * 1024)
+		return -ENOMEM;
+
+	{
+	u32 alloc_size = (size + 4095) & ~4095;
+	virt = kmalloc(alloc_size, GFP_KERNEL | __GFP_ZERO);
+	if (!virt)
+		return -ENOMEM;
+
+	if (udata && copy_from_user(virt, udata, size)) {
+		kfree(virt);
+		return -EFAULT;
+	}
+
+	p64[0] = virt_to_phys(virt);
+	return 0;
+	}
+}
+#endif
+
+static long ive_dispatch(unsigned int cmd, unsigned long arg)
+{
+	if (cmd != IVE_IOC_QUERY && cmd != IVE_IOC_XNN_FWD_SLICE)
+		ive_log("ioctl 0x%08x\n", cmd);
+	switch (cmd) {
+#ifdef IVE_STANDALONE
+	case IVE_IOC_ALLOC_BUF:     return ive_alloc_buf(arg);
+	case IVE_IOC_READ_BUF: {
+		u64 *p = (u64 *)arg;
+		u32 sz = *(u32 *)((u8 *)arg + 16);
+		void *kv = phys_to_virt(p[0]);
+		if (kv && p[1] && sz <= 4*1024*1024)
+			if (copy_to_user((void __user *)(uintptr_t)p[1], kv, sz))
+				return -EFAULT;
+		return 0;
+	}
+#endif
+	case IVE_IOC_SVP_INIT:       return ive_svp_init(arg);
+	case IVE_IOC_OPEN_DEV:       return ive_open_dev(arg);
+	case IVE_IOC_XNN_LOADMODEL:  return ive_xnn_loadmodel(arg);
+	case IVE_IOC_XNN_FWD_SLICE:  return ive_xnn_fwd_slice(arg);
+	case IVE_IOC_QUERY:          return ive_xnn_query(arg);
+	case IVE_IOC_XNN_UNLOADMODEL:return ive_xnn_unloadmodel(arg);
+	case IVE_IOC_SVP_EXIT:       return 0;
+	case IVE_IOC_SVP_ALG_PROC_INIT:  return ive_svp_alg_proc_init(arg);
+	case IVE_IOC_SVP_ALG_PROC_EXIT:  return ive_svp_alg_proc_exit(arg);
+	case IVE_IOC_SVP_ALG_PROC_BEGIN: return 0;
+	case IVE_IOC_SVP_ALG_PROC_END:   return 0;
+	/* Non-XNN IVE ops */
+	case IVE_IOC_DMA:      return ive_op_dma(arg);
+	case IVE_IOC_FILTER:   return ive_op_filter(arg);
+	case IVE_IOC_DILATE:   return ive_op_dilate(arg);
+	case IVE_IOC_ERODE:    return ive_op_erode(arg);
+	case IVE_IOC_THRESH:   return ive_op_thresh(arg);
+	case IVE_IOC_AND:      return ive_op_logic(arg, 9);
+	case IVE_IOC_SUB:      return ive_op_sub(arg);
+	case IVE_IOC_OR:       return ive_op_logic(arg, 11);
+	case IVE_IOC_HIST:     return ive_op_hist(arg);
+	case IVE_IOC_THRESH_S16: return ive_op_thresh_s16(arg);
+	case IVE_IOC_THRESH_U16: return ive_op_thresh_u16(arg);
+	case IVE_IOC_ADD:      return ive_op_add(arg);
+	case IVE_IOC_CCL:      return ive_op_ccl(arg);
+	/* Cmd → op mappings verified against libive.so decomp
+	 * (~/libive/mpi_ive.o.c). Each HI_MPI_IVE_* wraps a single ioctl. */
+	case 0xc0e84615u:      return ive_op_logic(arg, 21);  /* Xor */
+	case 0xc0a84610u:      return ive_op_16to8(arg);      /* 16BitTo8Bit */
+	case IVE_IOC_INTEG:    return ive_op_integ(arg);      /* 0xc0a0460c */
+	case IVE_IOC_ORDSTAT:  return ive_op_ordstat(arg);    /* 0xc0a04611 */
+	case 0xc1084604u:      return ive_op_sobel(arg);      /* Sobel */
+	case 0xc1084605u:      return ive_op_mag_and_ang(arg); /* MagAndAng */
+	case IVE_IOC_MAP:      return ive_op_map(arg);        /* 0xc0b84613 */
+	case 0xc150461bu:      return ive_op_norm_grad(arg);  /* NormGrad */
+	case 0xc1384629u:      return ive_op_sad(arg);        /* SAD */
+	case 0xc0c0462bu:      return ive_op_st_candi_corner(arg); /* STCandiCorner */
+	case 0xc0f04619u:      return ive_op_canny_hys(arg);  /* CannyHysEdge */
+	case 0xc1a8462du:      return ive_op_gmm2(arg);       /* GMM2 (best effort) */
+	/* Not supported on Hi3516EV200/EV300 — vendor kernel also rejects
+	 * these with "ive can't support the func". Return 0 to keep
+	 * libive.so's handle check happy; output will be empty. */
+	case 0xc0a8461au:      return 0;  /* LBP */
+	case 0xc0b84616u:      return 0;  /* NCC */
+	case 0xc0b8462au:      return 0;  /* EqualizeHist */
+	case 0xc0a04602u:      return 0;  /* CSC (VGS) */
+	case 0xc0c04603u:      return 0;  /* FilterAndCSC (VGS) */
+	case 0xc008462eu:      return 0;  /* Resize (VGS) */
+	case 0xc1184618u:      return 0;  /* GMM (single gaussian, unsupported) */
+	case 0xc138461du:      return 0;  /* GradFg */
+	case 0xc178461eu:      return 0;  /* MatchBgModel */
+	case 0xc1d8461fu:      return 0;  /* UpdateBgModel */
+	case 0xc2c0461cu:      return 0;  /* LKOpticalFlowPyr */
+	case 0xc0b04621u:      return 0;  /* ANN_MLP_Predict */
+	case 0xc0c04622u:      return 0;  /* SVM_Predict */
+	default:               return 0;
+	}
+}
+
+/* ==== Platform-specific module glue ==== */
+
+#ifdef IVE_STANDALONE
+
+/* Standalone: standard Linux misc device, self-contained ioctl wrapper */
+
+static long ive_sa_ioctl(struct file *f, unsigned int cmd, unsigned long arg)
+{
+	unsigned int dir = _IOC_DIR(cmd);
+	unsigned int sz = _IOC_SIZE(cmd);
+	char *kbuf = NULL;
+	long ret;
+
+	if (dir == _IOC_NONE)
+		return ive_dispatch(cmd, arg);
+
+	if (!sz)
+		return -EINVAL;
+
+	kbuf = kmalloc(sz, GFP_KERNEL);
+	if (!kbuf)
+		return -ENOMEM;
+
+	if (dir & _IOC_WRITE)
+		if (copy_from_user(kbuf, (void __user *)arg, sz)) {
+			kfree(kbuf);
+			return -EFAULT;
+		}
+
+	ret = ive_dispatch(cmd, (unsigned long)kbuf);
+
+	if (ret == 0 && (dir & _IOC_READ))
+		if (copy_to_user((void __user *)arg, kbuf, sz))
+			ret = -EFAULT;
+
+	kfree(kbuf);
+	return ret;
+}
+
+static int ive_sa_open(struct inode *i, struct file *f) { return 0; }
+static int ive_sa_release(struct inode *i, struct file *f) { return 0; }
+
+static const struct file_operations ive_sa_fops = {
+	.owner = THIS_MODULE,
+	.open = ive_sa_open,
+	.release = ive_sa_release,
+	.unlocked_ioctl = ive_sa_ioctl,
+};
+
+static struct miscdevice ive_sa_misc = {
+	.minor = 17,
+	.name = "ive",
+	.fops = &ive_sa_fops,
+};
+
+static int __init ive_sa_init(void)
+{
+	int ret;
+
+	g_ive_regs = ioremap(0x11320000, 0x10000);
+	if (!g_ive_regs)
+		return -ENOMEM;
+
+	ive_hw_init();
+
+	ret = misc_register(&ive_sa_misc);
+	if (ret) {
+		iounmap(g_ive_regs);
+		return ret;
+	}
+
+	ive_log("standalone init OK\n");
+	return 0;
+}
+
+static void __exit ive_sa_exit(void)
+{
+	misc_deregister(&ive_sa_misc);
+	if (g_ive_regs) {
+		iounmap(g_ive_regs);
+		g_ive_regs = NULL;
+	}
+}
+
+module_init(ive_sa_init);
+module_exit(ive_sa_exit);
+
+#else /* !IVE_STANDALONE — OSAL-based build for real hardware */
+
+static long ive_osal_ioctl(unsigned int cmd, unsigned long arg, void *priv)
+{
+	return ive_dispatch(cmd, arg);
+}
+
+static int ive_osal_open(void *priv) { return 0; }
+static int ive_osal_close(void *priv) { return 0; }
+
+/* /dev/ive mmap: userspace passes phys as mmap offset, we remap that
+ * phys range into userspace virt. Needed by libive.so's svp_alg_proc_init
+ * flow (allocates 4KB MMZ via ioctl, then mmaps it to get a virt pointer).
+ */
+static int ive_osal_mmap(osal_vm_t *vm, unsigned long start,
+			 unsigned long end, unsigned long vm_pgoff,
+			 void *priv)
+{
+	unsigned long size = end - start;
+	osal_pgprot_noncached(vm);
+	ive_log("mmap: start=0x%lx end=0x%lx pgoff=0x%lx size=0x%lx\n",
+		start, end, vm_pgoff, size);
+	return osal_io_remap_pfn_range(vm, start, vm_pgoff, size);
+}
+
+static osal_fileops_t g_ive_fops = {
+	.open = ive_osal_open,
+	.release = ive_osal_close,
+	.unlocked_ioctl = ive_osal_ioctl,
+	.mmap = ive_osal_mmap,
+};
+
+static osal_dev_t *g_ive_dev;
+static int g_ive_irq_requested;
+
+/* IRQ handler: read status from [0x0C], ack via [0x08], stash the status
+ * where the caller can see it, and signal the completion. Without this
+ * the IRQ stays pending at the GIC and subsequent tasks wedge. */
+static irqreturn_t ive_irq_handler(int irq, void *dev)
+{
+	u32 status;
+	if (!g_ive_regs)
+		return IRQ_NONE;
+	status = readl(g_ive_regs + 0x0C);
+	if (!status)
+		return IRQ_NONE;
+	writel(7, g_ive_regs + 0x08);  /* ack all pending */
+	g_ive_last_status = status;
+	g_ive_irq_count++;
+	complete(&g_ive_done);
+	return IRQ_HANDLED;
+}
+
+int ive_std_mod_init(void)
+{
+	int ret;
+
+	g_ive_dev = osal_createdev("ive");
+	if (!g_ive_dev)
+		return -ENOMEM;
+	g_ive_dev->fops = &g_ive_fops;
+	g_ive_dev->minor = 17;
+
+	ret = osal_registerdevice(g_ive_dev);
+	if (ret) {
+		osal_destroydev(g_ive_dev);
+		g_ive_dev = NULL;
+		return ret;
+	}
+
+	if (g_ive_irq) {
+		ret = request_irq(g_ive_irq, ive_irq_handler, 0,
+				  "ive_neo", &g_ive_dev);
+		if (ret) {
+			ive_err("request_irq(%u) failed: %d\n",
+				g_ive_irq, ret);
+		} else {
+			g_ive_irq_requested = 1;
+			ive_log("IRQ %u registered\n", g_ive_irq);
+		}
+	} else {
+		ive_log("no IRQ from platform probe\n");
+	}
+
+	ive_log("mod_init OK\n");
+	return 0;
+}
+
+void ive_std_mod_exit(void)
+{
+	if (g_ive_irq_requested) {
+		free_irq(g_ive_irq, &g_ive_dev);
+		g_ive_irq_requested = 0;
+	}
+	if (g_svp_alg_virt) {
+		ive_dma_free(g_svp_alg_phys, g_svp_alg_virt);
+		g_svp_alg_virt = NULL;
+		g_svp_alg_phys = 0;
+	}
+	if (g_ivp_proc_virt) {
+		ive_dma_free(g_ivp_proc_phys, g_ivp_proc_virt);
+		g_ivp_proc_virt = NULL;
+		g_ivp_proc_phys = 0;
+	}
+	if (g_ive_task_virt) {
+		ive_dma_free(g_ive_task_phys, g_ive_task_virt);
+		g_ive_task_virt = NULL;
+		g_ive_task_phys = 0;
+	}
+	if (g_ive_dev) {
+		osal_deregisterdevice(g_ive_dev);
+		osal_destroydev(g_ive_dev);
+		g_ive_dev = NULL;
+	}
+}
+
+#endif /* IVE_STANDALONE */
+
+MODULE_LICENSE("GPL");
+MODULE_DESCRIPTION("ive_neo: open-source IVE/XNN driver for Hi3516EV200/EV300");
