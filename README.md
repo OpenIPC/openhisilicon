@@ -39,7 +39,8 @@ All kernel versions are supported from a single codebase via the compatibility l
 │   ├── jpege/               JPEG encoder
 │   ├── rgn/                 OSD / region overlay
 │   ├── vgs/                 Video graphics subsystem
-│   ├── ive/                 Intelligent video engine (motion detection)
+│   ├── ive/                 Intelligent video engine (vendor blob)
+│   ├── ive_neo/             Intelligent video engine (clean-room C, EV200/EV300)
 │   ├── ai/, ao/, aio/       Audio input/output
 │   ├── aenc/, adec/         Audio encode/decode
 │   ├── acodec/              Audio codec
@@ -52,8 +53,12 @@ All kernel versions are supported from a single codebase via the compatibility l
 │   └── ext_inc/             Cross-module function export headers
 │
 ├── libraries/               User-space libraries
+│   ├── include/             Shared HI_* base headers (hi_type.h, hi_common.h)
 │   ├── sensor/              Image sensor drivers (30 sensors)
-│   └── isp/                 ISP algorithm libraries
+│   ├── isp/                 ISP algorithm libraries
+│   ├── mpi_neo/             libmpi_neo.so — HI_MPI_SYS_* over /dev/mmz_userdev
+│   ├── ive_neo/             libive_neo.so — HI_MPI_IVE_* + SVP/XNN (replaces libive.so)
+│   └── ivp_neo/             libivp_neo.so — hi_ivp_* object-detection API (replaces libivp.so)
 │
 ├── include/                 Shared headers (kernel + userspace)
 └── scripts/                 Build utilities
@@ -126,6 +131,30 @@ scp kernel/open_isp.ko \
 
 Each sensor has both `.so` (shared) and `.a` (static) library builds.
 
+## User-space libraries for the IVE pipeline
+
+Three clean-room libraries replace the vendor binaries that userspace
+apps (majestic, ipctool, your own code) link against for IVE motion
+detection, MMZ memory allocation, and object detection:
+
+| Library | Replaces | What it does |
+|---|---|---|
+| `libmpi_neo.so` | `libmpi.so` | `HI_MPI_SYS_Init/Exit/MmzAlloc/MmzFree/MmzFlushCache` over `/dev/mmz_userdev` |
+| `libive_neo.so` | `libive.so` | `HI_MPI_IVE_*` wrappers for `/dev/ive`, plus SVP/XNN private helpers (`mpi_ive_xnn_loadmodel/unloadmodel/forward_slice`, `mp_ive_svp_alg_proc_init/exit`, …) |
+| `libivp_neo.so` | `libivp.so` | `hi_ivp_*` high-level object-detection API |
+
+All three are binary drop-ins — the public `hi_type.h`, `hi_common.h`, `hi_comm_ive.h`, `hi_ive.h`, `hi_comm_video.h`, `hi_ivp.h`, `mpi_sys.h`, `mpi_ive.h` headers match the vendor ABI byte-for-byte (struct sizes locked via `_Static_assert` in the `libraries-header-check` CI job). Relink existing apps against `-lmpi_neo -live_neo -livp_neo` instead of the vendor `-lmpi -live -livp`.
+
+Build:
+
+```bash
+make -C libraries/mpi_neo CC=arm-openipc-linux-musleabi-gcc
+make -C libraries/ive_neo CC=arm-openipc-linux-musleabi-gcc
+make -C libraries/ivp_neo CC=arm-openipc-linux-musleabi-gcc
+```
+
+**Status on Hi3516EV200/EV300**: `libive_neo.so` drives `open_ive_neo.ko` end-to-end for the 19 IVE ops the silicon supports. XNN/Conv inference is non-functional at the silicon level (vendor `open_ive.ko` has the same symptom — see [#33](../../issues/33)), so `libivp_neo.so`'s `hi_ivp_process_ex` returns zero detections to match vendor behavior.
+
 ## Kernel modules
 
 All modules are prefixed `open_` to distinguish from vendor SDK modules:
@@ -144,7 +173,8 @@ All modules are prefixed `open_` to distinguish from vendor SDK modules:
 | `open_jpege` | JPEG encoder |
 | `open_rgn` | OSD regions and overlays |
 | `open_vgs` | Video graphics operations |
-| `open_ive` | Intelligent video (motion detection, CNN) |
+| `open_ive` | Intelligent video (vendor blob, all SoCs) |
+| `open_ive_neo` | Intelligent video (clean-room C, EV200/EV300 only) |
 | `open_ai` / `open_ao` / `open_aio` | Audio input/output |
 | `open_aenc` / `open_adec` | Audio encode/decode |
 | `open_acodec` | On-chip audio codec |
@@ -154,6 +184,8 @@ All modules are prefixed `open_` to distinguish from vendor SDK modules:
 | `open_wdt` | Watchdog timer |
 
 Load order matters — `open_osal` → `open_sys_config` → `open_base` → `open_sys` → everything else. See `/usr/bin/load_hisilicon` on the camera for the full sequence.
+
+Both `open_ive.ko` and `open_ive_neo.ko` are produced on every build (they live in sibling `kernel/ive/` and `kernel/ive_neo/` dirs). A rootfs should `insmod` **either** the vendor or the clean-room variant, not both — they export the same public symbol set (`ive_std_mod_init`, `drv_ive_*`, `g_ive_regs`, …). See issue [#33](../../issues/33) for which SoCs `ive_neo` has been validated on.
 
 ## FPV sensor modes (IMX335)
 
@@ -186,6 +218,11 @@ Every push and PR is tested against:
 - hi3516ev200 + kernel 4.9 (HiSilicon)
 - gk7205v200 + kernel 4.9 (Goke)
 - hi3516ev300 + kernel 6.6, 6.18, 7.0 (mainline)
+
+Plus three checks for the `libraries/*_neo` userspace stack:
+- **Libraries header check** — `gcc -Werror -fsyntax-only` over every public header in `libraries/{include,ive_neo,mpi_neo,ivp_neo}/include/` plus `_Static_assert`s on critical struct sizes (`IVE_IMAGE_S == 72`, `IVE_CCBLOB_S == 3052`, …). Locks the vendor ABI on every PR.
+- **Libraries cross-compile** — ARM EABI build of all three `*_neo` libs; asserts canonical symbols are exported (`HI_MPI_IVE_Thresh`, `HI_MPI_SYS_MmzAlloc`, `hi_ivp_init`, …) and no vendor `.so` is in `DT_NEEDED`.
+- **QEMU IVE ops regression** — boots a vendored `test-ive-ops.c` under `qemu-system-arm -M hi3516ev300` and asserts `Result: N/N passed`. Catches register-contract drift between `kernel/ive_neo/ive_neo.c` and the QEMU HiSilicon machine model.
 
 [![Build Status](https://github.com/OpenIPC/openhisilicon/actions/workflows/build.yml/badge.svg)](https://github.com/OpenIPC/openhisilicon/actions/workflows/build.yml)
 
