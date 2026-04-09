@@ -1,0 +1,244 @@
+# hi3516cv500 SoC family build configuration
+#
+# Uses vendor SDK V2.0.2.1 layout:
+#   obj/hi3516cv500/   - pre-built binary blobs
+#   init/hi3516cv500/  - init wrapper source
+#   include/hi3516cv500/ - SDK headers
+#   isp/arch/hi3516cv500/ - ISP full source
+#   osal/hi3516cv500/  - OSAL source
+#   sys_config/hi3516cv500/ - sys_config source
+#   mipi_rx/hi3516cv500/ - MIPI RX source
+
+# SDK include paths (override EV200 paths)
+ccflags-y += -I$(src)/include/hi3516cv500
+ccflags-y += -I$(src)/include/hi3516cv500/adapt
+ccflags-y += -I$(src)/osal/hi3516cv500
+ccflags-y += -I$(src)/isp/arch/hi3516cv500/ext_inc
+ccflags-y += -I$(src)/isp/arch/hi3516cv500/include
+ccflags-y += -I$(src)/isp/arch/hi3516cv500/mkp/include
+
+# --- OSAL module ---
+CV500_OSAL_DIR = osal/hi3516cv500
+CV500_OSAL_SRCS := \
+	$(CV500_OSAL_DIR)/osal.c \
+	$(CV500_OSAL_DIR)/osal_addr.c \
+	$(CV500_OSAL_DIR)/osal_atomic.c \
+	$(CV500_OSAL_DIR)/osal_barrier.c \
+	$(CV500_OSAL_DIR)/osal_cache.c \
+	$(CV500_OSAL_DIR)/osal_debug.c \
+	$(CV500_OSAL_DIR)/osal_device.c \
+	$(CV500_OSAL_DIR)/osal_fileops.c \
+	$(CV500_OSAL_DIR)/osal_interrupt.c \
+	$(CV500_OSAL_DIR)/osal_math.c \
+	$(CV500_OSAL_DIR)/osal_mutex.c \
+	$(CV500_OSAL_DIR)/osal_notifier.c \
+	$(CV500_OSAL_DIR)/osal_platform.c \
+	$(CV500_OSAL_DIR)/osal_proc.c \
+	$(CV500_OSAL_DIR)/osal_schedule.c \
+	$(CV500_OSAL_DIR)/osal_semaphore.c \
+	$(CV500_OSAL_DIR)/osal_spinlock.c \
+	$(CV500_OSAL_DIR)/osal_string.c \
+	$(CV500_OSAL_DIR)/osal_task.c \
+	$(CV500_OSAL_DIR)/osal_timer.c \
+	$(CV500_OSAL_DIR)/osal_vmalloc.c \
+	$(CV500_OSAL_DIR)/osal_wait.c \
+	$(CV500_OSAL_DIR)/osal_workqueue.c
+
+ccflags-y += -I$(src)/$(CV500_OSAL_DIR)/himedia
+ccflags-y += -I$(src)/$(CV500_OSAL_DIR)/mmz
+
+CV500_OSAL_MMZ_SRCS := \
+	$(CV500_OSAL_DIR)/mmz/media_mem.c \
+	$(CV500_OSAL_DIR)/mmz/mmz_userdev.c \
+	$(CV500_OSAL_DIR)/mmz/hisi_allocator.c \
+	$(CV500_OSAL_DIR)/mmz/cma_allocator.c
+
+CV500_OSAL_HIMEDIA_SRCS := \
+	$(CV500_OSAL_DIR)/himedia/base.c \
+	$(CV500_OSAL_DIR)/himedia/himedia.c
+
+$(PREFIX)osal-objs := $(CV500_OSAL_SRCS:%.c=%.o) $(CV500_OSAL_MMZ_SRCS:%.c=%.o) $(CV500_OSAL_HIMEDIA_SRCS:%.c=%.o)
+obj-m += $(PREFIX)osal.o
+
+# --- sys_config module ---
+$(PREFIX)sys_config-objs := sys_config/hi3516cv500/sys_config.o
+obj-m += $(PREFIX)sys_config.o
+
+# --- MIPI RX module (source driver) ---
+CV500_MIPI_RX_DIR = mipi_rx/hi3516cv500
+$(PREFIX)mipi_rx-objs := \
+	$(CV500_MIPI_RX_DIR)/mipi_rx.o \
+	$(CV500_MIPI_RX_DIR)/mipi_rx_hal.o \
+	init/hi3516cv500/mipi_rx_init.o
+obj-m += $(PREFIX)mipi_rx.o
+
+# --- Blob modules (pre-built .o + init wrapper) ---
+# Pattern: open_<mod>-objs := obj/hi3516cv500/hi_<mod>.o init/hi3516cv500/<mod>_init.o
+
+CV500_BLOB_DIR = obj/hi3516cv500
+CV500_INIT_DIR = init/hi3516cv500
+
+$(PREFIX)base-objs   := $(CV500_BLOB_DIR)/hi_base.o   $(CV500_INIT_DIR)/base_init.o
+$(PREFIX)sys-objs    := $(CV500_BLOB_DIR)/hi_sys.o     $(CV500_INIT_DIR)/sys_init.o
+$(PREFIX)vi-objs     := $(CV500_BLOB_DIR)/hi_vi.o      $(CV500_INIT_DIR)/vi_init.o
+$(PREFIX)vpss-objs   := $(CV500_BLOB_DIR)/hi_vpss.o    $(CV500_INIT_DIR)/vpss_init.o
+$(PREFIX)venc-objs   := $(CV500_BLOB_DIR)/hi_venc.o    $(CV500_INIT_DIR)/venc_init.o
+$(PREFIX)vedu-objs   := $(CV500_BLOB_DIR)/hi_vedu.o    $(CV500_INIT_DIR)/vedu_init.o
+$(PREFIX)h264e-objs  := $(CV500_BLOB_DIR)/hi_h264e.o   $(CV500_INIT_DIR)/h264e_init.o
+$(PREFIX)h265e-objs  := $(CV500_BLOB_DIR)/hi_h265e.o   $(CV500_INIT_DIR)/h265e_init.o
+$(PREFIX)jpege-objs  := $(CV500_BLOB_DIR)/hi_jpege.o   $(CV500_INIT_DIR)/jpege_init.o
+$(PREFIX)rc-objs     := $(CV500_BLOB_DIR)/hi_rc.o      $(CV500_INIT_DIR)/rc_init.o
+$(PREFIX)rgn-objs    := $(CV500_BLOB_DIR)/hi_rgn.o     $(CV500_INIT_DIR)/rgn_init.o
+$(PREFIX)vgs-objs    := $(CV500_BLOB_DIR)/hi_vgs.o     $(CV500_INIT_DIR)/vgs_init.o
+$(PREFIX)ive-objs    := $(CV500_BLOB_DIR)/hi_ive.o     $(CV500_INIT_DIR)/ive_init.o
+$(PREFIX)chnl-objs   := $(CV500_BLOB_DIR)/hi_chnl.o    $(CV500_INIT_DIR)/chnl_init.o
+$(PREFIX)tde-objs    := $(CV500_BLOB_DIR)/hi_tde.o     $(CV500_INIT_DIR)/tde_init.o
+$(PREFIX)aio-objs    := $(CV500_BLOB_DIR)/hi_aio.o     $(CV500_INIT_DIR)/aio_init.o
+$(PREFIX)ai-objs     := $(CV500_BLOB_DIR)/hi_ai.o      $(CV500_INIT_DIR)/ai_init.o
+$(PREFIX)ao-objs     := $(CV500_BLOB_DIR)/hi_ao.o      $(CV500_INIT_DIR)/ao_init.o
+$(PREFIX)aenc-objs   := $(CV500_BLOB_DIR)/hi_aenc.o    $(CV500_INIT_DIR)/aenc_init.o
+$(PREFIX)adec-objs   := $(CV500_BLOB_DIR)/hi_adec.o    $(CV500_INIT_DIR)/adec_init.o
+$(PREFIX)acodec-objs := $(CV500_BLOB_DIR)/hi_acodec.o  $(CV500_INIT_DIR)/acodec_init.o
+$(PREFIX)gdc-objs    := $(CV500_BLOB_DIR)/hi_gdc.o     $(CV500_INIT_DIR)/gdc_init.o
+$(PREFIX)dis-objs    := $(CV500_BLOB_DIR)/hi_dis.o     $(CV500_INIT_DIR)/dis_init.o
+$(PREFIX)nnie-objs   := $(CV500_BLOB_DIR)/hi_nnie.o    $(CV500_INIT_DIR)/nnie_init.o
+$(PREFIX)vo-objs     := $(CV500_BLOB_DIR)/hi_vo.o      $(CV500_INIT_DIR)/vo_init.o
+$(PREFIX)hdmi-objs   := $(CV500_BLOB_DIR)/hi_hdmi.o    $(CV500_INIT_DIR)/hdmi_init.o
+$(PREFIX)vdec-objs   := $(CV500_BLOB_DIR)/hi_vdec.o    $(CV500_INIT_DIR)/vdec_init.o
+$(PREFIX)vfmw-objs   := $(CV500_BLOB_DIR)/hi_vfmw.o    $(CV500_INIT_DIR)/vfmw_init.o
+$(PREFIX)jpegd-objs  := $(CV500_BLOB_DIR)/hi_jpegd.o   $(CV500_INIT_DIR)/jpegd_init.o
+
+obj-m += $(PREFIX)base.o
+obj-m += $(PREFIX)sys.o
+obj-m += $(PREFIX)vi.o
+obj-m += $(PREFIX)vpss.o
+obj-m += $(PREFIX)venc.o
+obj-m += $(PREFIX)vedu.o
+obj-m += $(PREFIX)h264e.o
+obj-m += $(PREFIX)h265e.o
+obj-m += $(PREFIX)jpege.o
+obj-m += $(PREFIX)rc.o
+obj-m += $(PREFIX)rgn.o
+obj-m += $(PREFIX)vgs.o
+obj-m += $(PREFIX)ive.o
+obj-m += $(PREFIX)chnl.o
+ifndef DISABLE_TDE
+    obj-m += $(PREFIX)tde.o
+endif
+obj-m += $(PREFIX)aio.o
+obj-m += $(PREFIX)ai.o
+obj-m += $(PREFIX)ao.o
+obj-m += $(PREFIX)aenc.o
+obj-m += $(PREFIX)adec.o
+obj-m += $(PREFIX)acodec.o
+obj-m += $(PREFIX)gdc.o
+obj-m += $(PREFIX)dis.o
+obj-m += $(PREFIX)nnie.o
+ifndef DISABLE_VO
+    obj-m += $(PREFIX)vo.o
+endif
+obj-m += $(PREFIX)hdmi.o
+obj-m += $(PREFIX)vdec.o
+obj-m += $(PREFIX)vfmw.o
+obj-m += $(PREFIX)jpegd.o
+
+# --- Watchdog module (source driver) ---
+$(PREFIX)wdt-objs := wdt/hi3516cv500/hi_wtdg.o $(CV500_INIT_DIR)/wtdg_init.o
+obj-m += $(PREFIX)wdt.o
+
+# --- MIPI TX module (source driver) ---
+CV500_MIPI_TX_DIR = mipi_tx
+$(PREFIX)mipi_tx-objs := \
+	$(CV500_MIPI_TX_DIR)/mipi_tx.o \
+	$(CV500_MIPI_TX_DIR)/mipi_tx_hal.o \
+	$(CV500_INIT_DIR)/mipi_tx_init.o
+ccflags-y += -I$(src)/mipi_tx
+obj-m += $(PREFIX)mipi_tx.o
+
+# --- HIFB module (source driver) ---
+CV500_HIFB_DIR = hifb/hi3516cv500
+$(PREFIX)hifb-objs := \
+	$(CV500_HIFB_DIR)/hifb_main.o \
+	$(CV500_HIFB_DIR)/hifb_proc.o \
+	$(CV500_HIFB_DIR)/hifb_vsync.o \
+	$(CV500_HIFB_DIR)/hifb_dmabuf.o \
+	$(CV500_HIFB_DIR)/hifb_blit.o \
+	$(CV500_HIFB_DIR)/hifb_graphic_drv.o \
+	$(CV500_HIFB_DIR)/hifb_graphic_hal.o \
+	$(CV500_HIFB_DIR)/hifb_vou_drv.o \
+	$(CV500_HIFB_DIR)/hifb_vou_graphics.o
+ccflags-y += -I$(src)/hifb/hi3516cv500
+# HIFB needs VO internal register definitions not available yet
+# obj-m += $(PREFIX)hifb.o
+
+# --- IR module (source driver) ---
+$(PREFIX)ir-objs := ir/hi3516cv500/hiir.o $(CV500_INIT_DIR)/ir_init.o
+ccflags-y += -I$(src)/ir/hi3516cv500
+obj-m += $(PREFIX)ir.o
+
+# --- hi_user module (source driver) ---
+$(PREFIX)hi_user-objs := hiuser/hi3516cv500/hi_user.o
+ccflags-y += -I$(src)/hiuser/hi3516cv500
+obj-m += $(PREFIX)hi_user.o
+
+# --- Cipher module (source driver) ---
+CV500_CIPHER = cipher/hi3516cv500/src
+$(PREFIX)cipher-objs := \
+	$(CV500_CIPHER)/drv/cipher_initdevice.o \
+	$(CV500_CIPHER)/drv/cipher_v1.0/drivers/core/drv_symc_v100.o \
+	$(CV500_CIPHER)/drv/cipher_v1.0/drivers/core/drv_symc_v200.o \
+	$(CV500_CIPHER)/drv/cipher_v1.0/drivers/core/drv_hash_v100.o \
+	$(CV500_CIPHER)/drv/cipher_v1.0/drivers/core/drv_hash_v200.o \
+	$(CV500_CIPHER)/drv/cipher_v1.0/drivers/core/drv_ifep_rsa_v100.o \
+	$(CV500_CIPHER)/drv/cipher_v1.0/drivers/core/drv_trng_v100.o \
+	$(CV500_CIPHER)/drv/cipher_v1.0/drivers/core/drv_trng_v200.o \
+	$(CV500_CIPHER)/drv/cipher_v1.0/drivers/core/drv_lib.o \
+	$(CV500_CIPHER)/drv/cipher_v1.0/drivers/crypto/cryp_symc.o \
+	$(CV500_CIPHER)/drv/cipher_v1.0/drivers/crypto/cryp_hash.o \
+	$(CV500_CIPHER)/drv/cipher_v1.0/drivers/crypto/cryp_trng.o \
+	$(CV500_CIPHER)/drv/cipher_v1.0/drivers/crypto/cryp_rsa.o \
+	$(CV500_CIPHER)/drv/cipher_v1.0/drivers/kapi_symc.o \
+	$(CV500_CIPHER)/drv/cipher_v1.0/drivers/kapi_hash.o \
+	$(CV500_CIPHER)/drv/cipher_v1.0/drivers/kapi_rsa.o \
+	$(CV500_CIPHER)/drv/cipher_v1.0/drivers/kapi_trng.o \
+	$(CV500_CIPHER)/drv/cipher_v1.0/drivers/kapi_dispatch.o \
+	$(CV500_CIPHER)/drv/cipher_v1.0/drivers/extend/mbedtls/bignum.o \
+	$(CV500_CIPHER)/drv/cipher_v1.0/drivers/extend/mbedtls/md.o \
+	$(CV500_CIPHER)/drv/cipher_v1.0/drivers/extend/mbedtls/rsa.o \
+	$(CV500_CIPHER)/drv/cipher_v1.0/drivers/extend/mbedtls/asn1parse.o \
+	$(CV500_CIPHER)/drv/cipher_v1.0/drivers/extend/mbedtls/oid.o \
+	$(CV500_CIPHER)/drv/cipher_v1.0/drivers/extend/mbedtls/platform_util.o \
+	$(CV500_CIPHER)/drv/cipher_v1.0/drivers/extend/mbedtls/rsa_internal.o \
+	$(CV500_CIPHER)/drv/cipher_v1.0/drivers/extend/ext_aead.o \
+	$(CV500_CIPHER)/drv/cipher_v1.0/drivers/extend/ext_hash.o \
+	$(CV500_CIPHER)/drv/cipher_v1.0/drivers/extend/ext_symc.o \
+	$(CV500_CIPHER)/drv/cipher_v1.0/drivers/extend/ext_sm3.o \
+	$(CV500_CIPHER)/drv/cipher_v1.0/drivers/extend/ext_sm4.o \
+	$(CV500_CIPHER)/drv/cipher_v1.0/osal/drv_osal_init_linux.o \
+	$(CV500_CIPHER)/drv/cipher_v1.0/osal/drv_osal_sys_linux.o \
+	$(CV500_CIPHER)/drv/cipher_v1.0/compat/hi_drv_compat.o \
+	$(CV500_CIPHER)/drv/cipher_v1.0/compat/drv_klad.o \
+	$(CV500_CIPHER)/drv/cipher_v1.0/compat/hal_efuse.o \
+	$(CV500_CIPHER)/drv/cipher_v1.0/compat/hal_otp.o
+ccflags-y += -I$(src)/cipher/hi3516cv500/include
+ccflags-y += -I$(src)/cipher/hi3516cv500/src/drv/cipher_v1.0/osal/include
+ccflags-y += -I$(src)/cipher/hi3516cv500/src/drv/cipher_v1.0/drivers/core/include
+ccflags-y += -I$(src)/cipher/hi3516cv500/src/drv/cipher_v1.0/drivers/crypto/include
+ccflags-y += -I$(src)/cipher/hi3516cv500/src/drv/cipher_v1.0/drivers/extend/include
+ccflags-y += -I$(src)/cipher/hi3516cv500/src/drv/cipher_v1.0/compat
+ccflags-y += -DCHIP_TYPE_hi3516cv500 -DAMP_NONSECURE_VERSION
+obj-m += $(PREFIX)cipher.o
+
+# --- ISP module (full source) ---
+CV500_ISP_DIR = isp/arch/hi3516cv500
+$(PREFIX)isp-objs := \
+	$(CV500_ISP_DIR)/hal/isp_drv.o \
+	$(CV500_ISP_DIR)/init/isp_init.o \
+	$(CV500_ISP_DIR)/mkp/src/isp.o \
+	$(CV500_ISP_DIR)/mkp/src/isp_drv_vreg.o \
+	$(CV500_ISP_DIR)/mkp/src/isp_list.o \
+	$(CV500_ISP_DIR)/mkp/src/isp_st.o \
+	$(CV500_ISP_DIR)/mkp/src/isp_st_adapt.o
+ifndef DISABLE_ISP
+    obj-m += $(PREFIX)isp.o
+endif

@@ -1,7 +1,7 @@
 #ifndef HICOMPAT_H
 #define HICOMPAT_H
 
-#ifdef SDK_CODE
+#if defined(SDK_CODE) && SDK_CODE+0 != 0
 #if SDK_CODE == 0x3516E200
 #define GK_API_ISP_SensorRegCallBack HI_MPI_ISP_SensorRegCallBack
 #define GK_API_ISP_SensorUnRegCallBack HI_MPI_ISP_SensorUnRegCallBack
@@ -27,6 +27,6 @@ GK_S32 GK_API_AWB_SensorRegCallBack(VI_PIPE ViPipe, ALG_LIB_S *pstAwbLib,
 				    AWB_SENSOR_REGISTER_S *pstRegister);
 GK_S32 GK_API_AWB_SensorUnRegCallBack(VI_PIPE ViPipe, ALG_LIB_S *pstAwbLib,
 				      SENSOR_ID SensorId);
-#endif
+#endif /* SDK_CODE != 0 */
 
 #endif /* HICOMPAT_H */
