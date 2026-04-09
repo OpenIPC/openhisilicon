@@ -1,3 +1,31 @@
 *.o
 *.so
 *.a
+
+# kbuild artifacts
+*.ko
+*.mod
+*.mod.c
+*.mod.o
+.*.cmd
+.tmp_versions/
+Module.symvers
+modules.order
+kernel/**/include/generated/
+
+# Kbuild writes a shim Makefile in subdirs on first build; the tracked
+# build system is Kbuild. Ignore the throwaway Makefile for each ive
+# variant (other subdirs don't generate one).
+kernel/ive/Makefile
+kernel/ive_neo/Makefile
+
+# IDA / Ghidra decompilation artifacts for the vendor *.o blobs. The
+# raw .o files are tracked (they link into the final .ko) but the RE
+# output files are local-only and live under ~/re/openhisilicon/.
+*.o.asm
+*.o.c
+*.o.h
+*.o.i64
+*.o.inc
+*.o.lst
+*.o.map
