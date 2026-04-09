@@ -65,6 +65,40 @@ extern int hi_i2c_master_send(const struct i2c_client *client,
 
 #define DEFAULT_ALLOCATOR "gk"
 
+#elif defined(hi3516cv500)
+
+/* hi3516cv500 hi3516dv300 hi3516av300 */
+#define MAIN_CHIPNAME "hi3516cv500"
+
+#define C_HI3516CV500 "hi3516cv500"
+#define C_HI3516DV300 "hi3516dv300"
+#define C_HI3516AV300 "hi3516av300"
+
+#define PLATFORM_NAME "hisilicon"
+#define PLATFORM_PRX "hi_"
+#define HISI_PRX "hisi-"
+#define HI_PRX "hi_"
+#define VENDOR_PRX "hi35xx_"
+
+#if LINUX_VERSION_CODE < KERNEL_VERSION(6, 0, 0)
+extern int hi_i2c_master_send(const struct i2c_client *client,
+			      const char *buf, int count);
+#define I2C_MASTER_SEND hi_i2c_master_send
+#else
+#define I2C_MASTER_SEND i2c_master_send
+#endif
+#define GET_CMA_ZONE hisi_get_cma_zone
+
+#define DEFAULT_ALLOCATOR "hisi"
+
+#ifdef CONFIG_HISI_SNAPSHOT_BOOT
+#define CONFIG_SNAPSHOT_BOOT 1
+#endif
+
+#ifdef CONFIG_CACHE_L2V200
+#define CONFIG_CACHE_HIL2V200 1
+#endif
+
 #else
 #error CHIPARCH must be set to supported values
 #endif

@@ -6,7 +6,11 @@ DIR=$(MOD_NAME)
 SRCS := $(DIR)/h265e_init.c
 
 OBJS := $(SRCS:%.c=%.o) $(ASM_SRCS:%.S=%.o)
-OBJS += $(DIR)/h265e.o
+ifeq ($(CHIPARCH),hi3516cv500)
+    OBJS += $(DIR)/arch/hi3516cv500/h265e.o $(DIR)/arch/hi3516cv500/h265e.data.o
+else
+    OBJS += $(DIR)/h265e.o
+endif
 
 $(OUT)-objs := $(OBJS)
 

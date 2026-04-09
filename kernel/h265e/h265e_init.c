@@ -11,8 +11,17 @@
 ******************************************************************************/
 #include <linux/module.h>
 
+#include "../compat/compat.h"
+
+#ifdef hi3516cv500
+extern int H265E_ModInit(void);
+extern void H265E_ModExit(void);
+#define h265e_module_init H265E_ModInit
+#define h265e_module_exit H265E_ModExit
+#else
 extern int h265e_module_init(void);
 extern void h265e_module_exit(void);
+#endif
 
 static int __init h265e_mod_init(void)
 {

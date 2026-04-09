@@ -6,7 +6,11 @@ DIR=$(MOD_NAME)
 SRCS := $(DIR)/adec_init.c
 
 OBJS := $(SRCS:%.c=%.o) $(ASM_SRCS:%.S=%.o)
-OBJS += $(DIR)/adec.o
+ifeq ($(CHIPARCH),hi3516cv500)
+    OBJS += $(DIR)/arch/hi3516cv500/adec.o $(DIR)/arch/hi3516cv500/adec.data.o
+else
+    OBJS += $(DIR)/adec.o
+endif
 
 $(OUT)-objs := $(OBJS)
 

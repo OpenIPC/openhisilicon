@@ -52,6 +52,14 @@ EXPORT_SYMBOL(CMPI_UnRegisterModule);
 extern GK_S32 g_proc_enable;
 EXPORT_SYMBOL(g_proc_enable);
 
+#ifdef hi3516cv500
+/*
+ * CV500 blob provides COMM_init_proc_ctrl / COMM_exit_proc_ctrl internally.
+ */
+extern int __init COMM_init_proc_ctrl(void);
+extern void COMM_exit_proc_ctrl(void);
+#else
+
 static struct ctl_table comm_eproc_table[] = {
 	{ .procname = "proc_message_enable",
 	  .data = &g_proc_enable,
@@ -91,6 +99,7 @@ void COMM_exit_proc_ctrl(void)
 {
 	unregister_sysctl_table(comm_eproc_tbl_head);
 }
+#endif /* hi3516cv500 */
 
 extern int COMM_Init(void);
 extern void COMM_Exit(void);

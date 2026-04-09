@@ -1,0 +1,24 @@
+MOD_NAME := hifb
+OUT := $(PREFIX)$(MOD_NAME)
+
+DIR=$(MOD_NAME)
+
+SRCS := $(DIR)/hifb_main.c \
+	$(DIR)/hifb_blit.c \
+	$(DIR)/hifb_graphic_drv.c \
+	$(DIR)/hifb_graphic_hal.c \
+	$(DIR)/hifb_vou_drv.c \
+	$(DIR)/hifb_vou_graphics.c \
+	$(DIR)/hifb_proc.c \
+	$(DIR)/hifb_klog.c \
+	$(DIR)/hifb_dmabuf.c \
+	$(DIR)/hifb_vsync.c \
+	$(DIR)/drv_hifb_fence.c
+
+ccflags-y += -I$(src)/hifb
+
+OBJS := $(SRCS:%.c=%.o)
+
+$(OUT)-objs := $(OBJS)
+
+obj-m += $(OUT).o

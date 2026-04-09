@@ -6,7 +6,11 @@ DIR=$(MOD_NAME)
 SRCS := $(DIR)/chnl_init.c
 
 OBJS := $(SRCS:%.c=%.o) $(ASM_SRCS:%.S=%.o)
-OBJS += $(DIR)/chnl.o
+ifeq ($(CHIPARCH),hi3516cv500)
+    OBJS += $(DIR)/arch/hi3516cv500/chnl.o $(DIR)/arch/hi3516cv500/chnl.data.o
+else
+    OBJS += $(DIR)/chnl.o
+endif
 
 $(OUT)-objs := $(OBJS)
 

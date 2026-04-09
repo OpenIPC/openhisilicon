@@ -12,8 +12,17 @@
 
 #include <linux/module.h>
 
+#include "../compat/compat.h"
+
+#ifdef hi3516cv500
+extern int JPEGE_ModInit(void);
+extern void JPEGE_ModExit(void);
+#define jpege_module_init JPEGE_ModInit
+#define jpege_module_exit JPEGE_ModExit
+#else
 extern int jpege_module_init(void);
 extern void jpege_module_exit(void);
+#endif
 
 static int __init jpege_mod_init(void)
 {

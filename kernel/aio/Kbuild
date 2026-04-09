@@ -6,7 +6,11 @@ DIR=$(MOD_NAME)
 SRCS := $(DIR)/aio_init.c
 
 OBJS := $(SRCS:%.c=%.o) $(ASM_SRCS:%.S=%.o)
-OBJS += $(DIR)/aio.o
+ifeq ($(CHIPARCH),hi3516cv500)
+    OBJS += $(DIR)/arch/hi3516cv500/aio.o $(DIR)/arch/hi3516cv500/aio.data.o
+else
+    OBJS += $(DIR)/aio.o
+endif
 
 $(OUT)-objs := $(OBJS)
 

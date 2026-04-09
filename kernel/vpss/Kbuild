@@ -6,7 +6,11 @@ DIR=$(MOD_NAME)
 SRCS := $(DIR)/vpss_init.c
 
 OBJS := $(SRCS:%.c=%.o) $(ASM_SRCS:%.S=%.o)
-OBJS += $(DIR)/vpss.o
+ifeq ($(CHIPARCH),hi3516cv500)
+    OBJS += $(DIR)/arch/hi3516cv500/vpss.o $(DIR)/arch/hi3516cv500/vpss.data.o
+else
+    OBJS += $(DIR)/vpss.o
+endif
 
 $(OUT)-objs := $(OBJS)
 

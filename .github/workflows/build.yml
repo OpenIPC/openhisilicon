@@ -21,6 +21,9 @@ jobs:
             board: hi3516ev200_lite
           - platform: gk7205v200
             board: gk7205v200_lite
+          # hi3516cv500: assembly blobs need disassembler fixes before CI
+          # - platform: hi3516cv500
+          #   board: hi3516cv500_lite
           - platform: hi3516ev300
             board: hi3516ev300_neo
             kernel: "6.6"

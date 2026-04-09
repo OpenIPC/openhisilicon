@@ -6,7 +6,11 @@ DIR=$(MOD_NAME)
 SRCS := $(DIR)/tde_init.c
 
 OBJS := $(SRCS:%.c=%.o) $(ASM_SRCS:%.S=%.o)
-OBJS += $(DIR)/tde.o
+ifeq ($(CHIPARCH),hi3516cv500)
+    OBJS += $(DIR)/arch/hi3516cv500/tde.o $(DIR)/arch/hi3516cv500/tde.data.o
+else
+    OBJS += $(DIR)/tde.o
+endif
 
 $(OUT)-objs := $(OBJS)
 

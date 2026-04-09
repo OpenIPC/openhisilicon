@@ -3,6 +3,20 @@ OUT := $(PREFIX)$(MOD_NAME)
 
 DIR=$(MOD_NAME)
 
+ifeq ($(CHIPARCH),hi3516cv500)
+SRCS := \
+	$(DIR)/arch/$(CHIPARCH)/hal/isp_drv.c \
+	$(DIR)/arch/$(CHIPARCH)/isp_init.c \
+	$(DIR)/arch/$(CHIPARCH)/mkp/src/isp.c \
+	$(DIR)/arch/$(CHIPARCH)/mkp/src/isp_drv_vreg.c \
+	$(DIR)/arch/$(CHIPARCH)/mkp/src/isp_list.c \
+	$(DIR)/arch/$(CHIPARCH)/mkp/src/isp_st.c
+
+ccflags-y += -I$(src)/$(MOD_NAME)/arch/$(CHIPARCH)/include
+ccflags-y += -I$(src)/$(MOD_NAME)/arch/$(CHIPARCH)/mkp/include
+else
+ccflags-y += -I$(src)/$(MOD_NAME)/arch/$(CHIPARCH)/include
+ccflags-y += -I$(src)/$(MOD_NAME)/mkp/include
 SRCS := \
 	$(DIR)/arch/$(CHIPARCH)/hal/isp_drv.c \
 	$(DIR)/init/linux/isp_init.c \
@@ -10,6 +24,7 @@ SRCS := \
 	$(DIR)/mkp/src/isp_drv_vreg.c \
 	$(DIR)/mkp/src/isp_list.c \
 	$(DIR)/mkp/src/isp_st.c
+endif
 
 ccflags-y += -I$(src)/$(MOD_NAME)/include
 ccflags-y += -I$(src)/$(MOD_NAME)/arch/include

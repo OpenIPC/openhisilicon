@@ -6,7 +6,11 @@ DIR=$(MOD_NAME)
 SRCS := $(DIR)/jpege_init.c
 
 OBJS := $(SRCS:%.c=%.o) $(ASM_SRCS:%.S=%.o)
-OBJS += $(DIR)/jpege.o
+ifeq ($(CHIPARCH),hi3516cv500)
+    OBJS += $(DIR)/arch/hi3516cv500/jpege.o $(DIR)/arch/hi3516cv500/jpege.data.o
+else
+    OBJS += $(DIR)/jpege.o
+endif
 
 $(OUT)-objs := $(OBJS)
 

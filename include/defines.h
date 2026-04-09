@@ -171,7 +171,11 @@ extern "C" {
 #define SVP_MAX_SENSOR_NUM 2
 
 #define VI_MAX_DEV_NUM 1
+#ifdef hi3516cv500
+#define VI_MAX_PHY_PIPE_NUM 4
+#else
 #define VI_MAX_PHY_PIPE_NUM 2
+#endif
 #ifdef hi3516ev200
 #define VI_MAX_VIR_PIPE_NUM 0
 #else

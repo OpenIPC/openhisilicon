@@ -6,11 +6,22 @@ endif
 
 ccflags-y := -D$(CHIPARCH) -DRELEASE -DUSER_BIT_32 -DKERNEL_BIT_32 -Wno-date-time -D_GNU_SOURCE
 ccflags-y += -include $(src)/compat/kernel_compat.h
+asflags-y += -include $(src)/compat/asm_macros.inc
 ccflags-y += -I$(src)/../include
 ccflags-y += -I$(src)/ext_inc
+ifeq ($(CHIPARCH),hi3516cv500)
+    ccflags-y += -I$(src)/compat/hi_compat
+endif
 
-ccflags-y += -I$(src)/isp/arch/$(CHIPARCH)/include
-ccflags-y += -I$(src)/isp/mkp/include
+ifeq ($(CHIPARCH),hi3516cv500)
+    # CV500 ISP has its own headers; non-ISP modules use EV200's mkp_isp.h
+    # for the shared isp_ext.h callback types
+    ccflags-y += -I$(src)/isp/arch/hi3516ev200/include
+    ccflags-y += -I$(src)/isp/mkp/include
+else
+    ccflags-y += -I$(src)/isp/arch/$(CHIPARCH)/include
+    ccflags-y += -I$(src)/isp/mkp/include
+endif
 ccflags-y += -I$(src)/../libraries/isp/arch/$(CHIPARCH)/include
 ccflags-y += -I$(src)/../libraries/isp/include
 
@@ -64,4 +75,49 @@ ifndef DISABLE_VO
 endif
     include $(src)/vpss/Kbuild
     # +fb
+endif
+
+ifeq ($(CHIPARCH),hi3516cv500)
+    include $(src)/acodec/Kbuild
+    include $(src)/adec/Kbuild
+    include $(src)/aenc/Kbuild
+    include $(src)/ai/Kbuild
+    include $(src)/aio/Kbuild
+    include $(src)/ao/Kbuild
+    include $(src)/base/Kbuild
+    include $(src)/chnl/Kbuild
+    include $(src)/h264e/Kbuild
+    include $(src)/h265e/Kbuild
+    include $(src)/ive/Kbuild
+    include $(src)/jpege/Kbuild
+    include $(src)/rc/Kbuild
+    include $(src)/rgn/Kbuild
+    include $(src)/sys/Kbuild
+ifndef DISABLE_TDE
+    include $(src)/tde/Kbuild
+endif
+    include $(src)/vedu/Kbuild
+    include $(src)/venc/Kbuild
+    include $(src)/vgs/Kbuild
+    include $(src)/vi/Kbuild
+ifndef DISABLE_VO
+    include $(src)/vo/Kbuild
+endif
+    include $(src)/vpss/Kbuild
+    # CV500-only modules
+ifndef DISABLE_GDC
+    include $(src)/gdc/Kbuild
+endif
+ifndef DISABLE_DIS
+    include $(src)/dis/Kbuild
+endif
+ifndef DISABLE_NNIE
+    include $(src)/nnie/Kbuild
+endif
+ifndef DISABLE_HIFB
+    include $(src)/hifb/Kbuild
+endif
+ifndef DISABLE_MIPI_TX
+    include $(src)/mipi_tx/Kbuild
+endif
 endif

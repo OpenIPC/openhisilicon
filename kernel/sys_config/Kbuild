@@ -3,6 +3,10 @@ OUT := $(PREFIX)$(MOD_NAME)
 
 DIR=$(MOD_NAME)
 
-$(OUT)-objs := $(DIR)/$(MOD_NAME).o
+ifeq ($(CHIPARCH),hi3516cv500)
+    $(OUT)-objs := $(DIR)/$(MOD_NAME)_cv500.o
+else
+    $(OUT)-objs := $(DIR)/$(MOD_NAME).o
+endif
 
 obj-m += $(OUT).o

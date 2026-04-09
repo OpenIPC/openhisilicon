@@ -36,31 +36,53 @@ static struct ctl_path pm_umh_root[] = { {
 extern int SYS_ModInit(void);
 extern void SYS_ModExit(void);
 
-#if 0
-static int __init sys_mod_init(void){
-    SYS_ModInit();
-
-    ctl_head = register_sysctl_paths(pm_umh_root, pm_mpp_ctl);
-
-    return 0;
-}
-static void __exit sys_mod_exit(void){
-    unregister_sysctl_table(ctl_head);
-
-    SYS_ModExit();
-}
-
-module_init(sys_mod_init);
-module_exit(sys_mod_exit);
-#else
+#ifdef hi3516cv500
+/*
+ * CV500 sys blob references these globals for register base addresses.
+ * They must be populated via DTS ioremap before calling SYS_ModInit().
+ */
+extern void *reg_crg_base_va;
+EXPORT_SYMBOL(reg_crg_base_va);
+extern void *reg_sys_base_va;
+EXPORT_SYMBOL(reg_sys_base_va);
+extern void *reg_ddr0_base_va;
+EXPORT_SYMBOL(reg_ddr0_base_va);
+extern void *reg_misc_base_va;
+EXPORT_SYMBOL(reg_misc_base_va);
+extern void *reg_otp_base_va;
+EXPORT_SYMBOL(reg_otp_base_va);
+#endif
 
 #include <linux/of_platform.h>
 
 static int hi35xx_sys_probe(struct platform_device *pdev)
 {
-	if (GK_SUCCESS != SYS_ModInit()) {
+#ifdef hi3516cv500
+	struct resource *mem;
+
+	mem = osal_platform_get_resource_byname(pdev, IORESOURCE_MEM, "crg");
+	reg_crg_base_va = devm_ioremap_resource(&pdev->dev, mem);
+	if (IS_ERR(reg_crg_base_va))
+		return PTR_ERR(reg_crg_base_va);
+
+	mem = osal_platform_get_resource_byname(pdev, IORESOURCE_MEM, "sys");
+	reg_sys_base_va = devm_ioremap_resource(&pdev->dev, mem);
+	if (IS_ERR(reg_sys_base_va))
+		return PTR_ERR(reg_sys_base_va);
+
+	mem = osal_platform_get_resource_byname(pdev, IORESOURCE_MEM, "ddr");
+	reg_ddr0_base_va = devm_ioremap_resource(&pdev->dev, mem);
+	if (IS_ERR(reg_ddr0_base_va))
+		return PTR_ERR(reg_ddr0_base_va);
+
+	mem = osal_platform_get_resource_byname(pdev, IORESOURCE_MEM, "misc");
+	reg_misc_base_va = devm_ioremap_resource(&pdev->dev, mem);
+	if (IS_ERR(reg_misc_base_va))
+		return PTR_ERR(reg_misc_base_va);
+#endif
+
+	if (GK_SUCCESS != SYS_ModInit())
 		return GK_FAILURE;
-	}
 
 #ifdef COMPAT_NO_SYSCTL_PATHS
 	ctl_head = compat_register_sysctl("kernel", pm_mpp_ctl);
@@ -76,6 +98,13 @@ static compat_platform_remove_ret hi35xx_sys_remove(struct platform_device *pdev
 	unregister_sysctl_table(ctl_head);
 
 	SYS_ModExit();
+
+#ifdef hi3516cv500
+	reg_crg_base_va = NULL;
+	reg_sys_base_va = NULL;
+	reg_ddr0_base_va = NULL;
+	reg_misc_base_va = NULL;
+#endif
 
 	compat_platform_remove_return;
 }
@@ -96,6 +125,5 @@ static struct platform_driver hi35xx_sys_driver = {
 };
 
 osal_module_platform_driver(hi35xx_sys_driver);
-#endif
 
 MODULE_LICENSE("GPL");

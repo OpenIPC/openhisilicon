@@ -9,8 +9,17 @@
 extern u8 g_ive_power_save_en;
 extern u16 g_ive_node_num;
 
+#include "../../compat/compat.h"
+
+#ifdef hi3516cv500
+extern int IVE_ModInit(void);
+extern void IVE_ModExit(void);
+#define ive_std_mod_init IVE_ModInit
+#define ive_std_mod_exit IVE_ModExit
+#else
 extern int ive_std_mod_init(void);
 extern void ive_std_mod_exit(void);
+#endif
 
 module_param_named(save_power, g_ive_power_save_en, byte, S_IRUGO);
 module_param_named(max_node_num, g_ive_node_num, ushort, S_IRUGO);

@@ -125,15 +125,23 @@ typedef enum {
 /****************************************************************************
  * macro definition                                                         *
  ****************************************************************************/
-#define MIPI_RX_REGS_ADDR 0x11240000
-#define MIPI_RX_REGS_SIZE 0x10000
+#include "../compat/compat.h"
 
+#ifdef hi3516cv500
+#define MIPI_RX_REGS_ADDR 0x113A0000
+#define MIPI_RX_REGS_SIZE 0x10000
 #define SNS_CRG_ADDR 0x120100F0
 #define MIPI_RX_CRG_ADDR 0x120100F8
-
-#define MIPI_RX_WORK_MODE_ADDR 0x12028018 /* offset 8018 */
-
+#define MIPI_RX_WORK_MODE_ADDR 0x12030018 /* MISC 0x12030000 + 0x18 */
+#define MIPI_RX_IRQ 57
+#else
+#define MIPI_RX_REGS_ADDR 0x11240000
+#define MIPI_RX_REGS_SIZE 0x10000
+#define SNS_CRG_ADDR 0x120100F0
+#define MIPI_RX_CRG_ADDR 0x120100F8
+#define MIPI_RX_WORK_MODE_ADDR 0x12028018 /* MISC 0x12028000 + 0x18 */
 #define MIPI_RX_IRQ 77
+#endif
 
 unsigned int regMapFlag = 0;
 
