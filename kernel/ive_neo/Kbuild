@@ -1,0 +1,33 @@
+#
+# kernel/ive_neo — clean-room open-source IVE/XNN driver.
+#
+# Built alongside (not instead of) the vendor kernel/ive/ module. The
+# top-level kernel/Kbuild includes both: every `make modules` run
+# produces:
+#
+#   kernel/ive/     → open_ive.ko      (vendor ive.o blob)
+#   kernel/ive_neo/ → open_ive_neo.ko  (clean-room ive_neo.c)
+#
+# A rootfs ships both .ko files and init scripts pick which to load
+# at runtime. `lsmod` / `modinfo` distinguish them by module basename.
+#
+# The kernel/ive_neo/ive_init.c platform wrapper is a copy of
+# kernel/ive/ive_init.c; both variants resolve the same symbol set
+# (ive_std_mod_init, drv_ive_*, g_ive_regs, ...) so the wrapper is
+# interchangeable between them.
+#
+# See libraries/ive_neo/, libraries/mpi_neo/, libraries/ivp_neo/ for
+# the matching userspace stack.
+#
+
+MOD_NAME := ive_neo
+OUT := $(PREFIX)$(MOD_NAME)
+
+DIR = ive_neo
+
+SRCS := $(DIR)/ive_init.c $(DIR)/ive_neo.c
+OBJS := $(SRCS:%.c=%.o) $(ASM_SRCS:%.S=%.o)
+
+$(OUT)-objs := $(OBJS)
+
+obj-m += $(OUT).o
