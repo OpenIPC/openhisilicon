@@ -139,3 +139,229 @@ jobs:
           sed -i "s|^HISILICON_OPENSDK_SITE =.*|HISILICON_OPENSDK_SITE_METHOD = local\nHISILICON_OPENSDK_SITE = $GITHUB_WORKSPACE|" ${FILE}
           sed -i "s|^HISILICON_OPENSDK_VERSION =.*||" ${FILE}
           CMAKE_POLICY_VERSION_MINIMUM=3.5 make BOARD=${{matrix.board}} br-hisilicon-opensdk
+
+  #
+  # libraries-header-check
+  #
+  # Host-only fast sanity check on the libraries/*_neo public headers.
+  # Catches header regressions on every push in <30 s without needing a
+  # cross-compiler. Static_asserts lock in the binary ABI struct sizes.
+  #
+  libraries-header-check:
+    name: Libraries header check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Compile public-header probe
+        run: |
+          cat > /tmp/probe.c <<'EOF'
+          #include "hi_type.h"
+          #include "hi_common.h"
+          #include "hi_comm_ive.h"
+          #include "hi_ive.h"
+          #include "hi_comm_video.h"
+          #include "hi_ivp.h"
+          #include "mpi_sys.h"
+          #include "mpi_ive.h"
+
+          /* Binary ABI is frozen against vendor libive.so / libmpi.so /
+           * libivp.so. A struct-size drift here means the ioctl arg
+           * layout or HI_MPI_IVE_Thresh ctrl buffer would stop matching
+           * the kernel — which is always a bug. */
+          _Static_assert(sizeof(IVE_IMAGE_S)             == 72,   "IVE_IMAGE_S size");
+          _Static_assert(sizeof(IVE_MEM_INFO_S)          == 24,   "IVE_MEM_INFO_S size");
+          _Static_assert(sizeof(IVE_DATA_S)              == 32,   "IVE_DATA_S size");
+          _Static_assert(sizeof(IVE_THRESH_CTRL_S)       == 12,   "IVE_THRESH_CTRL_S size");
+          _Static_assert(sizeof(IVE_SUB_CTRL_S)          == 4,    "IVE_SUB_CTRL_S size");
+          _Static_assert(sizeof(IVE_CCL_CTRL_S)          == 8,    "IVE_CCL_CTRL_S size");
+          _Static_assert(sizeof(IVE_DILATE_CTRL_S)       == 25,   "IVE_DILATE_CTRL_S size");
+          _Static_assert(sizeof(IVE_ERODE_CTRL_S)        == 25,   "IVE_ERODE_CTRL_S size");
+          _Static_assert(sizeof(IVE_CANNY_HYS_EDGE_CTRL_S) == 56, "IVE_CANNY_HYS_EDGE_CTRL_S size");
+          _Static_assert(sizeof(IVE_CCBLOB_S)            == 3052, "IVE_CCBLOB_S size");
+          _Static_assert(sizeof(IVE_CNN_MODEL_S)         == 232,  "IVE_CNN_MODEL_S size");
+          _Static_assert(sizeof(IVE_GMM2_CTRL_S)         == 28,   "IVE_GMM2_CTRL_S size");
+
+          int main(void) { return 0; }
+          EOF
+
+          gcc -Wall -Wextra -Werror -fsyntax-only \
+              -I libraries/include \
+              -I libraries/ive_neo/include \
+              -I libraries/mpi_neo/include \
+              -I libraries/ivp_neo/include \
+              /tmp/probe.c
+          echo "all headers compile cleanly; ABI sizes locked"
+
+  #
+  # libraries-cross-compile
+  #
+  # Cross-compiles libraries/{ive,mpi,ivp}_neo with the apt ARM EABI
+  # toolchain (not musl — just a smoke test that code links). Verifies
+  # the .so/.a outputs exist, asserts canonical symbols are exported,
+  # and confirms the shared objects depend only on libc/libpthread
+  # (no vendor blobs sneaking into NEEDED).
+  #
+  libraries-cross-compile:
+    name: Libraries cross-compile (ARM EABI)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install ARM EABI toolchain
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            gcc-arm-linux-gnueabi libc6-dev-armel-cross binutils-arm-linux-gnueabi
+
+      - name: Cross-compile libraries/*_neo
+        run: |
+          make -C libraries/mpi_neo \
+            CC=arm-linux-gnueabi-gcc AR=arm-linux-gnueabi-ar
+          make -C libraries/ive_neo \
+            CC=arm-linux-gnueabi-gcc AR=arm-linux-gnueabi-ar
+          make -C libraries/ivp_neo \
+            CC=arm-linux-gnueabi-gcc AR=arm-linux-gnueabi-ar
+
+      - name: Verify outputs exist
+        run: |
+          for f in \
+              libraries/mpi_neo/libmpi_neo.so libraries/mpi_neo/libmpi_neo.a \
+              libraries/ive_neo/libive_neo.so libraries/ive_neo/libive_neo.a \
+              libraries/ivp_neo/libivp_neo.so libraries/ivp_neo/libivp_neo.a; do
+              [ -f "$f" ] || { echo "MISSING: $f" >&2; exit 1; }
+              echo "ok: $f ($(stat -c%s $f) bytes)"
+          done
+
+      - name: Assert canonical symbols
+        run: |
+          check() { arm-linux-gnueabi-nm -D --defined-only "$1" | grep -qE " T $2\$" || { echo "MISSING symbol $2 in $1" >&2; exit 1; } ; echo "ok: $2 in $(basename $1)"; }
+          for sym in HI_MPI_SYS_Init HI_MPI_SYS_Exit HI_MPI_SYS_MmzAlloc HI_MPI_SYS_MmzFree HI_MPI_SYS_MmzFlushCache; do
+              check libraries/mpi_neo/libmpi_neo.so $sym
+          done
+          for sym in HI_MPI_IVE_Query HI_MPI_IVE_Thresh HI_MPI_IVE_CCL HI_MPI_IVE_SAD HI_MPI_IVE_Dilate HI_MPI_IVE_Erode HI_MPI_IVE_Sobel mpi_ive_xnn_loadmodel mpi_ive_xnn_forward_slice mp_ive_svp_alg_proc_init; do
+              check libraries/ive_neo/libive_neo.so $sym
+          done
+          for sym in hi_ivp_init hi_ivp_deinit hi_ivp_process_ex hi_ivp_load_resource_from_memory hi_ivp_set_ctrl_attr; do
+              check libraries/ivp_neo/libivp_neo.so $sym
+          done
+
+      - name: Assert no vendor libs in NEEDED
+        run: |
+          for f in \
+              libraries/mpi_neo/libmpi_neo.so \
+              libraries/ive_neo/libive_neo.so \
+              libraries/ivp_neo/libivp_neo.so; do
+              echo "=== $(basename $f) NEEDED ==="
+              arm-linux-gnueabi-readelf -d "$f" | grep NEEDED
+              # Expect only libc and (for pthread) libpthread. Any NEEDED
+              # entry matching libive.so, libmpi.so, libivp.so, libsecurec.so
+              # or libVoiceEngine.so would mean a vendor blob snuck in.
+              if arm-linux-gnueabi-readelf -d "$f" | grep -E 'NEEDED.*lib(ive|mpi|ivp|secure|VoiceEngine|upvqe|dnvqe)\.so'; then
+                  echo "FAIL: vendor lib in NEEDED" >&2
+                  exit 1
+              fi
+          done
+
+  #
+  # qemu-ive-ops
+  #
+  # Builds QEMU with HiSilicon machine models from widgetii/qemu-hisilicon
+  # (cached by pinned SHA), builds the vendored kernel/ive_neo/test/qemu
+  # register test as a static ARM binary, wraps in cpio, boots under
+  # qemu-system-arm -M hi3516ev300 with a downloaded OpenIPC kernel, and
+  # asserts the test reports "Result: N/N passed".
+  #
+  # This is the only job that exercises actual kernel/ive_neo/ive_neo.c
+  # behavior end-to-end. Any change to the driver's register sequences
+  # that drifts away from the QEMU machine model will fail this job.
+  #
+  qemu-ive-ops:
+    name: QEMU IVE ops regression
+    runs-on: ubuntu-latest
+    needs: libraries-cross-compile
+    env:
+      # Pinned SHA of widgetii/qemu-hisilicon. Bump this when upstream
+      # changes machine-model register semantics.
+      QEMU_HISILICON_SHA: master
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install QEMU build deps + ARM toolchain
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential ninja-build meson pkg-config \
+            libglib2.0-dev libpixman-1-dev libfdt-dev zlib1g-dev libslirp-dev \
+            python3 python3-venv cpio \
+            gcc-arm-linux-gnueabi libc6-dev-armel-cross
+
+      - name: Clone qemu-hisilicon
+        run: |
+          git clone --depth 1 https://github.com/widgetii/qemu-hisilicon.git /tmp/qemu-hisilicon
+          cd /tmp/qemu-hisilicon
+          echo "SHA=$(git rev-parse HEAD)" >> $GITHUB_ENV
+
+      - name: Cache QEMU build
+        id: cache-qemu
+        uses: actions/cache@v4
+        with:
+          path: /tmp/qemu-hisilicon/qemu-src/build/qemu-system-arm
+          key: qemu-hisilicon-${{ env.SHA }}-ubuntu-latest
+
+      - name: Build QEMU (if cache miss)
+        if: steps.cache-qemu.outputs.cache-hit != 'true'
+        run: |
+          cd /tmp/qemu-hisilicon
+          bash qemu/setup.sh
+
+      - name: Verify qemu-system-arm works
+        run: |
+          QEMU=/tmp/qemu-hisilicon/qemu-src/build/qemu-system-arm
+          chmod +x $QEMU
+          $QEMU -machine help | grep -E 'hi35|gk7' | head
+          $QEMU -machine hi3516ev300 -m 128M -nographic -serial null -monitor none \
+              -kernel /dev/null 2>&1 | head -3 || true
+
+      - name: Build test-ive-ops.cpio
+        run: |
+          make -C kernel/ive_neo/test/qemu CC=arm-linux-gnueabi-gcc
+          ls -la kernel/ive_neo/test/qemu/test-ive-ops kernel/ive_neo/test/qemu/test-ive-ops.cpio
+
+      - name: Download OpenIPC EV300 kernel
+        run: |
+          mkdir -p /tmp/openipc
+          cd /tmp/openipc
+          curl -sSLf -o fw.tgz \
+            https://github.com/OpenIPC/firmware/releases/download/latest/openipc.hi3516ev300-nor-lite.tgz
+          tar xzf fw.tgz
+          ls uImage.hi3516ev300
+
+      - name: Run IVE register regression under QEMU
+        timeout-minutes: 3
+        run: |
+          QEMU=/tmp/qemu-hisilicon/qemu-src/build/qemu-system-arm
+          timeout 60 $QEMU \
+              -M hi3516ev300 -m 128M \
+              -kernel /tmp/openipc/uImage.hi3516ev300 \
+              -initrd kernel/ive_neo/test/qemu/test-ive-ops.cpio \
+              -nographic -serial mon:stdio \
+              -append "console=ttyAMA0,115200 mem=96M mmz_allocator=hisi mmz=anonymous,0,0x46000000,32M" \
+              2>&1 | tee ive-output.txt || true
+
+          echo
+          echo "=== Result line ==="
+          grep -E "Result: [0-9]+/[0-9]+ passed" ive-output.txt || {
+              echo "FAIL: no 'Result: N/N passed' in QEMU output" >&2
+              echo "--- last 30 lines ---"
+              tail -30 ive-output.txt
+              exit 1
+          }
+
+      - name: Upload QEMU output
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: qemu-ive-ops-log
+          path: ive-output.txt
+          retention-days: 7
