@@ -8,16 +8,17 @@ Replaces the proprietary SDK that HiSilicon ships to camera manufacturers. Used 
 
 | SoC family | Chip IDs | CHIPARCH | SDK_CODE |
 |------------|----------|----------|----------|
+| HiSilicon hi3516cv200 | hi3516cv200, hi3518ev200, hi3518ev201 | `hi3516cv200` | `0x3518E200` |
 | HiSilicon hi3516ev200 | hi3516ev200, hi3516ev300, hi3518ev300, hi3516dv200 | `hi3516ev200` | `0x3516E200` |
 | Goke gk7205v200 | gk7205v200, gk7205v300, gk7202v300, gk7605v100 | `gk7205v200` | `0x7205200` |
 
-HiSilicon and Goke chips are pin-compatible — the same source code compiles for both via the `CHIPARCH` flag. A [conversion script](scripts/hi2gk.sh) can translate between the two SDK naming conventions.
+The hi3516ev200 and gk7205v200 chips are pin-compatible — the same source code compiles for both via the `CHIPARCH` flag. A [conversion script](scripts/hi2gk.sh) can translate between the two SDK naming conventions. The hi3516cv200 (V2 generation, ARM926EJ-S) uses a separate SDK layout with standalone MMZ and himedia modules.
 
 ## Supported kernels
 
 | Kernel | Status | Notes |
 |--------|--------|-------|
-| 4.9.37 (vendor) | Production | Used by `hi3516ev300_lite`, `gk7205v200_lite` |
+| 4.9.37 (vendor) | Production | Used by `hi3516cv200_lite`, `hi3516ev300_lite`, `gk7205v200_lite` |
 | 6.6 LTS | Production | Used by `hi3516ev300_neo` |
 | 6.18 LTS | Tested | CI-verified |
 | 7.0-rc6 (mainline) | Production | Used by `hi3516ev300_neo` |
@@ -183,7 +184,9 @@ All modules are prefixed `open_` to distinguish from vendor SDK modules:
 | `open_pwm` | PWM (DC-iris lens control) |
 | `open_wdt` | Watchdog timer |
 
-Load order matters — `open_osal` → `open_sys_config` → `open_base` → `open_sys` → everything else. See `/usr/bin/load_hisilicon` on the camera for the full sequence.
+Load order matters — see `/usr/bin/load_hisilicon` on the camera for the full sequence:
+- **V4/V3.5**: `open_osal` → `open_sys_config` → `open_base` → `open_sys` → everything else
+- **V2 (hi3516cv200)**: `open_mmz` → `open_himedia` → `open_sys_config` → `open_base` → `open_sys` → everything else
 
 Both `open_ive.ko` and `open_ive_neo.ko` are produced on every build (they live in sibling `kernel/ive/` and `kernel/ive_neo/` dirs). A rootfs should `insmod` **either** the vendor or the clean-room variant, not both — they export the same public symbol set (`ive_std_mod_init`, `drv_ive_*`, `g_ive_regs`, …). See issue [#33](../../issues/33) for which SoCs `ive_neo` has been validated on.
 
@@ -215,8 +218,9 @@ The [`kernel/compat/kernel_compat.h`](kernel/compat/kernel_compat.h) header prov
 ## CI
 
 Every push and PR is tested against:
-- hi3516ev200 + kernel 4.9 (HiSilicon)
-- gk7205v200 + kernel 4.9 (Goke)
+- hi3516cv200 + kernel 4.9 (HiSilicon V2)
+- hi3516ev200 + kernel 4.9 (HiSilicon V4)
+- gk7205v200 + kernel 4.9 (Goke V4)
 - hi3516ev300 + kernel 6.6, 6.18, 7.0 (mainline)
 
 Plus three checks for the `libraries/*_neo` userspace stack:

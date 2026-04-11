@@ -7,9 +7,11 @@ endif
 ccflags-y := -D$(CHIPARCH) -DRELEASE -DUSER_BIT_32 -DKERNEL_BIT_32 -Wno-date-time -D_GNU_SOURCE
 ccflags-y += -include $(src)/compat/kernel_compat.h
 
-# hi3516cv500 uses its own SDK header/source layout - completely separate build
+# hi3516cv500 and hi3516cv200 use their own SDK header/source layout
 ifeq ($(CHIPARCH),hi3516cv500)
     include $(src)/hi3516cv500.kbuild
+else ifeq ($(CHIPARCH),hi3516cv200)
+    include $(src)/hi3516cv200.kbuild
 else
 
 ccflags-y += -I$(src)/../include
@@ -73,4 +75,4 @@ endif
     # +fb
 endif
 
-endif # hi3516cv500 else
+endif # hi3516cv500/hi3516cv200 else
