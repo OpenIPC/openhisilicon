@@ -32,6 +32,8 @@ ccflags-y += -I$(src)/include/hi3516cv200
 ccflags-y += -I$(src)/himedia/hi3516cv200
 ccflags-y += -I$(src)/isp/arch/hi3516cv200/firmware/drv
 ccflags-y += -I$(src)/isp/arch/hi3516cv200/include
+ccflags-y += -I$(src)/isp/arch/hi3516cv200/firmware/vreg
+ccflags-y += -I$(src)/isp/arch/hi3516cv200/firmware/vreg/arch/hi3518e
 
 # --- MMZ module (source, STANDALONE) ---
 $(PREFIX)mmz-objs := \
