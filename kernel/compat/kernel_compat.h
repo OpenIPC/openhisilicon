@@ -175,7 +175,7 @@
  */
 #if LINUX_VERSION_CODE >= KERNEL_VERSION(5, 16, 0)
 #include <linux/dma-map-ops.h>
-#else
+#elif LINUX_VERSION_CODE >= KERNEL_VERSION(3, 5, 0)
 #include <linux/dma-contiguous.h>
 #endif
 
