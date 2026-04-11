@@ -1,0 +1,168 @@
+# hi3516av100 SoC family build configuration
+#
+# Uses Hi3516A SDK V1.0.8.0 layout.
+# V2A generation (Cortex-A7 / ARMv7) — standalone MMZ + himedia (no OSAL).
+# Module load order: mmz → himedia → base → sys → everything else
+#
+# Source modules (GPL):
+#   mmz/hi3516av100/         - media memory zone allocator
+#   himedia/hi3516av100/     - media device registration
+#   mipi_rx/hi3516av100/     - MIPI CSI-2 receiver
+#   wdt/hi3516av100/         - watchdog
+#   ir/hi3516av100/          - infrared receiver
+#   hiuser/hi3516av100/      - user-space device interface
+#   rtc/hi3516av100/         - real-time clock
+#   sensor_i2c/hi3516av100/  - I2C sensor bus
+#   sensor_spi/hi3516av100/  - SPI sensor bus
+#   pwm/hi3516av100/         - PWM controller
+#   piris/hi3516av100/       - DC iris motor
+#   cipher/hi3516av100/      - cipher (not wired, needs porting)
+#
+# Blob modules (pre-built .o from vendor .ko, init wrappers in init/hi3516av100/):
+#   obj/hi3516av100/         - pre-built .o blobs
+#   init/hi3516av100/        - init/exit wrapper sources
+
+# Cipher includes first (cipher's hi_type.h has HI_HANDLE that SDK hi_type.h lacks)
+ccflags-y += -I$(src)/cipher/hi3516av100/include
+
+# SDK include paths
+ccflags-y += -I$(src)/include/hi3516av100
+ccflags-y += -I$(src)/himedia/hi3516av100
+ccflags-y += -I$(src)/isp/arch/hi3516av100/firmware/drv
+ccflags-y += -I$(src)/isp/arch/hi3516av100/include
+ccflags-y += -I$(src)/isp/arch/hi3516av100/firmware/vreg
+ccflags-y += -I$(src)/isp/arch/hi3516av100/firmware/vreg/arch/hi3516a
+
+# --- MMZ module (source, STANDALONE) ---
+$(PREFIX)mmz-objs := \
+	mmz/hi3516av100/media-mem.o \
+	mmz/hi3516av100/mmz-userdev.o
+obj-m += $(PREFIX)mmz.o
+
+# --- himedia module (source, STANDALONE) ---
+$(PREFIX)himedia-objs := \
+	himedia/hi3516av100/himedia.o \
+	himedia/hi3516av100/base.o
+obj-m += $(PREFIX)himedia.o
+
+# --- Blob modules (pre-built .o + init wrapper) ---
+AV100_BLOB_DIR = obj/hi3516av100
+AV100_INIT_DIR = init/hi3516av100
+
+$(PREFIX)base-objs   := $(AV100_BLOB_DIR)/hi3516a_base.o   $(AV100_INIT_DIR)/base_init.o
+$(PREFIX)sys-objs    := $(AV100_BLOB_DIR)/hi3516a_sys.o     $(AV100_INIT_DIR)/sys_init.o
+$(PREFIX)vi-objs     := $(AV100_BLOB_DIR)/hi3516a_viu.o     $(AV100_INIT_DIR)/viu_init.o
+$(PREFIX)vpss-objs   := $(AV100_BLOB_DIR)/hi3516a_vpss.o    $(AV100_INIT_DIR)/vpss_init.o
+$(PREFIX)venc-objs   := $(AV100_BLOB_DIR)/hi3516a_venc.o    $(AV100_INIT_DIR)/venc_init.o
+$(PREFIX)h264e-objs  := $(AV100_BLOB_DIR)/hi3516a_h264e.o   $(AV100_INIT_DIR)/h264e_init.o
+$(PREFIX)h265e-objs  := $(AV100_BLOB_DIR)/hi3516a_h265e.o   $(AV100_INIT_DIR)/h265e_init.o
+$(PREFIX)jpege-objs  := $(AV100_BLOB_DIR)/hi3516a_jpege.o   $(AV100_INIT_DIR)/jpege_init.o
+$(PREFIX)rc-objs     := $(AV100_BLOB_DIR)/hi3516a_rc.o      $(AV100_INIT_DIR)/rc_init.o
+$(PREFIX)chnl-objs   := $(AV100_BLOB_DIR)/hi3516a_chnl.o    $(AV100_INIT_DIR)/chnl_init.o
+$(PREFIX)rgn-objs    := $(AV100_BLOB_DIR)/hi3516a_region.o  $(AV100_INIT_DIR)/region_init.o
+$(PREFIX)vgs-objs    := $(AV100_BLOB_DIR)/hi3516a_vgs.o     $(AV100_INIT_DIR)/vgs_init.o
+$(PREFIX)ive-objs    := $(AV100_BLOB_DIR)/hi3516a_ive.o     $(AV100_INIT_DIR)/ive_init.o
+$(PREFIX)vda-objs    := $(AV100_BLOB_DIR)/hi3516a_vda.o     $(AV100_INIT_DIR)/vda_init.o
+$(PREFIX)pm-objs     := $(AV100_BLOB_DIR)/hi3516a_pm.o      $(AV100_INIT_DIR)/pm_init.o
+$(PREFIX)isp-objs    := $(AV100_BLOB_DIR)/hi3516a_isp.o     $(AV100_INIT_DIR)/isp_init.o
+$(PREFIX)aio-objs    := $(AV100_BLOB_DIR)/hi3516a_aio.o     $(AV100_INIT_DIR)/aio_init.o
+$(PREFIX)ai-objs     := $(AV100_BLOB_DIR)/hi3516a_ai.o      $(AV100_INIT_DIR)/ai_init.o
+$(PREFIX)ao-objs     := $(AV100_BLOB_DIR)/hi3516a_ao.o      $(AV100_INIT_DIR)/ao_init.o
+$(PREFIX)aenc-objs   := $(AV100_BLOB_DIR)/hi3516a_aenc.o    $(AV100_INIT_DIR)/aenc_init.o
+$(PREFIX)adec-objs   := $(AV100_BLOB_DIR)/hi3516a_adec.o    $(AV100_INIT_DIR)/adec_init.o
+$(PREFIX)acodec-objs := $(AV100_BLOB_DIR)/acodec.o          $(AV100_INIT_DIR)/acodec_init.o
+
+obj-m += $(PREFIX)base.o
+obj-m += $(PREFIX)sys.o
+obj-m += $(PREFIX)vi.o
+obj-m += $(PREFIX)vpss.o
+obj-m += $(PREFIX)venc.o
+obj-m += $(PREFIX)h264e.o
+obj-m += $(PREFIX)h265e.o
+obj-m += $(PREFIX)jpege.o
+obj-m += $(PREFIX)rc.o
+obj-m += $(PREFIX)chnl.o
+obj-m += $(PREFIX)rgn.o
+obj-m += $(PREFIX)vgs.o
+obj-m += $(PREFIX)ive.o
+obj-m += $(PREFIX)vda.o
+obj-m += $(PREFIX)pm.o
+ifndef DISABLE_ISP
+    obj-m += $(PREFIX)isp.o
+endif
+ifndef DISABLE_TDE
+    $(PREFIX)tde-objs := $(AV100_BLOB_DIR)/hi3516a_tde.o $(AV100_INIT_DIR)/tde_init.o
+    obj-m += $(PREFIX)tde.o
+endif
+obj-m += $(PREFIX)aio.o
+obj-m += $(PREFIX)ai.o
+obj-m += $(PREFIX)ao.o
+obj-m += $(PREFIX)aenc.o
+obj-m += $(PREFIX)adec.o
+obj-m += $(PREFIX)acodec.o
+
+# --- VOU module (video output, blob) ---
+$(PREFIX)vo-objs := $(AV100_BLOB_DIR)/hi3516a_vou.o $(AV100_INIT_DIR)/vou_init.o
+ifndef DISABLE_VO
+    obj-m += $(PREFIX)vo.o
+endif
+
+# --- HIFB module (framebuffer, blob) ---
+$(PREFIX)hifb-objs := $(AV100_BLOB_DIR)/hifb.o $(AV100_INIT_DIR)/hifb_init.o
+# obj-m += $(PREFIX)hifb.o
+
+# --- Watchdog module (source driver) ---
+$(PREFIX)wdt-objs := wdt/hi3516av100/hi_wdt.o
+obj-m += $(PREFIX)wdt.o
+
+# --- MIPI RX module (source driver) ---
+AV100_MIPI_DIR = mipi_rx/hi3516av100
+$(PREFIX)mipi_rx-objs := \
+	$(AV100_MIPI_DIR)/mipi.o \
+	$(AV100_MIPI_DIR)/mipi_hal.o
+ccflags-y += -I$(src)/mipi_rx/hi3516av100
+obj-m += $(PREFIX)mipi_rx.o
+
+# --- hi_user module (source driver) ---
+$(PREFIX)hi_user-objs := hiuser/hi3516av100/hi_user.o
+obj-m += $(PREFIX)hi_user.o
+
+# --- IR module (source driver) ---
+$(PREFIX)ir-objs := ir/hi3516av100/hiir.o
+obj-m += $(PREFIX)ir.o
+
+# --- Sensor I2C module (source driver) ---
+$(PREFIX)sensor_i2c-objs := sensor_i2c/hi3516av100/sensor_i2c.o
+obj-m += $(PREFIX)sensor_i2c.o
+
+# --- Sensor SPI module (source driver) ---
+$(PREFIX)sensor_spi-objs := sensor_spi/hi3516av100/sensor_spi.o
+obj-m += $(PREFIX)sensor_spi.o
+
+# --- PWM module (source driver) ---
+$(PREFIX)pwm-objs := pwm/hi3516av100/pwm.o
+ccflags-y += -I$(src)/pwm/hi3516av100
+obj-m += $(PREFIX)pwm.o
+
+# --- Piris module (source driver) ---
+$(PREFIX)piris-objs := piris/hi3516av100/piris.o
+ccflags-y += -I$(src)/piris/hi3516av100
+obj-m += $(PREFIX)piris.o
+
+# --- RTC module (source driver) ---
+# --- RTC module (blob — source in rtc/hi3516av100/ for reference) ---
+$(PREFIX)rtc-objs := $(AV100_BLOB_DIR)/hi_rtc.o $(AV100_INIT_DIR)/rtc_init.o
+obj-m += $(PREFIX)rtc.o
+
+# --- Cipher module (source driver) ---
+AV100_CIPHER = cipher/hi3516av100/src
+$(PREFIX)cipher-objs := \
+	$(AV100_CIPHER)/cipher_intf.o \
+	$(AV100_CIPHER)/drv_cipher.o \
+	$(AV100_CIPHER)/hal_cipher.o \
+	$(AV100_CIPHER)/hi_unf_cipher.o
+ccflags-y += -I$(src)/cipher/hi3516av100/include
+ccflags-y += -I$(src)/cipher/hi3516av100/src
+ccflags-y += -I$(src)/mmz/hi3516av100
+# Cipher needs porting from kernel 3.4 to 4.9
+# obj-m += $(PREFIX)cipher.o

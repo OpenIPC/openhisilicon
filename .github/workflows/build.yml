@@ -29,6 +29,8 @@ jobs:
             board: hi3516cv300_lite
           - platform: hi3516cv100
             board: hi3516cv100_lite
+          - platform: hi3516av100
+            board: hi3516av100_lite
           - platform: hi3516ev300
             board: hi3516ev300_neo
             kernel: "6.6"
@@ -538,6 +540,88 @@ jobs:
         with:
           name: qemu-cv100-boot-log
           path: cv100-output.txt
+          retention-days: 7
+
+  #
+  # qemu-av100-boot
+  #
+  # Boots OpenIPC hi3516av100 firmware under qemu-system-arm -M hi3516av100
+  # and verifies the kernel reaches userspace. V2A generation, 4.9.37 kernel.
+  #
+  qemu-av100-boot:
+    name: QEMU AV100 boot smoke-test
+    runs-on: ubuntu-latest
+    env:
+      QEMU_HISILICON_SHA: master
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install QEMU build deps
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential ninja-build meson pkg-config \
+            libglib2.0-dev libpixman-1-dev libfdt-dev zlib1g-dev libslirp-dev \
+            python3 python3-venv
+
+      - name: Clone qemu-hisilicon
+        run: |
+          git clone --depth 1 https://github.com/widgetii/qemu-hisilicon.git /tmp/qemu-hisilicon
+          cd /tmp/qemu-hisilicon
+          echo "SHA=$(git rev-parse HEAD)" >> $GITHUB_ENV
+
+      - name: Cache QEMU build
+        id: cache-qemu
+        uses: actions/cache@v4
+        with:
+          path: /tmp/qemu-hisilicon/qemu-src/build/qemu-system-arm
+          key: qemu-hisilicon-${{ env.SHA }}-ubuntu-latest
+
+      - name: Build QEMU (if cache miss)
+        if: steps.cache-qemu.outputs.cache-hit != 'true'
+        run: |
+          cd /tmp/qemu-hisilicon
+          bash qemu/setup.sh
+
+      - name: Download OpenIPC AV100 firmware
+        run: |
+          mkdir -p /tmp/openipc
+          cd /tmp/openipc
+          curl -sSLf -o fw.tgz \
+            https://github.com/OpenIPC/firmware/releases/download/latest/openipc.hi3516av100-nor-lite.tgz
+          tar xzf fw.tgz
+          ls uImage.hi3516av100
+
+      - name: Boot AV100 under QEMU
+        timeout-minutes: 3
+        run: |
+          QEMU=/tmp/qemu-hisilicon/qemu-src/build/qemu-system-arm
+          chmod +x $QEMU
+          timeout 90 $QEMU \
+              -M hi3516av100 -m 256M \
+              -kernel /tmp/openipc/uImage.hi3516av100 \
+              -initrd /tmp/openipc/rootfs.squashfs.hi3516av100 \
+              -nographic -serial mon:stdio \
+              -append "console=ttyAMA0,115200 mem=256M root=/dev/ram0 rootfstype=squashfs" \
+              2>&1 | tee av100-output.txt || true
+
+          echo
+          echo "=== Checking for successful boot ==="
+          if grep -qE "Starting crond: OK" av100-output.txt; then
+              echo "PASS: AV100 kernel booted to userspace"
+          else
+              echo "--- last 30 lines ---"
+              tail -30 av100-output.txt
+              echo "FAIL: no 'Starting crond: OK' in QEMU output" >&2
+              exit 1
+          fi
+
+      - name: Upload QEMU output
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: qemu-av100-boot-log
+          path: av100-output.txt
           retention-days: 7
 
   #
