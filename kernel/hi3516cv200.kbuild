@@ -1,0 +1,181 @@
+# hi3516cv200 SoC family build configuration
+#
+# Uses Hi3518E SDK V1.0.5.0 layout.
+# V2 generation (ARM926EJ-S / ARMv5TE) — different module architecture from V4/V3.5:
+#   - MMZ and himedia are STANDALONE modules (not part of OSAL)
+#   - No OSAL layer
+#   - Module load order: mmz → himedia → sys_config → base → sys → everything else
+#
+# Source modules (GPL):
+#   mmz/hi3516cv200/         - media memory zone allocator
+#   himedia/hi3516cv200/     - media device registration
+#   sys_config/hi3516cv200/  - pin mux / clock config
+#   mipi_rx/hi3516cv200/     - MIPI CSI-2 receiver
+#   wdt/hi3516cv200/         - watchdog
+#   hiuser/hi3516cv200/      - user-space device interface
+#   ir/hi3516cv200/          - infrared receiver
+#   isp/arch/hi3516cv200/    - ISP driver (full source)
+#   sensor_i2c/hi3516cv200/  - I2C sensor bus
+#   sensor_spi/hi3516cv200/  - SPI sensor bus
+#   pwm/hi3516cv200/         - PWM controller
+#   piris/hi3516cv200/       - DC iris motor
+#
+# Blob modules (pre-built .o from vendor .ko, init wrappers in init/hi3516cv200/):
+#   obj/hi3516cv200/         - pre-built .o blobs
+#   init/hi3516cv200/        - init/exit wrapper sources
+
+# Cipher includes first (cipher's hi_type.h has HI_HANDLE that SDK hi_type.h lacks)
+ccflags-y += -I$(src)/cipher/hi3516cv200/include
+
+# SDK include paths
+ccflags-y += -I$(src)/include/hi3516cv200
+ccflags-y += -I$(src)/himedia/hi3516cv200
+ccflags-y += -I$(src)/isp/arch/hi3516cv200/firmware/drv
+ccflags-y += -I$(src)/isp/arch/hi3516cv200/include
+ccflags-y += -I$(src)/isp/arch/hi3516cv200/firmware/vreg
+ccflags-y += -I$(src)/isp/arch/hi3516cv200/firmware/vreg/arch/hi3518e
+
+# --- MMZ module (source, STANDALONE) ---
+$(PREFIX)mmz-objs := \
+	mmz/hi3516cv200/media-mem.o \
+	mmz/hi3516cv200/mmz-userdev.o
+obj-m += $(PREFIX)mmz.o
+
+# --- himedia module (source, STANDALONE) ---
+$(PREFIX)himedia-objs := \
+	himedia/hi3516cv200/himedia.o \
+	himedia/hi3516cv200/base.o
+obj-m += $(PREFIX)himedia.o
+
+# --- sys_config module (source) ---
+$(PREFIX)sys_config-objs := sys_config/hi3516cv200/sys_config.o
+obj-m += $(PREFIX)sys_config.o
+
+# --- Blob modules (pre-built .o + init wrapper) ---
+CV200_BLOB_DIR = obj/hi3516cv200
+CV200_INIT_DIR = init/hi3516cv200
+
+$(PREFIX)base-objs   := $(CV200_BLOB_DIR)/hi3518e_base.o   $(CV200_INIT_DIR)/base_init.o
+$(PREFIX)sys-objs    := $(CV200_BLOB_DIR)/hi3518e_sys.o     $(CV200_INIT_DIR)/sys_init.o
+$(PREFIX)vi-objs     := $(CV200_BLOB_DIR)/hi3518e_viu.o     $(CV200_INIT_DIR)/viu_init.o
+$(PREFIX)vpss-objs   := $(CV200_BLOB_DIR)/hi3518e_vpss.o    $(CV200_INIT_DIR)/vpss_init.o
+$(PREFIX)venc-objs   := $(CV200_BLOB_DIR)/hi3518e_venc.o    $(CV200_INIT_DIR)/venc_init.o
+$(PREFIX)h264e-objs  := $(CV200_BLOB_DIR)/hi3518e_h264e.o   $(CV200_INIT_DIR)/h264e_init.o
+$(PREFIX)jpege-objs  := $(CV200_BLOB_DIR)/hi3518e_jpege.o   $(CV200_INIT_DIR)/jpege_init.o
+$(PREFIX)rc-objs     := $(CV200_BLOB_DIR)/hi3518e_rc.o      $(CV200_INIT_DIR)/rc_init.o
+$(PREFIX)chnl-objs   := $(CV200_BLOB_DIR)/hi3518e_chnl.o    $(CV200_INIT_DIR)/chnl_init.o
+$(PREFIX)rgn-objs    := $(CV200_BLOB_DIR)/hi3518e_region.o  $(CV200_INIT_DIR)/region_init.o
+$(PREFIX)vgs-objs    := $(CV200_BLOB_DIR)/hi3518e_vgs.o     $(CV200_INIT_DIR)/vgs_init.o
+$(PREFIX)ive-objs    := $(CV200_BLOB_DIR)/hi3518e_ive.o     $(CV200_INIT_DIR)/ive_init.o
+$(PREFIX)aio-objs    := $(CV200_BLOB_DIR)/hi3518e_aio.o     $(CV200_INIT_DIR)/aio_init.o
+$(PREFIX)ai-objs     := $(CV200_BLOB_DIR)/hi3518e_ai.o      $(CV200_INIT_DIR)/ai_init.o
+$(PREFIX)ao-objs     := $(CV200_BLOB_DIR)/hi3518e_ao.o      $(CV200_INIT_DIR)/ao_init.o
+$(PREFIX)aenc-objs   := $(CV200_BLOB_DIR)/hi3518e_aenc.o    $(CV200_INIT_DIR)/aenc_init.o
+$(PREFIX)adec-objs   := $(CV200_BLOB_DIR)/hi3518e_adec.o    $(CV200_INIT_DIR)/adec_init.o
+$(PREFIX)acodec-objs := $(CV200_BLOB_DIR)/acodec.o          $(CV200_INIT_DIR)/acodec_init.o
+
+obj-m += $(PREFIX)base.o
+obj-m += $(PREFIX)sys.o
+obj-m += $(PREFIX)vi.o
+obj-m += $(PREFIX)vpss.o
+obj-m += $(PREFIX)venc.o
+obj-m += $(PREFIX)h264e.o
+obj-m += $(PREFIX)jpege.o
+obj-m += $(PREFIX)rc.o
+obj-m += $(PREFIX)chnl.o
+obj-m += $(PREFIX)rgn.o
+obj-m += $(PREFIX)vgs.o
+obj-m += $(PREFIX)ive.o
+ifndef DISABLE_TDE
+    $(PREFIX)tde-objs := $(CV200_BLOB_DIR)/hi3518e_tde.o $(CV200_INIT_DIR)/tde_init.o
+    obj-m += $(PREFIX)tde.o
+endif
+obj-m += $(PREFIX)aio.o
+obj-m += $(PREFIX)ai.o
+obj-m += $(PREFIX)ao.o
+obj-m += $(PREFIX)aenc.o
+obj-m += $(PREFIX)adec.o
+obj-m += $(PREFIX)acodec.o
+
+# --- VOU module (video output, blob) ---
+$(PREFIX)vo-objs := $(CV200_BLOB_DIR)/hi3518e_vou.o $(CV200_INIT_DIR)/vou_init.o
+ifndef DISABLE_VO
+    obj-m += $(PREFIX)vo.o
+endif
+
+# --- HIFB module (framebuffer, blob) ---
+$(PREFIX)hifb-objs := $(CV200_BLOB_DIR)/hifb.o $(CV200_INIT_DIR)/hifb_init.o
+# obj-m += $(PREFIX)hifb.o
+
+# --- Watchdog module (source driver) ---
+$(PREFIX)wdt-objs := wdt/hi3516cv200/hi_wdt.o
+obj-m += $(PREFIX)wdt.o
+
+# --- MIPI RX module (source driver) ---
+CV200_MIPI_DIR = mipi_rx/hi3516cv200
+$(PREFIX)mipi_rx-objs := \
+	$(CV200_MIPI_DIR)/mipi.o \
+	$(CV200_MIPI_DIR)/mipi_hal.o
+ccflags-y += -I$(src)/mipi_rx/hi3516cv200
+obj-m += $(PREFIX)mipi_rx.o
+
+# --- hi_user module (source driver) ---
+$(PREFIX)hi_user-objs := hiuser/hi3516cv200/hi_user.o
+obj-m += $(PREFIX)hi_user.o
+
+# --- IR module (source driver) ---
+$(PREFIX)ir-objs := ir/hi3516cv200/hiir.o
+obj-m += $(PREFIX)ir.o
+
+# --- Sensor I2C module (source driver) ---
+$(PREFIX)sensor_i2c-objs := sensor_i2c/hi3516cv200/sensor_i2c.o
+obj-m += $(PREFIX)sensor_i2c.o
+
+# --- Sensor SPI module (source driver) ---
+$(PREFIX)sensor_spi-objs := sensor_spi/hi3516cv200/sensor_spi.o
+obj-m += $(PREFIX)sensor_spi.o
+
+# --- PWM module (source driver) ---
+$(PREFIX)pwm-objs := pwm/hi3516cv200/pwm.o
+ccflags-y += -I$(src)/pwm/hi3516cv200
+obj-m += $(PREFIX)pwm.o
+
+# --- Piris module (source driver) ---
+$(PREFIX)piris-objs := piris/hi3516cv200/piris.o
+ccflags-y += -I$(src)/piris/hi3516cv200
+obj-m += $(PREFIX)piris.o
+
+# --- RTC module (source driver) ---
+$(PREFIX)rtc-objs := rtc/hi3516cv200/hi_rtc.o
+ccflags-y += -I$(src)/rtc/hi3516cv200
+obj-m += $(PREFIX)rtc.o
+
+# --- Cipher module (source driver) ---
+CV200_CIPHER = cipher/hi3516cv200/src
+$(PREFIX)cipher-objs := \
+	$(CV200_CIPHER)/drv/drv_cipher_intf.o \
+	$(CV200_CIPHER)/drv/cipher/drv_cipher.o \
+	$(CV200_CIPHER)/drv/cipher/hal_cipher.o \
+	$(CV200_CIPHER)/drv/efuse/drv_efuse.o \
+	$(CV200_CIPHER)/drv/efuse/hal_efuse.o \
+	$(CV200_CIPHER)/drv/hash/drv_hash_intf.o
+ccflags-y += -I$(src)/cipher/hi3516cv200/include
+ccflags-y += -I$(src)/cipher/hi3516cv200/src/drv
+ccflags-y += -I$(src)/cipher/hi3516cv200/src/drv/cipher
+ccflags-y += -I$(src)/cipher/hi3516cv200/src/drv/efuse
+ccflags-y += -I$(src)/cipher/hi3516cv200/src/drv/hash
+ccflags-y += -I$(src)/cipher/hi3516cv200/src/include
+ccflags-y += -I$(src)/mmz/hi3516cv200
+# Cipher needs porting from kernel 3.4 to 4.9 (asm/system.h removal, etc.)
+# obj-m += $(PREFIX)cipher.o
+
+# --- ISP module (full source) ---
+CV200_ISP_DIR = isp/arch/hi3516cv200/firmware/drv
+$(PREFIX)isp-objs := \
+	$(CV200_ISP_DIR)/isp.o \
+	$(CV200_ISP_DIR)/isp_st.o \
+	$(CV200_ISP_DIR)/mkp_acm.o \
+	$(CV200_ISP_DIR)/isp_acm_lut.o
+ifndef DISABLE_ISP
+    obj-m += $(PREFIX)isp.o
+endif
