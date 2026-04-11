@@ -1,6 +1,8 @@
 LIB_NAME := libsns_ov2718
 
-override CFLAGS += -fPIC -I$(CURDIR)/../../../../include/hi3516cv200
+override CFLAGS += -fPIC \
+	-I$(CURDIR)/../../../../kernel/include/hi3516cv200 \
+	-I$(CURDIR)/../../../../kernel/isp/arch/hi3516cv200/include
 
 SRCS := $(wildcard *.c)
 OBJS := $(SRCS:%.c=%.o)

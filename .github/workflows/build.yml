@@ -430,18 +430,19 @@ jobs:
           timeout 90 $QEMU \
               -M hi3516cv200 -m 64M \
               -kernel /tmp/openipc/uImage.hi3516cv200 \
+              -initrd /tmp/openipc/rootfs.squashfs.hi3516cv200 \
               -nographic -serial mon:stdio \
-              -append "console=ttyAMA0,115200 mem=32M" \
+              -append "console=ttyAMA0,115200 mem=64M root=/dev/ram0 rootfstype=squashfs" \
               2>&1 | tee cv200-output.txt || true
 
           echo
           echo "=== Checking for successful boot ==="
-          if grep -qE "Welcome to|login:" cv200-output.txt; then
+          if grep -qE "Starting crond: OK" cv200-output.txt; then
               echo "PASS: CV200 kernel booted to userspace"
           else
               echo "--- last 30 lines ---"
               tail -30 cv200-output.txt
-              echo "FAIL: no login prompt found in QEMU output" >&2
+              echo "FAIL: no 'Starting crond: OK' in QEMU output" >&2
               exit 1
           fi
 
