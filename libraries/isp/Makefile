@@ -41,6 +41,9 @@ else
 SRCS += $(wildcard src/main/*.c)
 endif
 
+# CV500: build all ISP algorithms (matching vendor SDK behavior)
+# EV200: optionally exclude algorithms via CONFIG_ISP_*_SUPPORT flags
+ifneq ($(CHIPARCH),hi3516cv500)
 ifneq ($(CONFIG_ISP_AF_SUPPORT), y)
      SRCS := $(filter-out arch/$(CHIPARCH)/algorithms/isp_af.c, $(SRCS))
 endif
@@ -72,6 +75,7 @@ endif
 ifneq ($(CONFIG_VI_FPN_SUPPORT), y)
      SRCS := $(filter-out arch/$(CHIPARCH)/algorithms/isp_fpn.c, $(SRCS))
 endif
+endif # !hi3516cv500
 
 OBJS := $(SRCS:%.c=%.o) $(ASM_SRCS:%.S=%.o)
 
