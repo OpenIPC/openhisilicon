@@ -11,6 +11,11 @@ ifeq ($(CHIPARCH),hi3516cv300)
     SUBDIRS := $(filter ./sensor/hi3516cv300/%,$(SUBDIRS))
 endif
 
+# CV100: build sensor drivers from SDK source
+ifeq ($(CHIPARCH),hi3516cv100)
+    SUBDIRS := $(filter ./sensor/hi3516cv100/%,$(SUBDIRS))
+endif
+
 # CV200: build sensor drivers from SDK source
 ifeq ($(CHIPARCH),hi3516cv200)
     SUBDIRS := $(filter ./sensor/hi3516cv200/%,$(SUBDIRS))
