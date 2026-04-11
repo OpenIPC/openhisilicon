@@ -1,0 +1,108 @@
+# hi3516cv100 SoC family build configuration
+#
+# V1 generation (ARM926EJ-S / ARMv5TE), standalone MMZ, no OSAL.
+# Uses Hi3518 SDK V1.0.B.0 layout.
+# Module load order: mmz → base → sys → everything else
+#
+# Source modules (GPL):
+#   mmz/hi3516cv100/     - media memory zone allocator (standalone)
+#   wdt/hi3516cv100/     - watchdog
+#   ir/hi3516cv100/      - infrared receiver
+#   hiuser/hi3516cv100/  - user-space device interface
+#   hidmac/hi3516cv100/  - DMA controller
+#   rtc/hi3516cv100/     - real-time clock
+#   pwm/hi3516cv100/     - PWM controller
+#   sensor_i2c/hi3516cv100/ - I2C sensor bus
+#   cipher/hi3516cv100/  - cipher (not wired, needs porting)
+#
+# Blob modules (pre-built .o from vendor .ko + init wrappers):
+#   obj/hi3516cv100/     - pre-built .o blobs
+#   init/hi3516cv100/    - init/exit wrapper sources
+
+# SDK include paths
+ccflags-y += -I$(src)/include/hi3516cv100
+
+CV100_BLOB_DIR = obj/hi3516cv100
+CV100_INIT_DIR = init/hi3516cv100
+
+# --- MMZ module (blob — source needs kernel 3.0→4.9 porting for mach/hardware.h) ---
+$(PREFIX)mmz-objs := $(CV100_BLOB_DIR)/mmz.o $(CV100_INIT_DIR)/mmz_init.o
+obj-m += $(PREFIX)mmz.o
+
+# --- Blob modules (pre-built .o + init wrapper) ---
+
+$(PREFIX)base-objs   := $(CV100_BLOB_DIR)/hi3518_base.o   $(CV100_INIT_DIR)/base_init.o
+$(PREFIX)sys-objs    := $(CV100_BLOB_DIR)/hi3518_sys.o     $(CV100_INIT_DIR)/sys_init.o
+$(PREFIX)vi-objs     := $(CV100_BLOB_DIR)/hi3518_viu.o     $(CV100_INIT_DIR)/viu_init.o
+$(PREFIX)vpss-objs   := $(CV100_BLOB_DIR)/hi3518_vpss.o    $(CV100_INIT_DIR)/vpss_init.o
+$(PREFIX)venc-objs   := $(CV100_BLOB_DIR)/hi3518_venc.o    $(CV100_INIT_DIR)/venc_init.o
+$(PREFIX)h264e-objs  := $(CV100_BLOB_DIR)/hi3518_h264e.o   $(CV100_INIT_DIR)/h264e_init.o
+$(PREFIX)jpege-objs  := $(CV100_BLOB_DIR)/hi3518_jpege.o   $(CV100_INIT_DIR)/jpege_init.o
+$(PREFIX)rc-objs     := $(CV100_BLOB_DIR)/hi3518_rc.o      $(CV100_INIT_DIR)/rc_init.o
+$(PREFIX)rgn-objs    := $(CV100_BLOB_DIR)/hi3518_region.o  $(CV100_INIT_DIR)/region_init.o
+$(PREFIX)vgs-objs    := $(CV100_BLOB_DIR)/hi3518_dsu.o     $(CV100_INIT_DIR)/dsu_init.o
+$(PREFIX)ive-objs    := $(CV100_BLOB_DIR)/hi3518_ive.o     $(CV100_INIT_DIR)/ive_init.o
+$(PREFIX)vda-objs    := $(CV100_BLOB_DIR)/hi3518_vda.o     $(CV100_INIT_DIR)/vda_init.o
+$(PREFIX)isp-objs    := $(CV100_BLOB_DIR)/hi3518_isp.o     $(CV100_INIT_DIR)/isp_init.o
+$(PREFIX)chnl-objs   := $(CV100_BLOB_DIR)/hi3518_chnl.o    $(CV100_INIT_DIR)/chnl_init.o
+$(PREFIX)group-objs  := $(CV100_BLOB_DIR)/hi3518_group.o   $(CV100_INIT_DIR)/group_init.o
+$(PREFIX)sio-objs    := $(CV100_BLOB_DIR)/hi3518_sio.o     $(CV100_INIT_DIR)/sio_init.o
+$(PREFIX)ai-objs     := $(CV100_BLOB_DIR)/hi3518_ai.o      $(CV100_INIT_DIR)/ai_init.o
+$(PREFIX)ao-objs     := $(CV100_BLOB_DIR)/hi3518_ao.o      $(CV100_INIT_DIR)/ao_init.o
+$(PREFIX)aenc-objs   := $(CV100_BLOB_DIR)/hi3518_aenc.o    $(CV100_INIT_DIR)/aenc_init.o
+$(PREFIX)adec-objs   := $(CV100_BLOB_DIR)/hi3518_adec.o    $(CV100_INIT_DIR)/adec_init.o
+$(PREFIX)acodec-objs := $(CV100_BLOB_DIR)/acodec.o         $(CV100_INIT_DIR)/acodec_init.o
+
+obj-m += $(PREFIX)base.o
+obj-m += $(PREFIX)sys.o
+obj-m += $(PREFIX)vi.o
+obj-m += $(PREFIX)vpss.o
+obj-m += $(PREFIX)venc.o
+obj-m += $(PREFIX)h264e.o
+obj-m += $(PREFIX)jpege.o
+obj-m += $(PREFIX)rc.o
+obj-m += $(PREFIX)rgn.o
+obj-m += $(PREFIX)vgs.o
+obj-m += $(PREFIX)ive.o
+obj-m += $(PREFIX)vda.o
+ifndef DISABLE_ISP
+    obj-m += $(PREFIX)isp.o
+endif
+obj-m += $(PREFIX)chnl.o
+obj-m += $(PREFIX)group.o
+obj-m += $(PREFIX)sio.o
+obj-m += $(PREFIX)ai.o
+obj-m += $(PREFIX)ao.o
+obj-m += $(PREFIX)aenc.o
+obj-m += $(PREFIX)adec.o
+obj-m += $(PREFIX)acodec.o
+
+ifndef DISABLE_TDE
+    $(PREFIX)tde-objs := $(CV100_BLOB_DIR)/hi3518_tde.o $(CV100_INIT_DIR)/tde_init.o
+    obj-m += $(PREFIX)tde.o
+endif
+
+# --- VOU module (video output, blob) ---
+$(PREFIX)vo-objs := $(CV100_BLOB_DIR)/hi3518_vou.o $(CV100_INIT_DIR)/vou_init.o
+ifndef DISABLE_VO
+    obj-m += $(PREFIX)vo.o
+endif
+
+# --- HIFB module (framebuffer, blob) ---
+$(PREFIX)hifb-objs := $(CV100_BLOB_DIR)/hifb.o $(CV100_INIT_DIR)/hifb_init.o
+# obj-m += $(PREFIX)hifb.o
+
+# --- Peripheral modules (blob — V1 source uses mach/hardware.h and IO_ADDRESS,
+#     needs kernel 3.0→4.9 porting. Source kept in repo for reference.) ---
+$(PREFIX)wdt-objs       := $(CV100_BLOB_DIR)/wdt.o       $(CV100_INIT_DIR)/wdt_init.o
+$(PREFIX)hi_user-objs   := $(CV100_BLOB_DIR)/hiuser.o    $(CV100_INIT_DIR)/hiuser_init.o
+$(PREFIX)hidmac-objs    := $(CV100_BLOB_DIR)/hidmac.o    $(CV100_INIT_DIR)/hidmac_init.o
+$(PREFIX)rtc-objs       := $(CV100_BLOB_DIR)/hi_rtc.o    $(CV100_INIT_DIR)/rtc_init.o
+$(PREFIX)pwm-objs       := $(CV100_BLOB_DIR)/pwm.o       $(CV100_INIT_DIR)/pwm_init.o
+$(PREFIX)sensor_i2c-objs := $(CV100_BLOB_DIR)/hi_i2c.o   $(CV100_INIT_DIR)/sensor_i2c_init.o
+obj-m += $(PREFIX)wdt.o
+obj-m += $(PREFIX)hi_user.o
+obj-m += $(PREFIX)hidmac.o
+obj-m += $(PREFIX)rtc.o
+obj-m += $(PREFIX)pwm.o
+obj-m += $(PREFIX)sensor_i2c.o
