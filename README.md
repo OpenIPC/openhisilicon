@@ -12,17 +12,18 @@ Replaces the proprietary SDK that HiSilicon ships to camera manufacturers. Used 
 | HiSilicon hi3516av100 | hi3516av100, hi3516dv100 | `hi3516av100` | `0x3516A100` |
 | HiSilicon hi3516cv200 | hi3516cv200, hi3518ev200, hi3518ev201 | `hi3516cv200` | `0x3518E200` |
 | HiSilicon hi3516cv300 | hi3516cv300, hi3516ev100 | `hi3516cv300` | `0x3516C300` |
+| HiSilicon hi3519v101 | hi3519v101 | `hi3519v101` | `0x3519100` |
 | HiSilicon hi3516ev200 | hi3516ev200, hi3516ev300, hi3518ev300, hi3516dv200 | `hi3516ev200` | `0x3516E200` |
 | Goke gk7205v200 | gk7205v200, gk7205v300, gk7202v300, gk7605v100 | `gk7205v200` | `0x7205200` |
 
-The hi3516ev200 and gk7205v200 chips are pin-compatible — the same source code compiles for both via the `CHIPARCH` flag. A [conversion script](scripts/hi2gk.sh) can translate between the two SDK naming conventions. The hi3516av100 (V2A generation, Cortex-A7) and hi3516cv200 (V2 generation, ARM926EJ-S) use a separate SDK layout with standalone MMZ and himedia modules. The hi3516cv300 (V3 generation, ARM926EJ-S) has an OSAL-based architecture similar to newer chips.
+The hi3516ev200 and gk7205v200 chips are pin-compatible — the same source code compiles for both via the `CHIPARCH` flag. A [conversion script](scripts/hi2gk.sh) can translate between the two SDK naming conventions. The hi3516av100 (V2A generation, Cortex-A7) and hi3516cv200 (V2 generation, ARM926EJ-S) use a separate SDK layout with standalone MMZ and himedia modules. The hi3516cv300 (V3 generation, ARM926EJ-S) and hi3519v101 (V3A generation, Cortex-A17+A7 big.LITTLE) have an OSAL-based architecture similar to newer chips.
 
 ## Supported kernels
 
 | Kernel | Status | Notes |
 |--------|--------|-------|
 | 3.0.8 (vendor) | Production | Used by `hi3516cv100_lite` |
-| 3.18.20 (vendor) | Production | Used by `hi3516cv300_lite` |
+| 3.18.20 (vendor) | Production | Used by `hi3516cv300_lite`, `hi3519v101_lite` |
 | 4.9.37 (vendor) | Production | Used by `hi3516av100_lite`, `hi3516cv200_lite`, `hi3516ev300_lite`, `gk7205v200_lite` |
 | 6.6 LTS | Production | Used by `hi3516ev300_neo` |
 | 6.18 LTS | Tested | CI-verified |
@@ -228,6 +229,7 @@ Every push and PR is tested against:
 - hi3516av100 + kernel 4.9 (HiSilicon V2A)
 - hi3516cv200 + kernel 4.9 (HiSilicon V2)
 - hi3516cv300 + kernel 3.18 (HiSilicon V3)
+- hi3519v101 + kernel 3.18 (HiSilicon V3A)
 - hi3516ev200 + kernel 4.9 (HiSilicon V4)
 - gk7205v200 + kernel 4.9 (Goke V4)
 - hi3516ev300 + kernel 6.6, 6.18, 7.0 (mainline)
