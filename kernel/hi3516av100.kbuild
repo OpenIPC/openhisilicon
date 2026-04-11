@@ -30,6 +30,8 @@ ccflags-y += -I$(src)/include/hi3516av100
 ccflags-y += -I$(src)/himedia/hi3516av100
 ccflags-y += -I$(src)/isp/arch/hi3516av100/firmware/drv
 ccflags-y += -I$(src)/isp/arch/hi3516av100/include
+ccflags-y += -I$(src)/isp/arch/hi3516av100/firmware/vreg
+ccflags-y += -I$(src)/isp/arch/hi3516av100/firmware/vreg/arch/hi3516a
 
 # --- MMZ module (source, STANDALONE) ---
 $(PREFIX)mmz-objs := \
@@ -148,8 +150,8 @@ ccflags-y += -I$(src)/piris/hi3516av100
 obj-m += $(PREFIX)piris.o
 
 # --- RTC module (source driver) ---
-$(PREFIX)rtc-objs := rtc/hi3516av100/hi_rtc.o
-ccflags-y += -I$(src)/rtc/hi3516av100
+# --- RTC module (blob — source in rtc/hi3516av100/ for reference) ---
+$(PREFIX)rtc-objs := $(AV100_BLOB_DIR)/hi_rtc.o $(AV100_INIT_DIR)/rtc_init.o
 obj-m += $(PREFIX)rtc.o
 
 # --- Cipher module (source driver) ---
