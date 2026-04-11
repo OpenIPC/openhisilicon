@@ -1,0 +1,164 @@
+# hi3516cv300 SoC family build configuration
+#
+# V3 generation (ARM926EJ-S / ARMv5TE), OSAL-based module architecture.
+# Uses Hi3516CV300 SDK V1.0.4.0 layout:
+#   obj/hi3516cv300/   - pre-built binary blobs
+#   init/hi3516cv300/  - init wrapper source (from SDK mpp/init/)
+#   include/hi3516cv300/ - SDK headers
+#   osal/hi3516cv300/  - OSAL source (from SDK osal/)
+#   isp/arch/hi3516cv300/ - ISP full source
+#
+# Module load order: osal → sys_config → base → sys → everything else
+
+# SDK include paths
+ccflags-y += -I$(src)/include/hi3516cv300
+ccflags-y += -I$(src)/osal/hi3516cv300
+ccflags-y += -I$(src)/isp/arch/hi3516cv300/firmware/drv
+ccflags-y += -I$(src)/isp/arch/hi3516cv300/include
+ccflags-y += -I$(src)/isp/arch/hi3516cv300/firmware/vreg
+ccflags-y += -I$(src)/isp/arch/hi3516cv300/firmware/vreg/arch/hi3516cv300
+
+# --- OSAL module (source) ---
+CV300_OSAL_DIR = osal/hi3516cv300
+CV300_OSAL_SRCS := \
+	$(CV300_OSAL_DIR)/osal.c \
+	$(CV300_OSAL_DIR)/osal_addr.c \
+	$(CV300_OSAL_DIR)/osal_atomic.c \
+	$(CV300_OSAL_DIR)/osal_barrier.c \
+	$(CV300_OSAL_DIR)/osal_cache.c \
+	$(CV300_OSAL_DIR)/osal_debug.c \
+	$(CV300_OSAL_DIR)/osal_device.c \
+	$(CV300_OSAL_DIR)/osal_dma.c \
+	$(CV300_OSAL_DIR)/osal_interrupt.c \
+	$(CV300_OSAL_DIR)/osal_math.c \
+	$(CV300_OSAL_DIR)/osal_mutex.c \
+	$(CV300_OSAL_DIR)/osal_notifier.c \
+	$(CV300_OSAL_DIR)/osal_platform.c \
+	$(CV300_OSAL_DIR)/osal_proc.c \
+	$(CV300_OSAL_DIR)/osal_schedule.c \
+	$(CV300_OSAL_DIR)/osal_semaphore.c \
+	$(CV300_OSAL_DIR)/osal_spinlock.c \
+	$(CV300_OSAL_DIR)/osal_string.c \
+	$(CV300_OSAL_DIR)/osal_task.c \
+	$(CV300_OSAL_DIR)/osal_timer.c \
+	$(CV300_OSAL_DIR)/osal_vmalloc.c \
+	$(CV300_OSAL_DIR)/osal_wait.c \
+	$(CV300_OSAL_DIR)/osal_workqueue.c
+
+ccflags-y += -I$(src)/$(CV300_OSAL_DIR)/himedia
+ccflags-y += -I$(src)/$(CV300_OSAL_DIR)/mmz
+
+CV300_OSAL_MMZ_SRCS := \
+	$(CV300_OSAL_DIR)/mmz/media-mem.c \
+	$(CV300_OSAL_DIR)/mmz/mmz-userdev.c \
+	$(CV300_OSAL_DIR)/mmz/hisi_allocator.c \
+	$(CV300_OSAL_DIR)/mmz/cma_allocator.c
+
+CV300_OSAL_HIMEDIA_SRCS := \
+	$(CV300_OSAL_DIR)/himedia/base.c \
+	$(CV300_OSAL_DIR)/himedia/himedia.c
+
+$(PREFIX)osal-objs := $(CV300_OSAL_SRCS:%.c=%.o) $(CV300_OSAL_MMZ_SRCS:%.c=%.o) $(CV300_OSAL_HIMEDIA_SRCS:%.c=%.o)
+obj-m += $(PREFIX)osal.o
+
+# --- sys_config module (source) ---
+$(PREFIX)sys_config-objs := sys_config/hi3516cv300/sys_config.o
+obj-m += $(PREFIX)sys_config.o
+
+# --- Blob modules (pre-built .o + init wrapper) ---
+CV300_BLOB_DIR = obj/hi3516cv300
+CV300_INIT_DIR = init/hi3516cv300
+
+$(PREFIX)base-objs   := $(CV300_BLOB_DIR)/hi_base.o   $(CV300_INIT_DIR)/base_init.o
+$(PREFIX)sys-objs    := $(CV300_BLOB_DIR)/hi_sys.o     $(CV300_INIT_DIR)/sys_init.o
+$(PREFIX)vi-objs     := $(CV300_BLOB_DIR)/hi_viu.o     $(CV300_INIT_DIR)/viu_init.o
+$(PREFIX)vpss-objs   := $(CV300_BLOB_DIR)/hi_vpss.o    $(CV300_INIT_DIR)/vpss_init.o
+$(PREFIX)venc-objs   := $(CV300_BLOB_DIR)/hi_venc.o    $(CV300_INIT_DIR)/venc_init.o
+$(PREFIX)vedu-objs   := $(CV300_BLOB_DIR)/hi_vedu.o    $(CV300_INIT_DIR)/vedu_init.o
+$(PREFIX)h264e-objs  := $(CV300_BLOB_DIR)/hi_h264e.o   $(CV300_INIT_DIR)/h264e_init.o
+$(PREFIX)h265e-objs  := $(CV300_BLOB_DIR)/hi_h265e.o   $(CV300_INIT_DIR)/h265e_init.o
+$(PREFIX)jpege-objs  := $(CV300_BLOB_DIR)/hi_jpege.o   $(CV300_INIT_DIR)/jpege_init.o
+$(PREFIX)rc-objs     := $(CV300_BLOB_DIR)/hi_rc.o      $(CV300_INIT_DIR)/rc_init.o
+$(PREFIX)rgn-objs    := $(CV300_BLOB_DIR)/hi_region.o  $(CV300_INIT_DIR)/rgn_init.o
+$(PREFIX)vgs-objs    := $(CV300_BLOB_DIR)/hi_vgs.o     $(CV300_INIT_DIR)/vgs_init.o
+$(PREFIX)ive-objs    := $(CV300_BLOB_DIR)/hi_ive.o     $(CV300_INIT_DIR)/ive_init.o
+$(PREFIX)chnl-objs   := $(CV300_BLOB_DIR)/hi_chnl.o    $(CV300_INIT_DIR)/chnl_init.o
+$(PREFIX)aio-objs    := $(CV300_BLOB_DIR)/hi_aio.o     $(CV300_INIT_DIR)/aiao_init.o
+$(PREFIX)ai-objs     := $(CV300_BLOB_DIR)/hi_ai.o      $(CV300_INIT_DIR)/ai_init.o
+$(PREFIX)ao-objs     := $(CV300_BLOB_DIR)/hi_ao.o      $(CV300_INIT_DIR)/ao_init.o
+$(PREFIX)aenc-objs   := $(CV300_BLOB_DIR)/hi_aenc.o    $(CV300_INIT_DIR)/aenc_init.o
+$(PREFIX)adec-objs   := $(CV300_BLOB_DIR)/hi_adec.o    $(CV300_INIT_DIR)/adec_init.o
+$(PREFIX)acodec-objs := $(CV300_BLOB_DIR)/acodec.o     $(CV300_INIT_DIR)/acodec_init.o
+
+obj-m += $(PREFIX)base.o
+obj-m += $(PREFIX)sys.o
+obj-m += $(PREFIX)vi.o
+obj-m += $(PREFIX)vpss.o
+obj-m += $(PREFIX)venc.o
+obj-m += $(PREFIX)vedu.o
+obj-m += $(PREFIX)h264e.o
+obj-m += $(PREFIX)h265e.o
+obj-m += $(PREFIX)jpege.o
+obj-m += $(PREFIX)rc.o
+obj-m += $(PREFIX)rgn.o
+obj-m += $(PREFIX)vgs.o
+obj-m += $(PREFIX)ive.o
+obj-m += $(PREFIX)chnl.o
+obj-m += $(PREFIX)aio.o
+obj-m += $(PREFIX)ai.o
+obj-m += $(PREFIX)ao.o
+obj-m += $(PREFIX)aenc.o
+obj-m += $(PREFIX)adec.o
+obj-m += $(PREFIX)acodec.o
+
+# --- VOU module (video output, blob) ---
+$(PREFIX)vo-objs := $(CV300_BLOB_DIR)/hi_vou.o $(CV300_INIT_DIR)/vou_init.o
+ifndef DISABLE_VO
+    obj-m += $(PREFIX)vo.o
+endif
+
+# --- ISP module (blob — full ISP source available but uses blob for now) ---
+$(PREFIX)isp-objs := $(CV300_BLOB_DIR)/hi_isp.o $(CV300_INIT_DIR)/isp_init.o
+ifndef DISABLE_ISP
+    obj-m += $(PREFIX)isp.o
+endif
+
+# --- Watchdog module (source driver) ---
+$(PREFIX)wdt-objs := wdt/hi3516cv300/hi_wdt.o
+ccflags-y += -I$(src)/wdt/hi3516cv300
+obj-m += $(PREFIX)wdt.o
+
+# --- MIPI RX module (source driver) ---
+CV300_MIPI_DIR = mipi_rx/hi3516cv300
+$(PREFIX)mipi_rx-objs := \
+	$(CV300_MIPI_DIR)/mipi.o \
+	$(CV300_MIPI_DIR)/mipi_hal.o
+ccflags-y += -I$(src)/mipi_rx/hi3516cv300
+obj-m += $(PREFIX)mipi_rx.o
+
+# --- IR module (source driver) ---
+$(PREFIX)ir-objs := ir/hi3516cv300/hiir.o
+ccflags-y += -I$(src)/ir/hi3516cv300
+obj-m += $(PREFIX)ir.o
+
+# --- PWM module (source driver) ---
+$(PREFIX)pwm-objs := pwm/hi3516cv300/pwm.o
+ccflags-y += -I$(src)/pwm/hi3516cv300
+obj-m += $(PREFIX)pwm.o
+
+# --- Sensor I2C module (source driver) ---
+$(PREFIX)sensor_i2c-objs := \
+	sensor_i2c/hi3516cv300/i2c_drv.o \
+	sensor_i2c/hi3516cv300/sensor.o
+ccflags-y += -I$(src)/sensor_i2c/hi3516cv300
+obj-m += $(PREFIX)sensor_i2c.o
+
+# --- Sensor SPI module (source driver) ---
+$(PREFIX)sensor_spi-objs := sensor_spi/hi3516cv300/ssp_drv.o
+ccflags-y += -I$(src)/sensor_spi/hi3516cv300
+obj-m += $(PREFIX)sensor_spi.o
+
+# --- RTC module (source driver) ---
+$(PREFIX)rtc-objs := rtc/hi3516cv300/hi_rtc.o
+ccflags-y += -I$(src)/rtc/hi3516cv300
+obj-m += $(PREFIX)rtc.o
