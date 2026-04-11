@@ -24,6 +24,9 @@
 #   obj/hi3516cv200/         - pre-built .o blobs
 #   init/hi3516cv200/        - init/exit wrapper sources
 
+# Cipher includes first (cipher's hi_type.h has HI_HANDLE that SDK hi_type.h lacks)
+ccflags-y += -I$(src)/cipher/hi3516cv200/include
+
 # SDK include paths
 ccflags-y += -I$(src)/include/hi3516cv200
 ccflags-y += -I$(src)/himedia/hi3516cv200
@@ -92,6 +95,16 @@ obj-m += $(PREFIX)aenc.o
 obj-m += $(PREFIX)adec.o
 obj-m += $(PREFIX)acodec.o
 
+# --- VOU module (video output, blob) ---
+$(PREFIX)vo-objs := $(CV200_BLOB_DIR)/hi3518e_vou.o $(CV200_INIT_DIR)/vou_init.o
+ifndef DISABLE_VO
+    obj-m += $(PREFIX)vo.o
+endif
+
+# --- HIFB module (framebuffer, blob) ---
+$(PREFIX)hifb-objs := $(CV200_BLOB_DIR)/hifb.o $(CV200_INIT_DIR)/hifb_init.o
+# obj-m += $(PREFIX)hifb.o
+
 # --- Watchdog module (source driver) ---
 $(PREFIX)wdt-objs := wdt/hi3516cv200/hi_wdt.o
 obj-m += $(PREFIX)wdt.o
@@ -124,6 +137,35 @@ obj-m += $(PREFIX)sensor_spi.o
 $(PREFIX)pwm-objs := pwm/hi3516cv200/pwm.o
 ccflags-y += -I$(src)/pwm/hi3516cv200
 obj-m += $(PREFIX)pwm.o
+
+# --- Piris module (source driver) ---
+$(PREFIX)piris-objs := piris/hi3516cv200/piris.o
+ccflags-y += -I$(src)/piris/hi3516cv200
+obj-m += $(PREFIX)piris.o
+
+# --- RTC module (source driver) ---
+$(PREFIX)rtc-objs := rtc/hi3516cv200/hi_rtc.o
+ccflags-y += -I$(src)/rtc/hi3516cv200
+obj-m += $(PREFIX)rtc.o
+
+# --- Cipher module (source driver) ---
+CV200_CIPHER = cipher/hi3516cv200/src
+$(PREFIX)cipher-objs := \
+	$(CV200_CIPHER)/drv/drv_cipher_intf.o \
+	$(CV200_CIPHER)/drv/cipher/drv_cipher.o \
+	$(CV200_CIPHER)/drv/cipher/hal_cipher.o \
+	$(CV200_CIPHER)/drv/efuse/drv_efuse.o \
+	$(CV200_CIPHER)/drv/efuse/hal_efuse.o \
+	$(CV200_CIPHER)/drv/hash/drv_hash_intf.o
+ccflags-y += -I$(src)/cipher/hi3516cv200/include
+ccflags-y += -I$(src)/cipher/hi3516cv200/src/drv
+ccflags-y += -I$(src)/cipher/hi3516cv200/src/drv/cipher
+ccflags-y += -I$(src)/cipher/hi3516cv200/src/drv/efuse
+ccflags-y += -I$(src)/cipher/hi3516cv200/src/drv/hash
+ccflags-y += -I$(src)/cipher/hi3516cv200/src/include
+ccflags-y += -I$(src)/mmz/hi3516cv200
+# Cipher needs porting from kernel 3.4 to 4.9 (asm/system.h removal, etc.)
+# obj-m += $(PREFIX)cipher.o
 
 # --- ISP module (full source) ---
 CV200_ISP_DIR = isp/arch/hi3516cv200/firmware/drv
