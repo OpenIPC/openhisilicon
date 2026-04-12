@@ -1,205 +1,230 @@
 # OpenHisilicon
 
-Open-source kernel modules and sensor libraries for HiSilicon/Goke IP camera SoCs.
+Open-source kernel modules and sensor libraries for HiSilicon/Goke IP camera SoCs, covering seven chip generations from V1 through V4.
 
 Replaces the proprietary SDK that HiSilicon ships to camera manufacturers. Used by [OpenIPC](https://openipc.org/) firmware and can be used independently in your own projects.
 
 ## Supported hardware
 
-| SoC family | Chip IDs | CHIPARCH | SDK_CODE |
-|------------|----------|----------|----------|
-| HiSilicon hi3516cv100 | hi3516cv100, hi3518cv100, hi3518ev100 | `hi3516cv100` | `0x3518100` |
-| HiSilicon hi3516av100 | hi3516av100, hi3516dv100 | `hi3516av100` | `0x3516A100` |
-| HiSilicon hi3516cv200 | hi3516cv200, hi3518ev200, hi3518ev201 | `hi3516cv200` | `0x3518E200` |
-| HiSilicon hi3516cv300 | hi3516cv300, hi3516ev100 | `hi3516cv300` | `0x3516C300` |
-| HiSilicon hi3519v101 | hi3519v101 | `hi3519v101` | `0x3519100` |
-| HiSilicon hi3516ev200 | hi3516ev200, hi3516ev300, hi3518ev300, hi3516dv200 | `hi3516ev200` | `0x3516E200` |
-| Goke gk7205v200 | gk7205v200, gk7205v300, gk7202v300, gk7605v100 | `gk7205v200` | `0x7205200` |
+| Generation | SoC family | Chip IDs | CPU | CHIPARCH |
+|------------|------------|----------|-----|----------|
+| V1 | hi3516cv100 | hi3516cv100, hi3518cv100, hi3518ev100 | ARM926EJ-S | `hi3516cv100` |
+| V2 | hi3516cv200 | hi3516cv200, hi3518ev200, hi3518ev201 | ARM926EJ-S | `hi3516cv200` |
+| V2A | hi3516av100 | hi3516av100, hi3516dv100 | Cortex-A7 | `hi3516av100` |
+| V3 | hi3516cv300 | hi3516cv300, hi3516ev100 | ARM926EJ-S | `hi3516cv300` |
+| V3A | hi3519v101 | hi3519v101 | Cortex-A17+A7 | `hi3519v101` |
+| V3.5 | hi3516cv500 | hi3516cv500, hi3516av300, hi3516dv300 | Cortex-A7 | `hi3516cv500` |
+| V4 | hi3516ev200 | hi3516ev200, hi3516ev300, hi3518ev300, hi3516dv200 | Cortex-A7 | `hi3516ev200` |
+| V4/Goke | gk7205v200 | gk7205v200, gk7205v300, gk7202v300, gk7605v100 | Cortex-A7 | `gk7205v200` |
 
-The hi3516ev200 and gk7205v200 chips are pin-compatible — the same source code compiles for both via the `CHIPARCH` flag. A [conversion script](scripts/hi2gk.sh) can translate between the two SDK naming conventions. The hi3516av100 (V2A generation, Cortex-A7) and hi3516cv200 (V2 generation, ARM926EJ-S) use a separate SDK layout with standalone MMZ and himedia modules. The hi3516cv300 (V3 generation, ARM926EJ-S) and hi3519v101 (V3A generation, Cortex-A17+A7 big.LITTLE) have an OSAL-based architecture similar to newer chips.
+Generation labels match [qemu-hisilicon](https://github.com/widgetii/qemu-hisilicon). The hi3516ev200 and gk7205v200 are pin-compatible — the same source compiles for both via `CHIPARCH`. A [conversion script](scripts/hi2gk.sh) translates between HiSilicon and Goke naming.
+
+## How HiSilicon SDK modules work
+
+If you're new to HiSilicon camera SoCs, this section explains the concepts you'll encounter throughout the codebase.
+
+### The vendor SDK problem
+
+HiSilicon ships camera manufacturers a proprietary SDK containing pre-compiled kernel modules (`.ko` files) built for a specific Linux kernel version. These modules implement the video pipeline — capturing frames from the image sensor, running them through the ISP (Image Signal Processor), encoding to H.264/H.265, and outputting the stream. The source code for most of these modules is not provided.
+
+When projects like OpenIPC want to run a different kernel version, or build firmware from source, these vendor `.ko` files become a problem: a module compiled for kernel 3.18 won't load on kernel 4.9 due to symbol versioning (`vermagic`). This repository provides the infrastructure to rebuild loadable modules that incorporate the vendor binary code.
+
+### Key SDK components
+
+**MMZ (Media Memory Zone)** — IP cameras need large contiguous blocks of physical memory for DMA transfers between hardware blocks (sensor → ISP → encoder). Linux's default memory allocator doesn't guarantee contiguous pages. MMZ carves out a dedicated region of RAM at boot (configured via kernel bootargs like `mmz=anonymous,0,0x82000000,32M`) and provides `hil_mmb_alloc`/`hil_mmb_free` for the video pipeline to allocate from it. Think of it as a specialized memory pool sitting alongside Linux's normal memory management.
+
+**himedia** — A media device registration framework. Where Linux has `misc_register()` for simple character devices, HiSilicon's SDK has `himedia_register()` which creates `/dev/` entries for each pipeline stage (ISP, VI, VPSS, VENC, etc.) and manages their lifecycle. The base module uses himedia to register itself and provide inter-module communication.
+
+**OSAL (OS Abstraction Layer)** — HiSilicon shipped each SDK in two variants: one for Linux and one for Huawei LiteOS (their proprietary RTOS for resource-constrained devices). OSAL was created to isolate the multimedia IP block drivers from the OS — the video pipeline code calls `osal_mutex_lock()` instead of Linux's `mutex_lock()` or LiteOS's `LOS_MuxPend()`. The OSAL source provides the OS-specific implementation (mutexes, timers, proc filesystem, memory mapping, interrupts), while the pre-compiled multimedia blobs remain identical across both operating systems. For us, this design is a gift: because the blobs call OSAL functions instead of kernel functions directly, the OSAL source can be recompiled for a new kernel version while the blobs remain unchanged. This is the key mechanism that allows vendor modules from kernel 4.9 to run on kernel 7.0.
+
+### How it evolved across generations
+
+The generation **number** tracks the peripheral address map and SDK architecture. The **letter suffix** tracks CPU upgrades within the same architecture:
+
+| Generation | SoC | CPU | Memory layer | Module init | Notes |
+|---|---|---|---|---|---|
+| V1 | CV100 | ARM926EJ-S | Standalone MMZ | `.ko` blobs via objcopy | First generation, VIC interrupts |
+| V2 | CV200 | ARM926EJ-S | MMZ + himedia | `.ko` blobs via objcopy | Added himedia device framework |
+| V2A | AV100 | Cortex-A7 | MMZ + himedia | `.ko` blobs via objcopy | V2 SDK with ARM upgrade + GIC |
+| V3 | CV300 | ARM926EJ-S | OSAL | Raw `.o` + init wrappers | New `0x12xxxxxx` address map, OSAL replaces MMZ/himedia |
+| V3A | 3519V101 | Cortex-A17+A7 | OSAL | `.ko` blobs via objcopy | V3 SDK with big.LITTLE for 4K |
+| V3.5 | CV500 | Cortex-A7 | OSAL | Raw `.o` + init wrappers | Incremental V3, snake_case SDK symbols |
+| V4 | EV200 | Cortex-A7 | OSAL | Source-based Kbuild | Redesigned modular SDK, Goke compat, mainline kernel |
+
+### Dealing with vendor .ko blobs
+
+A vendor `.ko` is an ELF relocatable object containing:
+- The module's compiled code (video pipeline logic, hardware register programming)
+- `init_module` / `cleanup_module` entry points
+- `__ksymtab_*` entries for exported symbols (like `CMPI_MmzMalloc`, `VB_Init`)
+
+We use two strategies to build new `.ko` modules that incorporate this vendor code:
+
+**Strategy A: Raw `.o` blobs** (CV300, CV500 SDKs). The SDK provides separate `.o` object files without `init_module`/`cleanup_module`. We write a thin C wrapper (`init/hi3516cv300/base_init.c`) that calls the blob's init function and re-exports its symbols, then link them together via Kbuild into a new `open_base.ko`. Clean and simple.
+
+**Strategy B: objcopy on `.ko`** (CV100, CV200, AV100, 3519V101). The SDK only provides complete `.ko` files. We use `objcopy --redefine-sym init_module=_renamed_init` to rename the embedded entry points, write a new wrapper that forwards to them, and link both into our `open_*.ko`. The blob's `__ksymtab_*` entries survive, so the wrapper must not re-export the same symbols.
+
+**Strategy C: Source compilation** (all platforms). For modules where HiSilicon provides GPL source (MMZ, OSAL, sys_config, MIPI, watchdog, ISP firmware, cipher, etc.), we compile directly from source. These have no kernel version lock — they build against whatever kernel headers are available.
+
+### The kernel compatibility layer
+
+The file [`kernel/compat/kernel_compat.h`](kernel/compat/kernel_compat.h) is included in every compilation unit via `-include` in the top-level Kbuild. It provides transparent API compatibility across Linux 3.0 through 7.0:
+
+- Timer API: `init_timer` (3.x) → `timer_setup` (4.15+) → `timer_delete` (7.0)
+- Memory mapping: `ioremap_nocache` removed in 5.6, `set_fs`/`get_fs` removed in 5.10
+- SPI/I2C: `spi_busnum_to_master` → `spi_busnum_to_controller` (5.0) → removed (6.4)
+- Proc filesystem: `struct file_operations` → `struct proc_ops` (5.6)
+- Sysctl: `register_sysctl_table` removed in 6.6
+- CMA: `dma_alloc_from_contiguous` gained `no_warn` parameter in 4.15
+- Platform driver: `.remove` return type changed from `int` to `void` in 6.11
+
+No `#ifdef` soup in driver code — the compat header handles everything. This is how the hi3516ev300 builds cleanly on kernels 4.9, 6.6, 6.18, and 7.0 from identical source.
 
 ## Supported kernels
 
-| Kernel | Status | Notes |
-|--------|--------|-------|
-| 3.0.8 (vendor) | Production | Used by `hi3516cv100_lite` |
-| 3.18.20 (vendor) | Production | Used by `hi3516cv300_lite`, `hi3519v101_lite` |
-| 4.9.37 (vendor) | Production | Used by `hi3516av100_lite`, `hi3516cv200_lite`, `hi3516ev300_lite`, `gk7205v200_lite` |
-| 6.6 LTS | Production | Used by `hi3516ev300_neo` |
-| 6.18 LTS | Tested | CI-verified |
-| 7.0-rc6 (mainline) | Production | Used by `hi3516ev300_neo` |
-
-All kernel versions are supported from a single codebase via the compatibility layer in [`kernel/compat/`](kernel/compat/). No `#ifdef` soup in driver code — the compat headers handle API differences transparently.
+| Kernel | Status | Platforms |
+|--------|--------|-----------|
+| 3.0.8 (vendor) | Production | hi3516cv100 |
+| 3.18.20 (vendor) | Production | hi3516cv300, hi3519v101 |
+| 4.9.37 (vendor) | Production | hi3516cv200, hi3516av100, hi3516cv500, hi3516ev300, gk7205v200 |
+| 6.6 LTS | Production | hi3516ev300 (neo) |
+| 6.18 LTS | Tested | hi3516ev300 (CI-verified) |
+| 7.0-rc6 (mainline) | Production | hi3516ev300 (neo) |
 
 ## Repository structure
 
 ```
-├── kernel/                  Kernel modules (out-of-tree, loaded at runtime)
-│   ├── osal/                OS Abstraction Layer (memory, proc, device mgmt)
-│   ├── base/                Base module (module registry, IPC)
-│   ├── sys/                 System control
-│   ├── isp/                 Image Signal Processor
-│   ├── vi/                  Video input
-│   ├── vpss/                Video processing subsystem
-│   ├── venc/                Video encoder framework
-│   ├── h264e/, h265e/       H.264/H.265 codec engines
-│   ├── jpege/               JPEG encoder
-│   ├── rgn/                 OSD / region overlay
-│   ├── vgs/                 Video graphics subsystem
-│   ├── ive/                 Intelligent video engine (vendor blob)
-│   ├── ive_neo/             Intelligent video engine (clean-room C, EV200/EV300)
-│   ├── ai/, ao/, aio/       Audio input/output
-│   ├── aenc/, adec/         Audio encode/decode
-│   ├── acodec/              Audio codec
-│   ├── mipi_rx/             MIPI CSI-2 receiver
-│   ├── sensor_i2c/          I2C sensor bus driver
-│   ├── sensor_spi/          SPI sensor bus driver
-│   ├── pwm/                 PWM controller (DC-iris)
-│   ├── wdt/                 Watchdog timer
-│   ├── compat/              Kernel version compatibility (4.9 – 7.0)
-│   └── ext_inc/             Cross-module function export headers
+├── kernel/                      Kernel modules (out-of-tree)
+│   ├── hi3516cv100.kbuild       V1 monolithic build config
+│   ├── hi3516cv200.kbuild       V2 monolithic build config
+│   ├── hi3516cv300.kbuild       V3 monolithic build config (OSAL)
+│   ├── hi3516cv500.kbuild       V3.5 monolithic build config (OSAL)
+│   ├── hi3516av100.kbuild       V2A monolithic build config
+│   ├── hi3519v101.kbuild        V3A monolithic build config (OSAL)
+│   ├── Kbuild                   Main entry — dispatches by CHIPARCH
+│   ├── compat/                  Kernel version compatibility (3.0 – 7.0)
+│   ├── obj/<chiparch>/          Pre-built vendor .o blobs
+│   ├── init/<chiparch>/         Module init/exit wrappers for blobs
+│   ├── include/<chiparch>/      SDK headers per platform
+│   ├── osal/<chiparch>/         OSAL source (V3, V3A, V3.5)
+│   ├── mmz/<chiparch>/          MMZ source (V1, V2, V2A)
+│   ├── himedia/<chiparch>/      himedia source (V2, V2A)
+│   ├── isp/arch/<chiparch>/     ISP firmware source
+│   ├── sys_config/<chiparch>/   Pin mux / clock config source
+│   ├── mipi_rx/<chiparch>/      MIPI CSI-2 receiver source
+│   ├── cipher/<chiparch>/       Cipher / crypto source
+│   ├── wdt/, ir/, rtc/, pwm/   Peripheral driver sources
+│   ├── sensor_i2c/, sensor_spi/ Sensor bus driver sources
+│   ├── osal/linux/kernel/       V4 shared OSAL (hi3516ev200 path)
+│   ├── base/, sys/, vi/, ...    V4 per-module Kbuild dirs
+│   ├── ive/                     Vendor IVE blob (all platforms)
+│   ├── ive_neo/                 Clean-room IVE (EV200/EV300 only)
+│   └── ext_inc/                 Cross-module headers (V4)
 │
-├── libraries/               User-space libraries
-│   ├── include/             Shared HI_* base headers (hi_type.h, hi_common.h)
-│   ├── sensor/              Image sensor drivers (30 sensors)
-│   ├── isp/                 ISP algorithm libraries
-│   ├── mpi_neo/             libmpi_neo.so — HI_MPI_SYS_* over /dev/mmz_userdev
-│   ├── ive_neo/             libive_neo.so — HI_MPI_IVE_* + SVP/XNN (replaces libive.so)
-│   └── ivp_neo/             libivp_neo.so — hi_ivp_* object-detection API (replaces libivp.so)
+├── libraries/                   User-space libraries
+│   ├── include/                 Shared HI_* headers
+│   ├── sensor/<chiparch>/       Image sensor drivers per platform
+│   ├── isp/arch/<chiparch>/     ISP algorithm source per platform
+│   ├── mpi_neo/                 libmpi_neo.so (platform-agnostic)
+│   ├── ive_neo/                 libive_neo.so (platform-agnostic)
+│   └── ivp_neo/                 libivp_neo.so (platform-agnostic)
 │
-├── include/                 Shared headers (kernel + userspace)
-└── scripts/                 Build utilities
+├── include/                     Shared headers (kernel + userspace, V4)
+└── scripts/                     Build utilities
 ```
+
+Each `CHIPARCH` has its own monolithic `.kbuild` file (except V4 which uses modular per-module `Kbuild` files). The main `kernel/Kbuild` dispatches to the right one based on the `CHIPARCH` variable.
 
 ## Building
 
 ### Via OpenIPC firmware (recommended)
 
 ```bash
-# Clone firmware
 git clone --depth 1 https://github.com/openipc/firmware
 cd firmware
 
-# Build for HiSilicon (4.9 kernel)
-make BOARD=hi3516ev300_lite br-hisilicon-opensdk
-
-# Build for Goke (4.9 kernel)
-make BOARD=gk7205v200_lite br-hisilicon-opensdk
-
-# Build for mainline kernel (7.0)
-make BOARD=hi3516ev300_neo br-hisilicon-opensdk
+# Build for any supported platform:
+make BOARD=hi3516cv100_lite br-hisilicon-opensdk   # V1
+make BOARD=hi3516cv200_lite br-hisilicon-opensdk   # V2
+make BOARD=hi3516av100_lite br-hisilicon-opensdk   # V2A
+make BOARD=hi3516cv300_lite br-hisilicon-opensdk   # V3
+make BOARD=hi3519v101_lite br-hisilicon-opensdk    # V3A
+make BOARD=hi3516cv500_lite br-hisilicon-opensdk   # V3.5
+make BOARD=hi3516ev300_lite br-hisilicon-opensdk   # V4
+make BOARD=gk7205v200_lite br-hisilicon-opensdk    # V4/Goke
+make BOARD=hi3516ev300_neo br-hisilicon-opensdk    # V4 mainline kernel
 ```
-
-The firmware build system handles the toolchain, kernel headers, and all dependencies automatically.
 
 ### Standalone (for development)
 
-If you already have an OpenIPC build tree at `/path/to/firmware`:
-
 ```bash
-# Kernel modules
+# Kernel modules — set CHIPARCH for your platform
 make -C /path/to/firmware/output/build/linux-custom \
-    M=$(pwd)/kernel \
-    CHIPARCH=hi3516ev200 \
-    DISABLE_IST=1 DISABLE_PM=1 DISABLE_TDE=1 DISABLE_VO=1 \
-    modules
+    M=$(pwd)/kernel CHIPARCH=hi3516ev200 modules
 
 # Sensor libraries
-export SDK_CODE=0x3516E200
 make CROSS_COMPILE=arm-openipc-linux-musleabi- \
-    CHIPARCH=hi3516ev200 \
-    -C libraries all
-```
-
-### Deploy to camera
-
-```bash
-# Copy a sensor driver
-scp libraries/sensor/hi3516ev200/sony_imx335/libsns_imx335.so \
-    root@192.168.1.10:/usr/lib/sensors/
-
-# Copy a kernel module
-scp kernel/open_isp.ko \
-    root@192.168.1.10:/lib/modules/$(uname -r)/updates/
+    CHIPARCH=hi3516ev200 -C libraries all
 ```
 
 ## Supported sensors
 
-| Manufacturer | Sensors |
-|-------------|---------|
-| **Sony** | imx290, imx307, imx327, imx335 (+ FPV variant) |
-| **SmartSens** | sc2231, sc2235, sc223a, sc3235, sc3335, sc3336, sc4236, sc500ai |
-| **GalaxyCore** | gc2053, gc4023, gc4653, gc5603 |
-| **OmniVision** | os02g10, os05a, ov2718 |
-| **SOI** | f37, h63 |
-| **ImageDesign** | mis2008 |
-| **SuperPix** | sp2305 |
-| **Aptina** | ar0237 |
+Sensor drivers are per-platform — each generation's SDK provides drivers for the sensors available on boards of that era. Some sensors (like IMX307, OV2718) appear across multiple platforms.
 
-Each sensor has both `.so` (shared) and `.a` (static) library builds.
+| Manufacturer | Sensor | CV100 | CV200 | AV100 | CV300 | 3519V101 | CV500 | EV200 |
+|---|---|---|---|---|---|---|---|---|
+| **Sony** | IMX104 | x | | | | | | |
+| | IMX117 | | | x | | | | |
+| | IMX122 | x | | | | | | |
+| | IMX123 | | | x | | | | |
+| | IMX138 | x | | | | | | |
+| | IMX178 | | | x | | | | |
+| | IMX185 | | | x | | | | |
+| | IMX222 | | x | | | | | |
+| | IMX226 | | | | | x | | |
+| | IMX236 | x | | | | | | |
+| | IMX274 | | | | | x | | |
+| | IMX290 | | | | x | x | | x |
+| | IMX307 | | | | x | | x | x |
+| | IMX323 | | | | x | | | |
+| | IMX326 | | | | | x | | |
+| | IMX327 | | | | | | x | x |
+| | IMX335 | | | | | | x | x |
+| | IMX385 | | | | x | x | | |
+| | IMX390 | | | | | | x | |
+| | IMX415 | | | | | | x | |
+| | IMX458 | | | | | | x | |
+| | ICX692 | x | | | | | | |
+| **Aptina** | AR0130 | x | x | | | | | |
+| | AR0230 | | x | x | | | | |
+| | AR0237 | | | x | x | | | x |
+| | AR0330 | x | | x | | | | |
+| | MT9P006 | x | | | | | | |
+| | 9M034 | x | x | | | | | |
+| **OmniVision** | OV2718 | | x | | x | | | x |
+| | OV4689 | | | x | | x | | |
+| | OV5658 | | | x | | | | |
+| | OV9712 | x | x | | | | | |
+| | OV9732 | | x | | | | | |
+| | OV9750 | | x | | | | | |
+| | OV9752 | | x | | | | | |
+| | OS04B10 | | | | | | x | |
+| | OS05A | | | | | x | x | x |
+| | OS08A | | | | | x | x | |
+| **SmartSens** | SC2235 | | | | x | | | x |
+| | SC4210 | | | | | | x | |
+| | SC4236 | | | x | | | | x |
+| **Panasonic** | MN34031 | x | | | | | | |
+| | MN34041 | x | | | | | | |
+| | MN34220 | | | x | | | x | |
+| | MN34222 | | x | | | | | |
+| **GalaxyCore** | GC2053 | | | | | | x | x |
 
-## User-space libraries for the IVE pipeline
+Each sensor has `.so` (shared) and `.a` (static) library builds. The goal is to eventually unify sensor drivers across platforms where the same sensor model is used.
 
-Three clean-room libraries replace the vendor binaries that userspace
-apps (majestic, ipctool, your own code) link against for IVE motion
-detection, MMZ memory allocation, and object detection:
+### FPV sensor modes (hi3516ev200 only)
 
-| Library | Replaces | What it does |
-|---|---|---|
-| `libmpi_neo.so` | `libmpi.so` | `HI_MPI_SYS_Init/Exit/MmzAlloc/MmzFree/MmzFlushCache` over `/dev/mmz_userdev` |
-| `libive_neo.so` | `libive.so` | `HI_MPI_IVE_*` wrappers for `/dev/ive`, plus SVP/XNN private helpers (`mpi_ive_xnn_loadmodel/unloadmodel/forward_slice`, `mp_ive_svp_alg_proc_init/exit`, …) |
-| `libivp_neo.so` | `libivp.so` | `hi_ivp_*` high-level object-detection API |
-
-All three are binary drop-ins — the public `hi_type.h`, `hi_common.h`, `hi_comm_ive.h`, `hi_ive.h`, `hi_comm_video.h`, `hi_ivp.h`, `mpi_sys.h`, `mpi_ive.h` headers match the vendor ABI byte-for-byte (struct sizes locked via `_Static_assert` in the `libraries-header-check` CI job). Relink existing apps against `-lmpi_neo -live_neo -livp_neo` instead of the vendor `-lmpi -live -livp`.
-
-Build:
-
-```bash
-make -C libraries/mpi_neo CC=arm-openipc-linux-musleabi-gcc
-make -C libraries/ive_neo CC=arm-openipc-linux-musleabi-gcc
-make -C libraries/ivp_neo CC=arm-openipc-linux-musleabi-gcc
-```
-
-**Status on Hi3516EV200/EV300**: `libive_neo.so` drives `open_ive_neo.ko` end-to-end for the 19 IVE ops the silicon supports. XNN/Conv inference is non-functional at the silicon level (vendor `open_ive.ko` has the same symptom — see [#33](../../issues/33)), so `libivp_neo.so`'s `hi_ivp_process_ex` returns zero detections to match vendor behavior.
-
-## Kernel modules
-
-All modules are prefixed `open_` to distinguish from vendor SDK modules:
-
-| Module | Function |
-|--------|----------|
-| `open_osal` | OS abstraction layer, MMZ memory allocator |
-| `open_sys_config` | SoC pin/clock configuration |
-| `open_base` | Module registry and inter-module calls |
-| `open_sys` | System control and scaling coefficients |
-| `open_isp` | Image Signal Processor pipeline |
-| `open_vi` | Video input (sensor → ISP path) |
-| `open_vpss` | Video processing (crop, scale, rotate) |
-| `open_venc` | Video encoder framework |
-| `open_h264e` / `open_h265e` | H.264 / H.265 codec engines |
-| `open_jpege` | JPEG encoder |
-| `open_rgn` | OSD regions and overlays |
-| `open_vgs` | Video graphics operations |
-| `open_ive` | Intelligent video (vendor blob, all SoCs) |
-| `open_ive_neo` | Intelligent video (clean-room C, EV200/EV300 only) |
-| `open_ai` / `open_ao` / `open_aio` | Audio input/output |
-| `open_aenc` / `open_adec` | Audio encode/decode |
-| `open_acodec` | On-chip audio codec |
-| `open_mipi_rx` | MIPI CSI-2 receiver |
-| `open_sensor_i2c` / `open_sensor_spi` | Sensor bus drivers |
-| `open_pwm` | PWM (DC-iris lens control) |
-| `open_wdt` | Watchdog timer |
-
-Load order matters — see `/usr/bin/load_hisilicon` on the camera for the full sequence:
-- **V4/V3.5**: `open_osal` → `open_sys_config` → `open_base` → `open_sys` → everything else
-- **V2A (hi3516av100)**: `open_mmz` → `open_himedia` → `open_base` → `open_sys` → everything else
-- **V2 (hi3516cv200)**: `open_mmz` → `open_himedia` → `open_sys_config` → `open_base` → `open_sys` → everything else
-
-Both `open_ive.ko` and `open_ive_neo.ko` are produced on every build (they live in sibling `kernel/ive/` and `kernel/ive_neo/` dirs). A rootfs should `insmod` **either** the vendor or the clean-room variant, not both — they export the same public symbol set (`ive_std_mod_init`, `drv_ive_*`, `g_ive_regs`, …). See issue [#33](../../issues/33) for which SoCs `ive_neo` has been validated on.
-
-## FPV sensor modes (IMX335)
-
-High-framerate modes for FPV applications:
+High-framerate IMX335 modes for FPV applications on hi3516ev300/gk7205v300:
 
 | Mode | Resolution | Max FPS (hi3516ev300) | Max FPS (gk7205v300) |
 |------|-----------|----------------------|---------------------|
@@ -211,33 +236,105 @@ High-framerate modes for FPV applications:
 
 Configure via `Isp_FrameRate` in majestic settings.
 
-## Kernel compatibility layer
+## Kernel modules
 
-The [`kernel/compat/kernel_compat.h`](kernel/compat/kernel_compat.h) header provides transparent API compatibility across Linux 4.9 through 7.0, covering:
+All modules are prefixed `open_` to distinguish from vendor SDK modules. The set of modules varies by platform generation:
 
-- Timer API (`init_timer` → `timer_setup` → `timer_delete`)
-- Memory mapping (`ioremap_nocache` removal, `set_fs` removal)
-- SPI/I2C API renames and signature changes
-- `platform_driver.remove` return type change (int → void)
-- sysctl, proc_ops, vm_flags, mmap_lock API evolution
-- CMA/DMA contiguous allocator interface changes
+| Module | Function | V1 | V2 | V2A | V3 | V3A | V3.5 | V4 |
+|--------|----------|---|---|---|---|---|---|---|
+| `open_mmz` | Media memory zone | x | x | x | | | | |
+| `open_himedia` | Media device framework | | x | x | | | | |
+| `open_osal` | OS abstraction layer | | | | x | x | x | x |
+| `open_sys_config` | Pin/clock configuration | | x | | x | x | x | x |
+| `open_base` | Module registry, IPC | x | x | x | x | x | x | x |
+| `open_sys` | System control | x | x | x | x | x | x | x |
+| `open_isp` | Image Signal Processor | x | x | x | x | x | x | x |
+| `open_vi` | Video input | x | x | x | x | x | x | x |
+| `open_vpss` | Video processing | x | x | x | x | x | x | x |
+| `open_venc` | Video encoder framework | x | x | x | x | x | x | x |
+| `open_h264e` | H.264 codec engine | x | x | x | x | x | x | x |
+| `open_h265e` | H.265 codec engine | | | x | x | x | x | x |
+| `open_jpege` | JPEG encoder | x | x | x | x | x | x | x |
+| `open_rc` | Rate control | x | x | x | x | x | x | x |
+| `open_rgn` | OSD / region overlay | x | x | x | x | x | x | x |
+| `open_vgs` | Video graphics / DSU | x | x | x | x | x | x | x |
+| `open_ive` | Intelligent video engine | x | x | x | x | x | x | x |
+| `open_ive_neo` | IVE clean-room (C source) | | | | | | | x |
+| `open_tde` | 2D graphics engine | x | x | x | | x | x | x |
+| `open_aio` | Audio I/O | | x | x | x | x | x | x |
+| `open_ai` / `open_ao` | Audio input/output | x | x | x | x | x | x | x |
+| `open_aenc` / `open_adec` | Audio encode/decode | x | x | x | x | x | x | x |
+| `open_acodec` | On-chip audio codec | x | x | x | x | x | x | x |
+| `open_mipi_rx` | MIPI CSI-2 receiver | | x | x | x | x | x | x |
+| `open_sensor_i2c` | I2C sensor bus | x | x | x | x | x | x | x |
+| `open_sensor_spi` | SPI sensor bus | | x | x | x | x | | x |
+| `open_pwm` | PWM controller | x | x | x | x | x | x | x |
+| `open_wdt` | Watchdog timer | x | x | x | x | x | x | x |
+| `open_vo` | Video output | x | x | x | x | x | x | |
+| `open_cipher` | Crypto engine | | x | | | | x | |
+| `open_vedu` | Video encoder device | | | | x | x | x | x |
+| `open_hidmac` | DMA controller | x | | | | | | |
+| `open_vda` | Video detection analysis | x | | x | | | | |
+| `open_ir` | Infrared receiver | | x | x | x | x | x | |
+| `open_rtc` | Real-time clock | x | x | x | x | x | | |
+| `open_pm` | Power management | | | | | x | | |
+| `open_fisheye` | Fisheye correction | | | | | x | | |
+| `open_nnie` | Neural network engine | | | | | | x | |
+| `open_gdc` | Geometric distortion | | | | | | x | |
+| `open_dis` | Digital stabilization | | | | | | x | |
+
+### Module load order
+
+Load order matters — see `/usr/bin/load_hisilicon` on the camera:
+
+- **V1**: `mmz` → `base` → `sys` → everything else
+- **V2/V2A**: `mmz` → `himedia` → (`sys_config`) → `base` → `sys` → everything else
+- **V3/V3A/V3.5/V4**: `osal` → `sys_config` → `base` → `sys` → everything else
+
+## User-space libraries (neo)
+
+Three clean-room libraries replace vendor binaries for IVE motion detection, MMZ memory allocation, and object detection:
+
+| Library | Replaces | API |
+|---|---|---|
+| `libmpi_neo.so` | `libmpi.so` | `HI_MPI_SYS_Init/Exit/MmzAlloc/MmzFree/MmzFlushCache` |
+| `libive_neo.so` | `libive.so` | `HI_MPI_IVE_*` (19 IVE ops) + SVP/XNN helpers |
+| `libivp_neo.so` | `libivp.so` | `hi_ivp_*` object-detection API |
+
+These are **platform-agnostic** — the same binaries work across all CHIPARCH targets. The public headers match the vendor ABI byte-for-byte (struct sizes locked via `_Static_assert` in CI).
+
+The `open_ive_neo.ko` kernel module (the driver that `libive_neo.so` talks to) is currently **hi3516ev200/ev300 only**. On other platforms, use the vendor `open_ive.ko` blob with `libive_neo.so` in userspace.
+
+Build:
+
+```bash
+make -C libraries/mpi_neo CC=arm-openipc-linux-musleabi-gcc
+make -C libraries/ive_neo CC=arm-openipc-linux-musleabi-gcc
+make -C libraries/ivp_neo CC=arm-openipc-linux-musleabi-gcc
+```
 
 ## CI
 
-Every push and PR is tested against:
-- hi3516cv100 + kernel 3.0 (HiSilicon V1)
-- hi3516av100 + kernel 4.9 (HiSilicon V2A)
-- hi3516cv200 + kernel 4.9 (HiSilicon V2)
-- hi3516cv300 + kernel 3.18 (HiSilicon V3)
-- hi3519v101 + kernel 3.18 (HiSilicon V3A)
-- hi3516ev200 + kernel 4.9 (HiSilicon V4)
-- gk7205v200 + kernel 4.9 (Goke V4)
-- hi3516ev300 + kernel 6.6, 6.18, 7.0 (mainline)
+Every push and PR runs **19 jobs**:
 
-Plus three checks for the `libraries/*_neo` userspace stack:
-- **Libraries header check** — `gcc -Werror -fsyntax-only` over every public header in `libraries/{include,ive_neo,mpi_neo,ivp_neo}/include/` plus `_Static_assert`s on critical struct sizes (`IVE_IMAGE_S == 72`, `IVE_CCBLOB_S == 3052`, …). Locks the vendor ABI on every PR.
-- **Libraries cross-compile** — ARM EABI build of all three `*_neo` libs; asserts canonical symbols are exported (`HI_MPI_IVE_Thresh`, `HI_MPI_SYS_MmzAlloc`, `hi_ivp_init`, …) and no vendor `.so` is in `DT_NEEDED`.
-- **QEMU IVE ops regression** — boots a vendored `test-ive-ops.c` under `qemu-system-arm -M hi3516ev300` and asserts `Result: N/N passed`. Catches register-contract drift between `kernel/ive_neo/ive_neo.c` and the QEMU HiSilicon machine model.
+**Build SDK** (8 platforms):
+
+| Platform | Kernel | Generation |
+|---|---|---|
+| hi3516cv100_lite | 3.0.8 | V1 |
+| hi3516cv200_lite | 4.9.37 | V2 |
+| hi3516av100_lite | 4.9.37 | V2A |
+| hi3516cv300_lite | 3.18.20 | V3 |
+| hi3519v101_lite | 3.18.20 | V3A |
+| hi3516cv500_lite | 4.9.37 | V3.5 |
+| hi3516ev200_lite | 4.9.37 | V4 |
+| gk7205v200_lite | 4.9.37 | V4/Goke |
+
+Plus 3 mainline kernel builds for hi3516ev300_neo (6.6, 6.18, 7.0).
+
+**QEMU boot smoke-tests** (4 platforms): CV100, CV200, CV300, 3519V101 — boots OpenIPC firmware under [qemu-hisilicon](https://github.com/widgetii/qemu-hisilicon) and verifies the kernel reaches userspace.
+
+**Library checks** (3 jobs): header syntax + ABI struct sizes, ARM cross-compile + symbol verification, QEMU IVE register regression.
 
 [![Build Status](https://github.com/OpenIPC/openhisilicon/actions/workflows/build.yml/badge.svg)](https://github.com/OpenIPC/openhisilicon/actions/workflows/build.yml)
 
