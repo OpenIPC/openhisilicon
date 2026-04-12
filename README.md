@@ -19,18 +19,6 @@ Replaces the proprietary SDK that HiSilicon ships to camera manufacturers. Used 
 
 Generation labels match [qemu-hisilicon](https://github.com/widgetii/qemu-hisilicon). The hi3516ev200 and gk7205v200 are pin-compatible — the same source compiles for both via `CHIPARCH`. A [conversion script](scripts/hi2gk.sh) translates between HiSilicon and Goke naming.
 
-### Generation naming convention
-
-The **number** tracks the peripheral address map and SDK architecture. The **letter suffix** tracks CPU upgrades within the same architecture:
-
-- **V1** (CV100) — First generation. ARM926EJ-S, VIC interrupts, standalone MMZ.
-- **V2** (CV200) — Second generation. Still ARM926EJ-S, new peripheral layout, added himedia framework.
-- **V2A** (AV100) — V2 peripheral map + SDK structure, but CPU upgraded to **Cortex-A7 with GIC**. The "A" = ARM upgrade.
-- **V3** (CV300) — Third generation. Back to ARM926EJ-S, but completely new `0x12xxxxxx` peripheral addresses and OSAL-based software architecture replacing standalone MMZ/himedia.
-- **V3A** (3519V101) — V3 address map + OSAL architecture, but CPU upgraded to **Cortex-A17+A7 big.LITTLE** for 4K encoding. The "A" = ARM upgrade again.
-- **V3.5** (CV500) — Incremental V3 evolution. Cortex-A7, same OSAL, but newer SDK with snake_case symbols (`cmpi_mmz_malloc` vs V3's `CMPI_MmzMalloc`). Not different enough to be V4.
-- **V4** (EV200) — Fourth generation. Cortex-A7, OSAL, but completely redesigned modular SDK, `GK_*` type prefixes for Goke compatibility, and mainline kernel support (6.6–7.0).
-
 ## How HiSilicon SDK modules work
 
 If you're new to HiSilicon camera SoCs, this section explains the concepts you'll encounter throughout the codebase.
@@ -51,14 +39,17 @@ When projects like OpenIPC want to run a different kernel version, or build firm
 
 ### How it evolved across generations
 
-| Generation | Memory layer | Module init |
-|---|---|---|
-| V1 (CV100) | Standalone MMZ only | `.ko` blobs via objcopy |
-| V2 (CV200, AV100) | Standalone MMZ + himedia | `.ko` blobs via objcopy |
-| V3 (CV300) | OSAL (integrates MMZ + himedia) | Raw `.o` blobs + init wrappers from SDK |
-| V3A (3519V101) | OSAL | `.ko` blobs via objcopy |
-| V3.5 (CV500) | OSAL | Raw `.o` blobs + init wrappers from SDK |
-| V4 (EV200) | OSAL | Source-based modular Kbuild |
+The generation **number** tracks the peripheral address map and SDK architecture. The **letter suffix** tracks CPU upgrades within the same architecture:
+
+| Generation | SoC | CPU | Memory layer | Module init | Notes |
+|---|---|---|---|---|---|
+| V1 | CV100 | ARM926EJ-S | Standalone MMZ | `.ko` blobs via objcopy | First generation, VIC interrupts |
+| V2 | CV200 | ARM926EJ-S | MMZ + himedia | `.ko` blobs via objcopy | Added himedia device framework |
+| V2A | AV100 | Cortex-A7 | MMZ + himedia | `.ko` blobs via objcopy | V2 SDK with ARM upgrade + GIC |
+| V3 | CV300 | ARM926EJ-S | OSAL | Raw `.o` + init wrappers | New `0x12xxxxxx` address map, OSAL replaces MMZ/himedia |
+| V3A | 3519V101 | Cortex-A17+A7 | OSAL | `.ko` blobs via objcopy | V3 SDK with big.LITTLE for 4K |
+| V3.5 | CV500 | Cortex-A7 | OSAL | Raw `.o` + init wrappers | Incremental V3, snake_case SDK symbols |
+| V4 | EV200 | Cortex-A7 | OSAL | Source-based Kbuild | Redesigned modular SDK, Goke compat, mainline kernel |
 
 ### Dealing with vendor .ko blobs
 
