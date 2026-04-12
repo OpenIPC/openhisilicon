@@ -171,6 +171,25 @@ ccflags-y += -I$(src)/hifb/hi3516cv500
 # HIFB needs VO internal register definitions not available yet
 # obj-m += $(PREFIX)hifb.o
 
+# --- Sensor I2C module (source driver) ---
+$(PREFIX)sensor_i2c-objs := sensor_i2c/hi3516cv500/sensor_i2c.o
+obj-m += $(PREFIX)sensor_i2c.o
+
+# --- Sensor SPI module (source driver) ---
+$(PREFIX)sensor_spi-objs := sensor_spi/hi3516cv500/sensor_spi.o
+ccflags-y += -I$(src)/sensor_spi/hi3516cv500
+obj-m += $(PREFIX)sensor_spi.o
+
+# --- PWM module (source driver) ---
+$(PREFIX)pwm-objs := pwm/hi3516cv500/pwm.o pwm/hi3516cv500/strfunc.o
+ccflags-y += -I$(src)/pwm/hi3516cv500
+obj-m += $(PREFIX)pwm.o
+
+# --- PIRIS module (source driver) ---
+$(PREFIX)piris-objs := piris/hi3516cv500/piris.o piris/hi3516cv500/strfunc.o
+ccflags-y += -I$(src)/piris/hi3516cv500
+obj-m += $(PREFIX)piris.o
+
 # --- IR module (source driver) ---
 $(PREFIX)ir-objs := ir/hi3516cv500/hiir.o $(CV500_INIT_DIR)/ir_init.o
 ccflags-y += -I$(src)/ir/hi3516cv500
