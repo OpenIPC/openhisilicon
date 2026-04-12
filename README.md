@@ -19,6 +19,18 @@ Replaces the proprietary SDK that HiSilicon ships to camera manufacturers. Used 
 
 Generation labels match [qemu-hisilicon](https://github.com/widgetii/qemu-hisilicon). The hi3516ev200 and gk7205v200 are pin-compatible — the same source compiles for both via `CHIPARCH`. A [conversion script](scripts/hi2gk.sh) translates between HiSilicon and Goke naming.
 
+### Generation naming convention
+
+The **number** tracks the peripheral address map and SDK architecture. The **letter suffix** tracks CPU upgrades within the same architecture:
+
+- **V1** (CV100) — First generation. ARM926EJ-S, VIC interrupts, standalone MMZ.
+- **V2** (CV200) — Second generation. Still ARM926EJ-S, new peripheral layout, added himedia framework.
+- **V2A** (AV100) — V2 peripheral map + SDK structure, but CPU upgraded to **Cortex-A7 with GIC**. The "A" = ARM upgrade.
+- **V3** (CV300) — Third generation. Back to ARM926EJ-S, but completely new `0x12xxxxxx` peripheral addresses and OSAL-based software architecture replacing standalone MMZ/himedia.
+- **V3A** (3519V101) — V3 address map + OSAL architecture, but CPU upgraded to **Cortex-A17+A7 big.LITTLE** for 4K encoding. The "A" = ARM upgrade again.
+- **V3.5** (CV500) — Incremental V3 evolution. Cortex-A7, same OSAL, but newer SDK with snake_case symbols (`cmpi_mmz_malloc` vs V3's `CMPI_MmzMalloc`). Not different enough to be V4.
+- **V4** (EV200) — Fourth generation. Cortex-A7, OSAL, but completely redesigned modular SDK, `GK_*` type prefixes for Goke compatibility, and mainline kernel support (6.6–7.0).
+
 ## How HiSilicon SDK modules work
 
 If you're new to HiSilicon camera SoCs, this section explains the concepts you'll encounter throughout the codebase.
