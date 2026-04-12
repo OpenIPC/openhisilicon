@@ -315,7 +315,7 @@ make -C libraries/ivp_neo CC=arm-openipc-linux-musleabi-gcc
 
 ## CI
 
-Every push and PR runs **19 jobs**:
+Every push and PR runs **22 jobs**:
 
 **Build SDK** (8 platforms):
 
@@ -332,7 +332,7 @@ Every push and PR runs **19 jobs**:
 
 Plus 3 mainline kernel builds for hi3516ev300_neo (6.6, 6.18, 7.0).
 
-**QEMU boot smoke-tests** (4 platforms): CV100, CV200, CV300, 3519V101 — boots OpenIPC firmware under [qemu-hisilicon](https://github.com/widgetii/qemu-hisilicon) and verifies the kernel reaches userspace.
+**QEMU boot smoke-tests** (8 platforms): CV100, CV200, AV100, CV300, 3519V101, CV500, EV200, GK7205V200 — boots OpenIPC firmware under [qemu-hisilicon](https://github.com/widgetii/qemu-hisilicon) and verifies the kernel reaches userspace.
 
 **Library checks** (3 jobs): header syntax + ABI struct sizes, ARM cross-compile + symbol verification, QEMU IVE register regression.
 

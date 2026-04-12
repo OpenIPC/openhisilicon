@@ -379,18 +379,55 @@ jobs:
           retention-days: 7
 
   #
-  # qemu-cv200-boot
+  # qemu-boot
   #
-  # Boots OpenIPC hi3516cv200 firmware under qemu-system-arm -M hi3516cv200
-  # and verifies the kernel reaches userspace (login prompt). This validates
-  # that the V2 generation machine model boots correctly with the 4.9.37
-  # kernel and vendor modules.
+  # Matrix job that boots OpenIPC firmware for each supported platform
+  # under qemu-system-arm and verifies the kernel reaches userspace.
+  # Each platform uses its own QEMU machine model from qemu-hisilicon.
   #
-  qemu-cv200-boot:
-    name: QEMU CV200 boot smoke-test
+  qemu-boot:
+    name: QEMU boot (${{ matrix.machine }})
     runs-on: ubuntu-latest
     env:
       QEMU_HISILICON_SHA: master
+
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - machine: hi3516cv100
+            firmware: hi3516cv100
+            mem: 64M
+            append: "console=ttyAMA0,115200 mem=64M root=/dev/ram0 rootfstype=squashfs"
+          - machine: hi3516cv200
+            firmware: hi3516cv200
+            mem: 64M
+            append: "console=ttyAMA0,115200 mem=64M root=/dev/ram0 rootfstype=squashfs"
+          - machine: hi3516av100
+            firmware: hi3516av100
+            mem: 256M
+            append: "console=ttyAMA0,115200 mem=256M root=/dev/ram0 rootfstype=squashfs"
+          - machine: hi3516cv300
+            firmware: hi3516cv300
+            mem: 128M
+            append: "console=ttyAMA0,115200 mem=128M root=/dev/ram0 rootfstype=squashfs"
+          - machine: hi3519v101
+            firmware: hi3519v101
+            mem: 64M
+            append: "console=ttyAMA0,115200 mem=64M root=/dev/ram0 rootfstype=squashfs"
+          - machine: hi3516cv500
+            firmware: hi3516cv500
+            mem: 128M
+            append: "console=ttyAMA0,115200 earlyprintk mem=128M root=/dev/ram0 rootfstype=squashfs"
+          - machine: hi3516ev200
+            firmware: hi3516ev200
+            mem: 128M
+            append: "console=ttyAMA0,115200 earlyprintk mem=96M root=/dev/ram0 rootfstype=squashfs mmz_allocator=hisi mmz=anonymous,0,0x46000000,32M"
+          - machine: gk7205v200
+            firmware: gk7205v200
+            mem: 128M
+            append: "console=ttyAMA0,115200 earlyprintk mem=96M root=/dev/ram0 rootfstype=squashfs mmz_allocator=hisi mmz=anonymous,0,0x46000000,32M"
+
     steps:
       - uses: actions/checkout@v4
 
@@ -421,35 +458,35 @@ jobs:
           cd /tmp/qemu-hisilicon
           bash qemu/setup.sh
 
-      - name: Download OpenIPC CV200 firmware
+      - name: Download OpenIPC firmware
         run: |
           mkdir -p /tmp/openipc
           cd /tmp/openipc
           curl -sSLf -o fw.tgz \
-            https://github.com/OpenIPC/firmware/releases/download/latest/openipc.hi3516cv200-nor-lite.tgz
+            https://github.com/OpenIPC/firmware/releases/download/latest/openipc.${{ matrix.firmware }}-nor-lite.tgz
           tar xzf fw.tgz
-          ls uImage.hi3516cv200
+          ls uImage.${{ matrix.firmware }}
 
-      - name: Boot CV200 under QEMU
+      - name: Boot under QEMU
         timeout-minutes: 3
         run: |
           QEMU=/tmp/qemu-hisilicon/qemu-src/build/qemu-system-arm
           chmod +x $QEMU
           timeout 90 $QEMU \
-              -M hi3516cv200 -m 64M \
-              -kernel /tmp/openipc/uImage.hi3516cv200 \
-              -initrd /tmp/openipc/rootfs.squashfs.hi3516cv200 \
+              -M ${{ matrix.machine }} -m ${{ matrix.mem }} \
+              -kernel /tmp/openipc/uImage.${{ matrix.firmware }} \
+              -initrd /tmp/openipc/rootfs.squashfs.${{ matrix.firmware }} \
               -nographic -serial mon:stdio \
-              -append "console=ttyAMA0,115200 mem=64M root=/dev/ram0 rootfstype=squashfs" \
-              2>&1 | tee cv200-output.txt || true
+              -append "${{ matrix.append }}" \
+              2>&1 | tee qemu-output.txt || true
 
           echo
           echo "=== Checking for successful boot ==="
-          if grep -qE "Starting crond: OK" cv200-output.txt; then
-              echo "PASS: CV200 kernel booted to userspace"
+          if grep -qE "Starting crond: OK" qemu-output.txt; then
+              echo "PASS: ${{ matrix.machine }} kernel booted to userspace"
           else
               echo "--- last 30 lines ---"
-              tail -30 cv200-output.txt
+              tail -30 qemu-output.txt
               echo "FAIL: no 'Starting crond: OK' in QEMU output" >&2
               exit 1
           fi
@@ -458,334 +495,6 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: qemu-cv200-boot-log
-          path: cv200-output.txt
-          retention-days: 7
-
-  #
-  # qemu-cv100-boot
-  #
-  # Boots OpenIPC hi3516cv100 firmware under qemu-system-arm -M hi3516cv100
-  # and verifies the kernel reaches userspace. V1 generation, 3.0.8 kernel.
-  #
-  qemu-cv100-boot:
-    name: QEMU CV100 boot smoke-test
-    runs-on: ubuntu-latest
-    env:
-      QEMU_HISILICON_SHA: master
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Install QEMU build deps
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends \
-            build-essential ninja-build meson pkg-config \
-            libglib2.0-dev libpixman-1-dev libfdt-dev zlib1g-dev libslirp-dev \
-            python3 python3-venv
-
-      - name: Clone qemu-hisilicon
-        run: |
-          git clone --depth 1 https://github.com/widgetii/qemu-hisilicon.git /tmp/qemu-hisilicon
-          cd /tmp/qemu-hisilicon
-          echo "SHA=$(git rev-parse HEAD)" >> $GITHUB_ENV
-
-      - name: Cache QEMU build
-        id: cache-qemu
-        uses: actions/cache@v4
-        with:
-          path: /tmp/qemu-hisilicon/qemu-src/build/qemu-system-arm
-          key: qemu-hisilicon-${{ env.SHA }}-ubuntu-latest
-
-      - name: Build QEMU (if cache miss)
-        if: steps.cache-qemu.outputs.cache-hit != 'true'
-        run: |
-          cd /tmp/qemu-hisilicon
-          bash qemu/setup.sh
-
-      - name: Download OpenIPC CV100 firmware
-        run: |
-          mkdir -p /tmp/openipc
-          cd /tmp/openipc
-          curl -sSLf -o fw.tgz \
-            https://github.com/OpenIPC/firmware/releases/download/latest/openipc.hi3516cv100-nor-lite.tgz
-          tar xzf fw.tgz
-          ls uImage.hi3516cv100
-
-      - name: Boot CV100 under QEMU
-        timeout-minutes: 3
-        run: |
-          QEMU=/tmp/qemu-hisilicon/qemu-src/build/qemu-system-arm
-          chmod +x $QEMU
-          timeout 90 $QEMU \
-              -M hi3516cv100 -m 64M \
-              -kernel /tmp/openipc/uImage.hi3516cv100 \
-              -initrd /tmp/openipc/rootfs.squashfs.hi3516cv100 \
-              -nographic -serial mon:stdio \
-              -append "console=ttyAMA0,115200 mem=64M root=/dev/ram0 rootfstype=squashfs" \
-              2>&1 | tee cv100-output.txt || true
-
-          echo
-          echo "=== Checking for successful boot ==="
-          if grep -qE "Starting crond: OK" cv100-output.txt; then
-              echo "PASS: CV100 kernel booted to userspace"
-          else
-              echo "--- last 30 lines ---"
-              tail -30 cv100-output.txt
-              echo "FAIL: no 'Starting crond: OK' in QEMU output" >&2
-              exit 1
-          fi
-
-      - name: Upload QEMU output
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: qemu-cv100-boot-log
-          path: cv100-output.txt
-          retention-days: 7
-
-  #
-  # qemu-av100-boot
-  #
-  # Boots OpenIPC hi3516av100 firmware under qemu-system-arm -M hi3516av100
-  # and verifies the kernel reaches userspace. V2A generation, 4.9.37 kernel.
-  #
-  qemu-av100-boot:
-    name: QEMU AV100 boot smoke-test
-    runs-on: ubuntu-latest
-    env:
-      QEMU_HISILICON_SHA: master
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Install QEMU build deps
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends \
-            build-essential ninja-build meson pkg-config \
-            libglib2.0-dev libpixman-1-dev libfdt-dev zlib1g-dev libslirp-dev \
-            python3 python3-venv
-
-      - name: Clone qemu-hisilicon
-        run: |
-          git clone --depth 1 https://github.com/widgetii/qemu-hisilicon.git /tmp/qemu-hisilicon
-          cd /tmp/qemu-hisilicon
-          echo "SHA=$(git rev-parse HEAD)" >> $GITHUB_ENV
-
-      - name: Cache QEMU build
-        id: cache-qemu
-        uses: actions/cache@v4
-        with:
-          path: /tmp/qemu-hisilicon/qemu-src/build/qemu-system-arm
-          key: qemu-hisilicon-${{ env.SHA }}-ubuntu-latest
-
-      - name: Build QEMU (if cache miss)
-        if: steps.cache-qemu.outputs.cache-hit != 'true'
-        run: |
-          cd /tmp/qemu-hisilicon
-          bash qemu/setup.sh
-
-      - name: Download OpenIPC AV100 firmware
-        run: |
-          mkdir -p /tmp/openipc
-          cd /tmp/openipc
-          curl -sSLf -o fw.tgz \
-            https://github.com/OpenIPC/firmware/releases/download/latest/openipc.hi3516av100-nor-lite.tgz
-          tar xzf fw.tgz
-          ls uImage.hi3516av100
-
-      - name: Boot AV100 under QEMU
-        timeout-minutes: 3
-        run: |
-          QEMU=/tmp/qemu-hisilicon/qemu-src/build/qemu-system-arm
-          chmod +x $QEMU
-          timeout 90 $QEMU \
-              -M hi3516av100 -m 256M \
-              -kernel /tmp/openipc/uImage.hi3516av100 \
-              -initrd /tmp/openipc/rootfs.squashfs.hi3516av100 \
-              -nographic -serial mon:stdio \
-              -append "console=ttyAMA0,115200 mem=256M root=/dev/ram0 rootfstype=squashfs" \
-              2>&1 | tee av100-output.txt || true
-
-          echo
-          echo "=== Checking for successful boot ==="
-          if grep -qE "Starting crond: OK" av100-output.txt; then
-              echo "PASS: AV100 kernel booted to userspace"
-          else
-              echo "--- last 30 lines ---"
-              tail -30 av100-output.txt
-              echo "FAIL: no 'Starting crond: OK' in QEMU output" >&2
-              exit 1
-          fi
-
-      - name: Upload QEMU output
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: qemu-av100-boot-log
-          path: av100-output.txt
-          retention-days: 7
-
-  #
-  # qemu-cv300-boot
-  #
-  # Boots OpenIPC hi3516cv300 firmware under qemu-system-arm -M hi3516cv300
-  # and verifies the kernel reaches userspace. V3 generation, 3.18.20 kernel.
-  #
-  qemu-cv300-boot:
-    name: QEMU CV300 boot smoke-test
-    runs-on: ubuntu-latest
-    env:
-      QEMU_HISILICON_SHA: master
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Install QEMU build deps
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends \
-            build-essential ninja-build meson pkg-config \
-            libglib2.0-dev libpixman-1-dev libfdt-dev zlib1g-dev libslirp-dev \
-            python3 python3-venv
-
-      - name: Clone qemu-hisilicon
-        run: |
-          git clone --depth 1 https://github.com/widgetii/qemu-hisilicon.git /tmp/qemu-hisilicon
-          cd /tmp/qemu-hisilicon
-          echo "SHA=$(git rev-parse HEAD)" >> $GITHUB_ENV
-
-      - name: Cache QEMU build
-        id: cache-qemu
-        uses: actions/cache@v4
-        with:
-          path: /tmp/qemu-hisilicon/qemu-src/build/qemu-system-arm
-          key: qemu-hisilicon-${{ env.SHA }}-ubuntu-latest
-
-      - name: Build QEMU (if cache miss)
-        if: steps.cache-qemu.outputs.cache-hit != 'true'
-        run: |
-          cd /tmp/qemu-hisilicon
-          bash qemu/setup.sh
-
-      - name: Download OpenIPC CV300 firmware
-        run: |
-          mkdir -p /tmp/openipc
-          cd /tmp/openipc
-          curl -sSLf -o fw.tgz \
-            https://github.com/OpenIPC/firmware/releases/download/latest/openipc.hi3516cv300-nor-lite.tgz
-          tar xzf fw.tgz
-          ls uImage.hi3516cv300
-
-      - name: Boot CV300 under QEMU
-        timeout-minutes: 3
-        run: |
-          QEMU=/tmp/qemu-hisilicon/qemu-src/build/qemu-system-arm
-          chmod +x $QEMU
-          timeout 90 $QEMU \
-              -M hi3516cv300 -m 128M \
-              -kernel /tmp/openipc/uImage.hi3516cv300 \
-              -initrd /tmp/openipc/rootfs.squashfs.hi3516cv300 \
-              -nographic -serial mon:stdio \
-              -append "console=ttyAMA0,115200 mem=128M root=/dev/ram0 rootfstype=squashfs" \
-              2>&1 | tee cv300-output.txt || true
-
-          echo
-          echo "=== Checking for successful boot ==="
-          if grep -qE "Starting crond: OK" cv300-output.txt; then
-              echo "PASS: CV300 kernel booted to userspace"
-          else
-              echo "--- last 30 lines ---"
-              tail -30 cv300-output.txt
-              echo "FAIL: no 'Starting crond: OK' in QEMU output" >&2
-              exit 1
-          fi
-
-      - name: Upload QEMU output
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: qemu-cv300-boot-log
-          path: cv300-output.txt
-          retention-days: 7
-
-  #
-  # qemu-3519v101-boot
-  #
-  # Boots OpenIPC hi3519v101 firmware under qemu-system-arm -M hi3519v101
-  # and verifies the kernel reaches userspace. V3A generation, 3.18.20 kernel.
-  #
-  qemu-3519v101-boot:
-    name: QEMU 3519V101 boot smoke-test
-    runs-on: ubuntu-latest
-    env:
-      QEMU_HISILICON_SHA: master
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Install QEMU build deps
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends \
-            build-essential ninja-build meson pkg-config \
-            libglib2.0-dev libpixman-1-dev libfdt-dev zlib1g-dev libslirp-dev \
-            python3 python3-venv
-
-      - name: Clone qemu-hisilicon
-        run: |
-          git clone --depth 1 https://github.com/widgetii/qemu-hisilicon.git /tmp/qemu-hisilicon
-          cd /tmp/qemu-hisilicon
-          echo "SHA=$(git rev-parse HEAD)" >> $GITHUB_ENV
-
-      - name: Cache QEMU build
-        id: cache-qemu
-        uses: actions/cache@v4
-        with:
-          path: /tmp/qemu-hisilicon/qemu-src/build/qemu-system-arm
-          key: qemu-hisilicon-${{ env.SHA }}-ubuntu-latest
-
-      - name: Build QEMU (if cache miss)
-        if: steps.cache-qemu.outputs.cache-hit != 'true'
-        run: |
-          cd /tmp/qemu-hisilicon
-          bash qemu/setup.sh
-
-      - name: Download OpenIPC 3519V101 firmware
-        run: |
-          mkdir -p /tmp/openipc
-          cd /tmp/openipc
-          curl -sSLf -o fw.tgz \
-            https://github.com/OpenIPC/firmware/releases/download/latest/openipc.hi3519v101-nor-lite.tgz
-          tar xzf fw.tgz
-          ls uImage.hi3519v101
-
-      - name: Boot 3519V101 under QEMU
-        timeout-minutes: 3
-        run: |
-          QEMU=/tmp/qemu-hisilicon/qemu-src/build/qemu-system-arm
-          chmod +x $QEMU
-          timeout 90 $QEMU \
-              -M hi3519v101 -m 64M \
-              -kernel /tmp/openipc/uImage.hi3519v101 \
-              -initrd /tmp/openipc/rootfs.squashfs.hi3519v101 \
-              -nographic -serial mon:stdio \
-              -append "console=ttyAMA0,115200 mem=64M root=/dev/ram0 rootfstype=squashfs" \
-              2>&1 | tee 3519v101-output.txt || true
-
-          echo
-          echo "=== Checking for successful boot ==="
-          if grep -qE "Starting crond: OK" 3519v101-output.txt; then
-              echo "PASS: 3519V101 kernel booted to userspace"
-          else
-              echo "--- last 30 lines ---"
-              tail -30 3519v101-output.txt
-              echo "FAIL: no 'Starting crond: OK' in QEMU output" >&2
-              exit 1
-          fi
-
-      - name: Upload QEMU output
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: qemu-3519v101-boot-log
-          path: 3519v101-output.txt
+          name: qemu-boot-${{ matrix.machine }}
+          path: qemu-output.txt
           retention-days: 7
