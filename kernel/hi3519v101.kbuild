@@ -1,0 +1,188 @@
+# hi3519v101 SoC family build configuration
+#
+# V3A generation (Cortex-A17+A7 big.LITTLE / ARMv7), OSAL-based module architecture.
+# Uses Hi3519V101 SDK V1.0.5.0 layout:
+#   obj/hi3519v101/   - pre-built binary blobs
+#   init/hi3519v101/  - init wrapper source
+#   include/hi3519v101/ - SDK headers
+#   osal/hi3519v101/  - OSAL source (from SDK osal/)
+#   isp/arch/hi3519v101/ - ISP full source
+#
+# Module load order: osal → sys_config → base → sys → everything else
+
+# SDK include paths
+ccflags-y += -I$(src)/include/hi3519v101
+ccflags-y += -I$(src)/osal/hi3519v101
+ccflags-y += -I$(src)/isp/arch/hi3519v101/firmware/drv
+ccflags-y += -I$(src)/isp/arch/hi3519v101/include
+ccflags-y += -I$(src)/isp/arch/hi3519v101/firmware/vreg
+ccflags-y += -I$(src)/isp/arch/hi3519v101/firmware/vreg/arch/hi3519v101
+
+# --- OSAL module (source) ---
+V101_OSAL_DIR = osal/hi3519v101
+V101_OSAL_SRCS := \
+	$(V101_OSAL_DIR)/osal.c \
+	$(V101_OSAL_DIR)/osal_addr.c \
+	$(V101_OSAL_DIR)/osal_atomic.c \
+	$(V101_OSAL_DIR)/osal_barrier.c \
+	$(V101_OSAL_DIR)/osal_cache.c \
+	$(V101_OSAL_DIR)/osal_debug.c \
+	$(V101_OSAL_DIR)/osal_device.c \
+	$(V101_OSAL_DIR)/osal_dma.c \
+	$(V101_OSAL_DIR)/osal_interrupt.c \
+	$(V101_OSAL_DIR)/osal_math.c \
+	$(V101_OSAL_DIR)/osal_mutex.c \
+	$(V101_OSAL_DIR)/osal_notifier.c \
+	$(V101_OSAL_DIR)/osal_platform.c \
+	$(V101_OSAL_DIR)/osal_proc.c \
+	$(V101_OSAL_DIR)/osal_schedule.c \
+	$(V101_OSAL_DIR)/osal_semaphore.c \
+	$(V101_OSAL_DIR)/osal_spinlock.c \
+	$(V101_OSAL_DIR)/osal_string.c \
+	$(V101_OSAL_DIR)/osal_task.c \
+	$(V101_OSAL_DIR)/osal_timer.c \
+	$(V101_OSAL_DIR)/osal_vmalloc.c \
+	$(V101_OSAL_DIR)/osal_wait.c \
+	$(V101_OSAL_DIR)/osal_workqueue.c
+
+ccflags-y += -I$(src)/$(V101_OSAL_DIR)/himedia
+ccflags-y += -I$(src)/$(V101_OSAL_DIR)/mmz
+
+V101_OSAL_MMZ_SRCS := \
+	$(V101_OSAL_DIR)/mmz/media-mem.c \
+	$(V101_OSAL_DIR)/mmz/mmz-userdev.c \
+	$(V101_OSAL_DIR)/mmz/hisi_allocator.c \
+	$(V101_OSAL_DIR)/mmz/cma_allocator.c
+
+V101_OSAL_HIMEDIA_SRCS := \
+	$(V101_OSAL_DIR)/himedia/base.c \
+	$(V101_OSAL_DIR)/himedia/himedia.c
+
+$(PREFIX)osal-objs := $(V101_OSAL_SRCS:%.c=%.o) $(V101_OSAL_MMZ_SRCS:%.c=%.o) $(V101_OSAL_HIMEDIA_SRCS:%.c=%.o)
+obj-m += $(PREFIX)osal.o
+
+# --- sys_config module (source) ---
+$(PREFIX)sys_config-objs := sys_config/hi3519v101/sys_config.o
+obj-m += $(PREFIX)sys_config.o
+
+# --- Blob modules (pre-built .o + init wrapper) ---
+V101_BLOB_DIR = obj/hi3519v101
+V101_INIT_DIR = init/hi3519v101
+
+$(PREFIX)base-objs   := $(V101_BLOB_DIR)/hi3519v101_base.o   $(V101_INIT_DIR)/base_init.o
+$(PREFIX)sys-objs    := $(V101_BLOB_DIR)/hi3519v101_sys.o     $(V101_INIT_DIR)/sys_init.o
+$(PREFIX)vi-objs     := $(V101_BLOB_DIR)/hi3519v101_viu.o     $(V101_INIT_DIR)/viu_init.o
+$(PREFIX)vpss-objs   := $(V101_BLOB_DIR)/hi3519v101_vpss.o    $(V101_INIT_DIR)/vpss_init.o
+$(PREFIX)venc-objs   := $(V101_BLOB_DIR)/hi3519v101_venc.o    $(V101_INIT_DIR)/venc_init.o
+$(PREFIX)vedu-objs   := $(V101_BLOB_DIR)/hi3519v101_vedu.o    $(V101_INIT_DIR)/vedu_init.o
+$(PREFIX)h264e-objs  := $(V101_BLOB_DIR)/hi3519v101_h264e.o   $(V101_INIT_DIR)/h264e_init.o
+$(PREFIX)h265e-objs  := $(V101_BLOB_DIR)/hi3519v101_h265e.o   $(V101_INIT_DIR)/h265e_init.o
+$(PREFIX)jpege-objs  := $(V101_BLOB_DIR)/hi3519v101_jpege.o   $(V101_INIT_DIR)/jpege_init.o
+$(PREFIX)rc-objs     := $(V101_BLOB_DIR)/hi3519v101_rc.o      $(V101_INIT_DIR)/rc_init.o
+$(PREFIX)rgn-objs    := $(V101_BLOB_DIR)/hi3519v101_region.o  $(V101_INIT_DIR)/region_init.o
+$(PREFIX)vgs-objs    := $(V101_BLOB_DIR)/hi3519v101_vgs.o     $(V101_INIT_DIR)/vgs_init.o
+$(PREFIX)ive-objs    := $(V101_BLOB_DIR)/hi3519v101_ive.o     $(V101_INIT_DIR)/ive_init.o
+$(PREFIX)chnl-objs   := $(V101_BLOB_DIR)/hi3519v101_chnl.o    $(V101_INIT_DIR)/chnl_init.o
+$(PREFIX)aio-objs    := $(V101_BLOB_DIR)/hi3519v101_aio.o     $(V101_INIT_DIR)/aio_init.o
+$(PREFIX)ai-objs     := $(V101_BLOB_DIR)/hi3519v101_ai.o      $(V101_INIT_DIR)/ai_init.o
+$(PREFIX)ao-objs     := $(V101_BLOB_DIR)/hi3519v101_ao.o      $(V101_INIT_DIR)/ao_init.o
+$(PREFIX)aenc-objs   := $(V101_BLOB_DIR)/hi3519v101_aenc.o    $(V101_INIT_DIR)/aenc_init.o
+$(PREFIX)adec-objs   := $(V101_BLOB_DIR)/hi3519v101_adec.o    $(V101_INIT_DIR)/adec_init.o
+$(PREFIX)acodec-objs := $(V101_BLOB_DIR)/acodec.o             $(V101_INIT_DIR)/acodec_init.o
+$(PREFIX)pm-objs     := $(V101_BLOB_DIR)/hi3519v101_pm.o      $(V101_INIT_DIR)/pm_init.o
+$(PREFIX)fisheye-objs := $(V101_BLOB_DIR)/hi3519v101_fisheye.o $(V101_INIT_DIR)/fisheye_init.o
+$(PREFIX)photo-objs  := $(V101_BLOB_DIR)/hi3519v101_photo.o   $(V101_INIT_DIR)/photo_init.o
+$(PREFIX)pciv-objs   := $(V101_BLOB_DIR)/hi3519v101_pciv.o    $(V101_INIT_DIR)/pciv_init.o
+$(PREFIX)pciv_fmw-objs := $(V101_BLOB_DIR)/hi3519v101_pciv_fmw.o $(V101_INIT_DIR)/pciv_fmw_init.o
+
+obj-m += $(PREFIX)base.o
+obj-m += $(PREFIX)sys.o
+obj-m += $(PREFIX)vi.o
+obj-m += $(PREFIX)vpss.o
+obj-m += $(PREFIX)venc.o
+obj-m += $(PREFIX)vedu.o
+obj-m += $(PREFIX)h264e.o
+obj-m += $(PREFIX)h265e.o
+obj-m += $(PREFIX)jpege.o
+obj-m += $(PREFIX)rc.o
+obj-m += $(PREFIX)rgn.o
+obj-m += $(PREFIX)vgs.o
+obj-m += $(PREFIX)ive.o
+obj-m += $(PREFIX)chnl.o
+obj-m += $(PREFIX)aio.o
+obj-m += $(PREFIX)ai.o
+obj-m += $(PREFIX)ao.o
+obj-m += $(PREFIX)aenc.o
+obj-m += $(PREFIX)adec.o
+obj-m += $(PREFIX)acodec.o
+obj-m += $(PREFIX)pm.o
+obj-m += $(PREFIX)fisheye.o
+obj-m += $(PREFIX)photo.o
+obj-m += $(PREFIX)pciv.o
+obj-m += $(PREFIX)pciv_fmw.o
+
+# --- VOU module (video output, blob) ---
+$(PREFIX)vo-objs := $(V101_BLOB_DIR)/hi3519v101_vou.o $(V101_INIT_DIR)/vou_init.o
+ifndef DISABLE_VO
+    obj-m += $(PREFIX)vo.o
+endif
+
+# --- HIFB module (framebuffer, blob) ---
+$(PREFIX)hifb-objs := $(V101_BLOB_DIR)/hifb.o $(V101_INIT_DIR)/hifb_init.o
+# obj-m += $(PREFIX)hifb.o
+
+# --- ISP module (blob) ---
+$(PREFIX)isp-objs := $(V101_BLOB_DIR)/hi3519v101_isp.o $(V101_INIT_DIR)/isp_init.o
+ifndef DISABLE_ISP
+    obj-m += $(PREFIX)isp.o
+endif
+
+# --- TDE module (blob) ---
+ifndef DISABLE_TDE
+    $(PREFIX)tde-objs := $(V101_BLOB_DIR)/hi3519v101_tde.o $(V101_INIT_DIR)/tde_init.o
+    obj-m += $(PREFIX)tde.o
+endif
+
+# --- WDT module (blob — source in wdt/hi3519v101/ for reference) ---
+$(PREFIX)wdt-objs := $(V101_BLOB_DIR)/hi3519v101_wdt.o $(V101_INIT_DIR)/wdt_init.o
+obj-m += $(PREFIX)wdt.o
+
+# --- IR module (blob — source in ir/hi3519v101/ for reference) ---
+$(PREFIX)ir-objs := $(V101_BLOB_DIR)/hi3519v101_ir.o $(V101_INIT_DIR)/ir_init.o
+obj-m += $(PREFIX)ir.o
+
+# --- RTC module (blob — source in rtc/hi3519v101/ for reference) ---
+$(PREFIX)rtc-objs := $(V101_BLOB_DIR)/hi3519v101_rtc.o $(V101_INIT_DIR)/rtc_init.o
+obj-m += $(PREFIX)rtc.o
+
+# --- MIPI RX module (source driver) ---
+V101_MIPI_DIR = mipi_rx/hi3519v101
+$(PREFIX)mipi_rx-objs := \
+	$(V101_MIPI_DIR)/mipi.o \
+	$(V101_MIPI_DIR)/mipi_hal.o
+ccflags-y += -I$(src)/mipi_rx/hi3519v101
+obj-m += $(PREFIX)mipi_rx.o
+
+# --- hi_user module (source driver) ---
+$(PREFIX)hi_user-objs := hiuser/hi3519v101/hi_user.o
+obj-m += $(PREFIX)hi_user.o
+
+# --- Sensor I2C module (source driver) ---
+$(PREFIX)sensor_i2c-objs := sensor_i2c/hi3519v101/sensor_i2c.o
+ccflags-y += -I$(src)/sensor_i2c/hi3519v101
+obj-m += $(PREFIX)sensor_i2c.o
+
+# --- Sensor SPI module (source driver) ---
+$(PREFIX)sensor_spi-objs := sensor_spi/hi3519v101/sensor_spi.o
+ccflags-y += -I$(src)/sensor_spi/hi3519v101
+obj-m += $(PREFIX)sensor_spi.o
+
+# --- PWM module (source driver) ---
+$(PREFIX)pwm-objs := pwm/hi3519v101/pwm.o
+ccflags-y += -I$(src)/pwm/hi3519v101
+obj-m += $(PREFIX)pwm.o
+
+# --- Piris module (source driver) ---
+$(PREFIX)piris-objs := piris/hi3519v101/piris.o
+ccflags-y += -I$(src)/piris/hi3519v101
+obj-m += $(PREFIX)piris.o

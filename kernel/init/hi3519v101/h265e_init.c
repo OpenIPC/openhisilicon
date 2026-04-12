@@ -1,0 +1,11 @@
+#include <linux/module.h>
+#include <linux/kernel.h>
+
+extern int _3519v101_hi3519v101_h265e_init(void);
+extern void _3519v101_hi3519v101_h265e_exit(void);
+
+static int __init h265e_mod_init(void) { return _3519v101_hi3519v101_h265e_init(); }
+static void __exit h265e_mod_exit(void) { _3519v101_hi3519v101_h265e_exit(); }
+module_init(h265e_mod_init);
+module_exit(h265e_mod_exit);
+MODULE_LICENSE("GPL");

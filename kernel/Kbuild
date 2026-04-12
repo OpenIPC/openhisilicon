@@ -10,6 +10,8 @@ ccflags-y += -include $(src)/compat/kernel_compat.h
 # Vendor SDK families use their own header/source layout
 ifeq ($(CHIPARCH),hi3516cv500)
     include $(src)/hi3516cv500.kbuild
+else ifeq ($(CHIPARCH),hi3519v101)
+    include $(src)/hi3519v101.kbuild
 else ifeq ($(CHIPARCH),hi3516cv300)
     include $(src)/hi3516cv300.kbuild
 else ifeq ($(CHIPARCH),hi3516cv200)

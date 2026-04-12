@@ -26,6 +26,11 @@ ifeq ($(CHIPARCH),hi3516av100)
     SUBDIRS := $(filter ./sensor/hi3516av100/%,$(SUBDIRS))
 endif
 
+# hi3519v101: build sensor drivers from SDK source
+ifeq ($(CHIPARCH),hi3519v101)
+    SUBDIRS := $(filter ./sensor/hi3519v101/%,$(SUBDIRS))
+endif
+
 all:
 	for dir in $(SUBDIRS); do \
 		make -C $$dir CHIPARCH=$(CHIPARCH) all || true; \
