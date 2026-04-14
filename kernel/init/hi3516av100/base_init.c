@@ -77,7 +77,8 @@ DECLARE_BLOB_FUNC(VB_CopySupplement);		EXPORT_SYMBOL(VB_CopySupplement);
 DECLARE_BLOB_FUNC(VB_AddBlkToPool);		EXPORT_SYMBOL(VB_AddBlkToPool);
 DECLARE_BLOB_FUNC(VbGetSupplementConf);		EXPORT_SYMBOL(VbGetSupplementConf);
 
-extern unsigned int vb_force_exit;
+unsigned int vb_force_exit;
+EXPORT_SYMBOL(vb_force_exit);
 module_param(vb_force_exit, uint, S_IRUGO);
 
 /******* create node  /proc/sys/dev/debug/proc_message_enable ************/
