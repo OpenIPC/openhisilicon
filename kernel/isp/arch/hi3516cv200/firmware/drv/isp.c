@@ -118,8 +118,8 @@ int isp_irq = -1;
  ****************************************************************************/
 ISP_DRV_CTX_S           g_astIspDrvCtx[1] = {{0}};
 
-ISP_EXPORT_FUNC_S       g_stIspExpFunc = {0};
-ISP_PIRIS_EXPORT_FUNC_S  g_stIspPirisExpFunc = {0};
+ISP_EXPORT_FUNC_S       g_stIspExpFunc __attribute__((section(".data"))) = {0};
+ISP_PIRIS_EXPORT_FUNC_S  g_stIspPirisExpFunc __attribute__((section(".data"))) = {0};
 static ISP_VERSION_S    gs_stIspLibInfo;
 void __iomem            *reg_vicap_base_va = HI_NULL;
 void __iomem            *reg_isp_base_va = HI_NULL;
@@ -3255,9 +3255,7 @@ module_param(lsc_update_mode, uint, S_IRUGO);
 EXPORT_SYMBOL(g_stIspExpFunc);
 EXPORT_SYMBOL(g_stIspPirisExpFunc);
 
-#ifdef ENABLE_JPEGEDCF
 EXPORT_SYMBOL(ISP_GetDCFInfo);
-#endif
 MODULE_AUTHOR(MPP_AUTHOR);
 MODULE_LICENSE(MPP_LICENSE);
 MODULE_VERSION(MPP_VERSION);
