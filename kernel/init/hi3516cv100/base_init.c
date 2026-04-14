@@ -57,7 +57,8 @@ DECLARE_BLOB_FUNC(VB_IsBlkValid);		EXPORT_SYMBOL(VB_IsBlkValid);
 DECLARE_BLOB_FUNC(VB_GetPoolInfo);		EXPORT_SYMBOL(VB_GetPoolInfo);
 DECLARE_BLOB_FUNC(VB_AddBlkToPool);		EXPORT_SYMBOL(VB_AddBlkToPool);
 
-extern unsigned int vb_force_exit;
+unsigned int vb_force_exit;
+EXPORT_SYMBOL(vb_force_exit);
 module_param(vb_force_exit, uint, S_IRUGO);
 
 static int __init base_mod_init(void)
