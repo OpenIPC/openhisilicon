@@ -169,13 +169,17 @@ ccflags-y += -I$(src)/mmz/hi3516cv200
 # Cipher needs porting from kernel 3.4 to 4.9 (asm/system.h removal, etc.)
 # obj-m += $(PREFIX)cipher.o
 
-# --- ISP module (full source) ---
+# --- ISP module (full source, ENABLE_JPEGEDCF needed for ISP_GetDCFInfo) ---
+ccflags-y += -DENABLE_JPEGEDCF
 CV200_ISP_DIR = isp/arch/hi3516cv200/firmware/drv
+CV200_ISP_VREG_DIR = isp/arch/hi3516cv200/firmware/vreg
 $(PREFIX)isp-objs := \
 	$(CV200_ISP_DIR)/isp.o \
 	$(CV200_ISP_DIR)/isp_st.o \
 	$(CV200_ISP_DIR)/mkp_acm.o \
-	$(CV200_ISP_DIR)/isp_acm_lut.o
+	$(CV200_ISP_DIR)/isp_acm_lut.o \
+	$(CV200_ISP_VREG_DIR)/hi_vreg.o \
+	$(CV200_ISP_VREG_DIR)/hi_drv_vreg.o
 ifndef DISABLE_ISP
     obj-m += $(PREFIX)isp.o
 endif

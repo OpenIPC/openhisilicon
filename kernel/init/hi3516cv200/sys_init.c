@@ -24,8 +24,10 @@ DECLARE_BLOB_SYM(coefficient8_lanczos2_8tap);	EXPORT_SYMBOL(coefficient8_lanczos
 
 DECLARE_BLOB_SYM(g_benchmark_list);		EXPORT_SYMBOL(g_benchmark_list);
 DECLARE_BLOB_SYM(g_u32FuncId);			EXPORT_SYMBOL(g_u32FuncId);
-DECLARE_BLOB_SYM(mem_total);			EXPORT_SYMBOL(mem_total);
-DECLARE_BLOB_SYM(vi_vpss_online);		EXPORT_SYMBOL(vi_vpss_online);
+
+/* These are module_param'd inside the blob — use matching types */
+extern unsigned int mem_total;			EXPORT_SYMBOL(mem_total);
+extern unsigned int vi_vpss_online;		EXPORT_SYMBOL(vi_vpss_online);
 
 static int __init sys_mod_init(void)
 {
