@@ -106,3 +106,13 @@ obj-m += $(PREFIX)hidmac.o
 obj-m += $(PREFIX)rtc.o
 obj-m += $(PREFIX)pwm.o
 obj-m += $(PREFIX)sensor_i2c.o
+
+# --- SSP sensor bus drivers (source, GPL — Sony/Panasonic/Aptina SPI protocols) ---
+CV100_SSP_CFLAGS = -DHI_ARCH=3518
+$(PREFIX)ssp_sony-objs := ssp_sony/hi3516cv100/ssp_sony.o
+$(PREFIX)ssp_pana-objs := ssp_pana/hi3516cv100/ssp_pana.o
+$(PREFIX)ssp_ad9020-objs := ssp_ad9020/hi3516cv100/ssp_ad9020.o
+ccflags-y += $(CV100_SSP_CFLAGS)
+obj-m += $(PREFIX)ssp_sony.o
+obj-m += $(PREFIX)ssp_pana.o
+obj-m += $(PREFIX)ssp_ad9020.o
