@@ -71,10 +71,10 @@ static void I2C_DRV_SetRate(unsigned int I2cRate)
     unsigned int  SclH = 0;
     unsigned int  SclL = 0;
 
-    /* 读取CTRL */
+    /* Read CTRL */
     Value = I2C_READ_REG(I2C_CTRL_REG);
 
-    /* 屏蔽i2c总中断 */
+    /* Disable I2C interrupt */
     I2C_WRITE_REG(I2C_CTRL_REG, (Value & (~I2C_UNMASK_TOTAL)));
 
     SclH = (I2C_DFT_CLK / (I2cRate * 2)) / 2 - 1;
@@ -83,7 +83,7 @@ static void I2C_DRV_SetRate(unsigned int I2cRate)
     SclL = (I2C_DFT_CLK / (I2cRate * 2)) / 2 - 1;
     I2C_WRITE_REG(I2C_SCL_L_REG, SclL);
 
-    /* 使能i2c总中断 */
+    /* Enable I2C interrupt */
     I2C_WRITE_REG(I2C_CTRL_REG, Value);
 
     return;
@@ -134,10 +134,10 @@ int I2C_DRV_WaitRead(unsigned int I2cNum)
 
 /*
 add by Jiang Lei 2010-08-24
-I2C写完成确认函数
-主要用于e2prom器件，用于确认写完成操作。
-    e2prom在停止位之后，开始启动内部写周期
-    i2c master必须通过确认流程，确认写操作完成才能启动下一次的写操作。
+I2C write-confirm function
+Mainly used for EEPROM: poll the device to confirm write completion.
+    After the stop bit, the EEPROM begins its internal write cycle.
+    The I2C master uses acknowledge polling to confirm the write
 */
 int I2C_DRV_WriteConfig(unsigned char I2cDevAddr)
 {
@@ -193,11 +193,11 @@ int I2C_DRV_Write(unsigned int I2cNum, unsigned char I2cDevAddr, unsigned int I2
 
     I2C_SPIN_LOCK(flags);
     
-    /* 清除中断标志 */
+    /* Clear interrupt flags */
     //I2C_WRITE_REG(I2C_ICR_REG, I2C_CLEAR_ALL);//08,03
     I2C_WRITE_REG(I2C_ICR_REG , 0x03 );//08,03
     I2C_WRITE_REG(I2C_CTRL_REG, 0x187);//0x00
-    /* 发送写设备地址 */
+    /* Send device address (write) */
     I2C_WRITE_REG(I2C_TXR_REG, (I2cDevAddr & WRITE_OPERATION));
     I2C_WRITE_REG(I2C_COM_REB, (I2C_WRITE | I2C_START));//04,0a
 
@@ -206,7 +206,7 @@ int I2C_DRV_Write(unsigned int I2cNum, unsigned char I2cDevAddr, unsigned int I2
         //printk("write devicAdd in write process!\n");
     }
 
-    /* 发送写寄存器地址 */
+    /* Send register address */
     for(i=0; i<I2cRegAddrByteNum; i++)
     {
         RegAddr = I2cRegAddr >> ((I2cRegAddrByteNum -i -1) * 8);
@@ -222,7 +222,7 @@ int I2C_DRV_Write(unsigned int I2cNum, unsigned char I2cDevAddr, unsigned int I2
         //I2C_WRITE_REG(I2C_ICR_REG, I2C_CLEAR_ALL);//08,3f
     }
 
-	/* 发送数据 */
+	/* Send data */
 	for (i=0; i<DataLen; i++)
 	{
       TXR_data = Data >> ((DataLen -i -1) * 8);
@@ -236,7 +236,7 @@ int I2C_DRV_Write(unsigned int I2cNum, unsigned char I2cDevAddr, unsigned int I2
       I2C_WRITE_REG(I2C_ICR_REG, I2C_CLEAR_ALL);//08,3f
 	}
 
-	/* 发送停止标志  */
+	/* Send stop flag */
 	I2C_WRITE_REG(I2C_COM_REB, I2C_STOP);
     if (I2C_DRV_WaitWriteEnd(I2cNum))
     {
@@ -260,12 +260,12 @@ unsigned int I2C_DRV_Read(unsigned int I2cNum, unsigned char I2cDevAddr, unsigne
 
     I2C_SPIN_LOCK(flags);
 
-    /* 清除中断标志 */
+    /* Clear interrupt flags */
     //I2C_WRITE_REG(I2C_ICR_REG, I2C_CLEAR_ALL);
     I2C_WRITE_REG(I2C_ICR_REG , 0x03 );//08,03
     I2C_WRITE_REG(I2C_CTRL_REG, 0x187);//0x00
 
-    /* 发送写设备地址 */
+    /* Send device address (write) */
     I2C_WRITE_REG(I2C_TXR_REG, (I2cDevAddr & WRITE_OPERATION));
     I2C_WRITE_REG(I2C_COM_REB,(I2C_WRITE | I2C_START));
 
@@ -276,7 +276,7 @@ unsigned int I2C_DRV_Read(unsigned int I2cNum, unsigned char I2cDevAddr, unsigne
     
     //I2C_WRITE_REG(I2C_ICR_REG, I2C_CLEAR_ALL);//08,3f
     
-    /* 发送写寄存器地址 */
+    /* Send register address */
     for(i=0; i<I2cRegAddrByteNum; i++)
     {
         RegAddr = I2cRegAddr >> ((I2cRegAddrByteNum -i -1) * 8);
@@ -291,7 +291,7 @@ unsigned int I2C_DRV_Read(unsigned int I2cNum, unsigned char I2cDevAddr, unsigne
         //I2C_WRITE_REG(I2C_ICR_REG, I2C_CLEAR_ALL);//08,3f
     }
 
-    /* 发送读设备地址 */
+    /* Send device address (read) */
     I2C_WRITE_REG(I2C_TXR_REG, (I2cDevAddr | READ_OPERATION));
     I2C_WRITE_REG(I2C_COM_REB, I2C_WRITE | I2C_START);
 
@@ -303,15 +303,15 @@ unsigned int I2C_DRV_Read(unsigned int I2cNum, unsigned char I2cDevAddr, unsigne
     //I2C_WRITE_REG(I2C_ICR_REG, I2C_CLEAR_ALL);//08,3f
     
     
-    /* 读取数据 */
+    /* Read data */
     for(i=0; i<DataLen; i++)
     {
-        /* 最后一个字节不再发ACK */
+        /* Last byte: do not send ACK */
         if (i == (DataLen - 1))
         {
             I2C_WRITE_REG(I2C_COM_REB, (I2C_READ | (~I2C_SEND_ACK)));
         }
-        /* 读取数据并返回ACK */
+        /* Read data and send ACK */
         else
         {
             I2C_WRITE_REG(I2C_COM_REB, I2C_READ);
@@ -334,7 +334,7 @@ unsigned int I2C_DRV_Read(unsigned int I2cNum, unsigned char I2cDevAddr, unsigne
        //I2C_WRITE_REG(I2C_ICR_REG, I2C_CLEAR_ALL);//08,3f
     }
 
-    /* 发送停止标志  */
+    /* Send stop flag */
     I2C_WRITE_REG(I2C_COM_REB, I2C_STOP);
     if (I2C_DRV_WaitWriteEnd(I2cNum))
     {
@@ -499,7 +499,18 @@ static int __init hi_i2c_init(void)
 
     I2C_SPIN_LOCK_INIT;
 
-    return 0;    
+    /*
+     * Sony IMX sensors (IMX122, IMX138, IMX222, IMX322, IMX323) power up
+     * with TESTEN=0 in the STANDBY register (I2C addr 0x3000), which
+     * prevents all subsequent register writes from taking effect.  Write
+     * 0x30 (STANDBY=0, TESTEN=3) to prime the sensor before userspace runs.
+     *
+     * The I2C device address 0x34 is the standard Sony IMX write address.
+     * On sensors using a different bus (SPI), this write is harmless (NAK).
+     */
+    HI_I2C_Write(0x34, 0x3000, 2, 0x30, 1);
+
+    return 0;
 }
 
 static void __exit hi_i2c_exit(void)
