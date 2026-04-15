@@ -790,9 +790,20 @@ static int __init hi_ssp_init(void)
 	}
 
     SSP_SPIN_LOCK_INIT;
-	
+
+	/*
+	 * Sony IMX sensors (IMX122, IMX222, IMX322, IMX323) power up with
+	 * TESTEN=0 in the STANDBY register (addr 0x00), which prevents all
+	 * subsequent SPI register writes from taking effect.  Write 0x30
+	 * (STANDBY=0, TESTEN=3) to prime the sensor before userspace runs.
+	 *
+	 * devaddr=0x02, addr=0x00, data=0x30 — values are bit-reversed for
+	 * the LSB-first SPI wire format: 0x02→0x40, 0x00→0x00, 0x30→0x0C.
+	 */
+	hi_ssp_write_alt(0x40, 0x00, 0x0C);
+
 	printk("Kernel: ssp initial ok!\n");
-    
+
     return 0;
 #endif
 }
