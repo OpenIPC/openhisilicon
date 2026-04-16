@@ -12,7 +12,7 @@ Replaces the proprietary SDK that HiSilicon ships to camera manufacturers. Used 
 | V2 | hi3516cv200 | hi3516cv200, hi3518ev200, hi3518ev201 | ARM926EJ-S | `hi3516cv200` |
 | V2A | hi3516av100 | hi3516av100, hi3516dv100 | Cortex-A7 | `hi3516av100` |
 | V3 | hi3516cv300 | hi3516cv300, hi3516ev100 | ARM926EJ-S | `hi3516cv300` |
-| V3A | hi3519v101 | hi3519v101 | Cortex-A17+A7 | `hi3519v101` |
+| V3A | hi3519v101 | hi3519v101, hi3516av200 | Cortex-A17+A7 | `hi3519v101` |
 | V3.5 | hi3516cv500 | hi3516cv500, hi3516av300, hi3516dv300 | Cortex-A7 | `hi3516cv500` |
 | V4 | hi3516ev200 | hi3516ev200, hi3516ev300, hi3518ev300, hi3516dv200 | Cortex-A7 | `hi3516ev200` |
 | V4/Goke | gk7205v200 | gk7205v200, gk7205v300, gk7202v300, gk7605v100 | Cortex-A7 | `gk7205v200` |
