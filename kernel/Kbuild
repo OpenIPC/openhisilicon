@@ -6,6 +6,8 @@ endif
 
 ccflags-y := -D$(CHIPARCH) -DRELEASE -DUSER_BIT_32 -DKERNEL_BIT_32 -Wno-date-time -D_GNU_SOURCE
 ccflags-y += -include $(src)/compat/kernel_compat.h
+# Re-add GCC's built-in include dir (stdarg.h etc.) stripped by -nostdinc in 5.15+
+ccflags-y += -isystem $(shell $(CC) -print-file-name=include)
 
 # Vendor SDK families use their own header/source layout
 ifeq ($(CHIPARCH),hi3516cv500)

@@ -37,6 +37,8 @@
 #include "osal_mmz.h"
 #include "hi_osal.h"
 
+#include "../../../compat/kernel_compat.h"
+
 #define error(s...)                                        \
     do {                                                   \
         printk(KERN_ERR "mmz_userdev:%s: ", __FUNCTION__); \
@@ -447,10 +449,10 @@ static int ioctl_mmb_user_unmap(struct file *file,
     /* todo,before unmap,refresh cache manually */
     if (p->map_cached) {
         struct mm_struct *mm = current->mm;
-        down_read(&mm->mmap_sem);
+        compat_mmap_read_lock(mm);
         if (hil_vma_check(addr, addr + len) != 0) {
             error("mmb<%s> vma is invalid.\n", p->mmb->name);
-            up_read(&mm->mmap_sem);
+            compat_mmap_read_unlock(mm);
             return -EPERM;
         }
 #ifdef CONFIG_64BIT
@@ -462,7 +464,7 @@ static int ioctl_mmb_user_unmap(struct file *file,
         outer_flush_range(p->phys_addr, p->phys_addr + len);
 #endif
 #endif /* CONFIG_64BIT */
-        up_read(&mm->mmap_sem);
+        compat_mmap_read_unlock(mm);
     }
 
     ret = vm_munmap(addr, len);
@@ -648,14 +650,14 @@ static int mmz_userdev_ioctl_of_d(struct file *file, unsigned int cmd, unsigned 
         return ret;
     }
 
-    down_read(&mm->mmap_sem);
+    compat_mmap_read_lock(mm);
 
     if (hil_vma_check((uintptr_t)area.dirty_virt_start, (uintptr_t)area.dirty_virt_start + area.dirty_size) != 0) {
         printk(KERN_WARNING "\ndirty area[0x%lx,0x%lx] overflow!\n",
                (unsigned long)(uintptr_t)area.dirty_virt_start,
                (unsigned long)(uintptr_t)area.dirty_virt_start + area.dirty_size);
         ret = -EFAULT;
-        up_read(&mm->mmap_sem);
+        compat_mmap_read_unlock(mm);
         return ret;
     }
 
@@ -671,7 +673,7 @@ static int mmz_userdev_ioctl_of_d(struct file *file, unsigned int cmd, unsigned 
     if (mmz_flush_dcache_mmb_dirty(&area) != 0) {
         printk(KERN_WARNING "\n flush dirty area fail!\n");
     }
-    up_read(&mm->mmap_sem);
+    compat_mmap_read_unlock(mm);
     return ret;
 }
 
@@ -858,7 +860,7 @@ static int mmz_userdev_release(struct inode *inode, struct file *file)
     struct mmb_info *p = NULL;
     struct mmb_info *n = NULL;
 
-    list_for_each_entry_safe(p, n, &pmu->list, list) {
+    osal_list_for_each_entry_safe(p, n, &pmu->list, list) {
         error("MMB LEAK(pid=%d): 0x%lX, %lu bytes, '%s'\n",
               pmu->pid, hil_mmb_phys(p->mmb),
               hil_mmb_length(p->mmb),

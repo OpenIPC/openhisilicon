@@ -12,6 +12,7 @@
 #include "hi_type.h"
 #include "hi_common.h"
 #include "hi_osal.h"
+#include "../../compat/kernel_compat.h"
 
 static char *g_pszTdeMmzName = HI_NULL;
 module_param(g_pszTdeMmzName, charp, S_IRUGO);
@@ -72,11 +73,11 @@ static int hi35xx_tde_probe(struct platform_device *pdev)
     return 0;
 }
 
-static int hi35xx_tde_remove(struct platform_device *pdev)
+static compat_platform_remove_ret hi35xx_tde_remove(struct platform_device *pdev)
 {
     tde_drv_mod_exit();
     osal_printk("unload tde.ko for %s...OK!\n", CHIP_NAME);
-    return 0;
+    compat_platform_remove_return;
 }
 
 static const struct of_device_id g_hi35xx_tde_match[] = {
@@ -97,4 +98,4 @@ static struct platform_driver g_hi35xx_tde_driver = {
 
 osal_module_platform_driver(g_hi35xx_tde_driver);
 
-MODULE_LICENSE("Proprietary");
+MODULE_LICENSE("GPL");

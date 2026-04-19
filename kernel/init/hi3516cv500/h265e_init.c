@@ -12,6 +12,7 @@
 #include <linux/module.h>
 #include <linux/kernel.h>
 #include "hi_type.h"
+#include "../../compat/kernel_compat.h"
 
 extern int h265e_module_init(void);
 extern void h265e_module_exit(void);
@@ -31,7 +32,7 @@ static void __exit h265e_mod_exit(void)
 module_init(h265e_mod_init);
 module_exit(h265e_mod_exit);
 
-MODULE_LICENSE("Proprietary");
+MODULE_LICENSE("GPL");
 
 
 

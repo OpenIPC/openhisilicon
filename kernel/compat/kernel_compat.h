@@ -315,4 +315,13 @@ static inline struct spi_controller *compat_spi_busnum_to_controller(u16 bus_num
     register_sysctl(path, table)
 #endif
 
+/*
+ * printk renamed to _printk in 6.x. Blobs compiled against 4.9 reference
+ * the old 'printk' symbol. We export a wrapper from the OSAL module.
+ */
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 0, 0)
+#define COMPAT_NEEDS_PRINTK_SHIM 1
+#endif
+
 #endif /* KERNEL_COMPAT_H */
+

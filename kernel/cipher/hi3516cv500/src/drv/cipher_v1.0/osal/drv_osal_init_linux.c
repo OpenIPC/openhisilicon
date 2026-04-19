@@ -6,20 +6,35 @@
  */
 
 #include <linux/proc_fs.h>
+#include "../../../../../../../../compat/kernel_compat.h"
 #include <linux/module.h>
+#include "../../../../../../../../compat/kernel_compat.h"
 #include <linux/signal.h>
+#include "../../../../../../../../compat/kernel_compat.h"
 #include <linux/spinlock.h>
+#include "../../../../../../../../compat/kernel_compat.h"
 #include <linux/personality.h>
+#include "../../../../../../../../compat/kernel_compat.h"
 #include <linux/ptrace.h>
+#include "../../../../../../../../compat/kernel_compat.h"
 #include <linux/kallsyms.h>
+#include "../../../../../../../../compat/kernel_compat.h"
 #include <linux/init.h>
+#include "../../../../../../../../compat/kernel_compat.h"
 #include <linux/pci.h>
+#include "../../../../../../../../compat/kernel_compat.h"
 #include <linux/seq_file.h>
+#include "../../../../../../../../compat/kernel_compat.h"
 #include <linux/version.h>
+#include "../../../../../../../../compat/kernel_compat.h"
 #include <linux/sched.h>
+#include "../../../../../../../../compat/kernel_compat.h"
 #include <linux/interrupt.h>
+#include "../../../../../../../../compat/kernel_compat.h"
 #include <linux/mm_types.h>
+#include "../../../../../../../../compat/kernel_compat.h"
 #include <linux/mm.h>
+#include "../../../../../../../../compat/kernel_compat.h"
 #include <asm/atomic.h>
 #include <asm/cacheflush.h>
 #include <asm/io.h>
@@ -27,8 +42,11 @@
 #include <asm/unistd.h>
 #include <asm/traps.h>
 #include <linux/miscdevice.h>
+#include "../../../../../../../../compat/kernel_compat.h"
 #include <linux/delay.h>
+#include "../../../../../../../../compat/kernel_compat.h"
 #include <linux/of_device.h>
+#include "../../../../../../../../compat/kernel_compat.h"
 #include "drv_osal_lib.h"
 #include "drv_symc.h"
 #include "drv_hash.h"
@@ -112,6 +130,14 @@ static int symc_proc_open(struct inode *inode, struct file *file)
     return single_open(file, symc_proc_read, NULL);
 }
 
+#ifdef COMPAT_USE_PROC_OPS
+static const struct proc_ops g_drv_cipher_proc_fops = {
+    .proc_open    = symc_proc_open,
+    .proc_read    = seq_read,
+    .proc_lseek   = seq_lseek,
+    .proc_release = single_release,
+};
+#else
 static const struct file_operations g_drv_cipher_proc_fops = {
     .owner      = THIS_MODULE,
     .open       = symc_proc_open,
@@ -119,6 +145,7 @@ static const struct file_operations g_drv_cipher_proc_fops = {
     .llseek     = seq_lseek,
     .release    = single_release,
 };
+#endif
 
 static hi_void symc_proc_init(hi_void)
 {
@@ -221,7 +248,11 @@ hi_s32 cipher_drv_mod_init(hi_void)
     /* dma data structure shall be initialised before being used in Kernel 4.9
      * or else call dma_set_coherent_mask/dma_alloc_coherent will return error
      */
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(4, 18, 0)
+    of_dma_configure(g_cipher_dev.this_device, g_cipher_dev.this_device->of_node, true);
+#else
     of_dma_configure(g_cipher_dev.this_device, g_cipher_dev.this_device->of_node);
+#endif
 
     ret = crypto_entry();
     if (ret != HI_SUCCESS) {

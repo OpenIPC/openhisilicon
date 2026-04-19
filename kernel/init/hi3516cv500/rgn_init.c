@@ -1,6 +1,7 @@
 #include <linux/module.h>
 #include <linux/kernel.h>
 #include <linux/printk.h>
+#include "../../compat/kernel_compat.h"
 
 extern int region_module_init(void);
 extern void region_module_exit(void);
@@ -19,5 +20,5 @@ static void __exit rgn_mod_exit(void)
 module_init(rgn_mod_init);
 module_exit(rgn_mod_exit);
 
-MODULE_LICENSE("Proprietary");
+MODULE_LICENSE("GPL");
 

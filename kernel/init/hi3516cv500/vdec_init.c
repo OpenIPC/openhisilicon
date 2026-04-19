@@ -1,6 +1,7 @@
 #include <linux/module.h>
 #include "hi_type.h"
 #include "vdec_exp.h"
+#include "../../compat/kernel_compat.h"
 
 extern int vdec_module_init(void);
 extern void vdec_module_exit(void);
@@ -29,4 +30,4 @@ static void __exit vdec_mod_exit(void)
 module_init(vdec_mod_init);
 module_exit(vdec_mod_exit);
 
-MODULE_LICENSE("Proprietary");
+MODULE_LICENSE("GPL");

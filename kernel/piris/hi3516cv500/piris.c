@@ -6,6 +6,7 @@
  */
 
 #include "piris.h"
+#include "../../compat/kernel_compat.h"
 #include <linux/module.h>
 #include <linux/errno.h>
 #include <linux/miscdevice.h>
@@ -440,6 +441,8 @@ static struct miscdevice g_st_piris_dev = {
 
 #ifdef __HuaweiLite__
 void piris_timer_cb(UINT32 arg)
+#elif defined(COMPAT_TIMER_SETUP)
+void piris_timer_cb(struct timer_list *t)
 #else
 void piris_timer_cb(unsigned long arg)
 #endif
@@ -451,7 +454,11 @@ void piris_timer_cb(unsigned long arg)
     unsigned long flags;
     piris_dev_s *piris = HI_NULL;
 
+#if defined(__HuaweiLite__) || !defined(COMPAT_TIMER_SETUP)
     piris = (piris_dev_s *)(hi_uintptr_t)arg;
+#else
+    piris = from_timer(piris, t, timer);
+#endif
     if (piris == HI_NULL) {
         return;
     }
@@ -627,6 +634,9 @@ int piris_init(void)
         sema_init(&g_piris_dev[i]->sem, 1);
         init_completion(&g_piris_dev[i]->piris_comp);
 
+#ifdef COMPAT_TIMER_SETUP
+        timer_setup(&g_piris_dev[i]->timer, piris_timer_cb, 0);
+#else
         init_timer(&g_piris_dev[i]->timer);
 #ifndef __HuaweiLite__
         g_piris_dev[i]->timer.function = piris_timer_cb;
@@ -634,6 +644,7 @@ int piris_init(void)
         g_piris_dev[i]->timer.function = (void *)piris_timer_cb;
 #endif
         g_piris_dev[i]->timer.data = (unsigned long)(hi_uintptr_t)g_piris_dev[i];
+#endif /* COMPAT_TIMER_SETUP */
         g_piris_dev[i]->timer.expires = jiffies + HZ; /* one second */
         g_piris_dev[i]->phase_tbl = g_motor_phase_tbl;
 
@@ -692,7 +703,7 @@ static int piris_probe(struct platform_device *pdev)
         mem = platform_get_resource(pdev, IORESOURCE_MEM, 0);
         g_reg_piris_i_base[i] = devm_ioremap_resource(&pdev->dev, mem);
         if (IS_ERR(g_reg_piris_i_base[i])) {
-            return ptr_err(g_reg_piris_i_base[i]);
+            return PTR_ERR(g_reg_piris_i_base[i]);
         }
     }
 
@@ -700,11 +711,11 @@ static int piris_probe(struct platform_device *pdev)
     return 0;
 }
 
-static int piris_remove(struct platform_device *pdev)
+static compat_platform_remove_ret piris_remove(struct platform_device *pdev)
 {
     osal_printk("<%s> is called\n", __FUNCTION__);
     piris_exit();
-    return 0;
+    compat_platform_remove_return;
 }
 
 static const struct of_device_id g_piris_match[] = {

@@ -16,6 +16,7 @@
 #include "hi_type.h"
 #include "hi_defines.h"
 #include "hi_osal.h"
+#include "../../compat/kernel_compat.h"
 
 
 #define VEDU_DEV_NAME_LENGTH 10
@@ -116,10 +117,10 @@ static int hi35xx_vpu_probe(struct platform_device *pdev)
     return ret;
 }
 
-static int hi35xx_vpu_remove(struct platform_device *pdev)
+static compat_platform_remove_ret hi35xx_vpu_remove(struct platform_device *pdev)
 {
     vpu_mod_exit();
-    return 0;
+    compat_platform_remove_return;
 }
 
 static const struct of_device_id hi35xx_vpu_match[] = {
@@ -138,6 +139,6 @@ static struct platform_driver hi35xx_vpu_driver = {
 };
 
 osal_module_platform_driver(hi35xx_vpu_driver);
-MODULE_LICENSE("Proprietary");
+MODULE_LICENSE("GPL");
 
 

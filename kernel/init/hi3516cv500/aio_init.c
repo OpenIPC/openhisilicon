@@ -9,6 +9,7 @@
 
 #include "hi_type.h"
 #include "hi_osal.h"
+#include "../../compat/kernel_compat.h"
 
 extern int aiao_module_init(void);
 extern void aiao_module_exit(void);
@@ -27,7 +28,7 @@ module_init(aiao_mod_init);
 module_exit(aiao_mod_exit);
 
 
-MODULE_LICENSE("Proprietary");
+MODULE_LICENSE("GPL");
 
 #else
 
@@ -70,12 +71,12 @@ static int hi35xx_aiao_probe(struct platform_device *pdev)
     return 0;
 }
 
-static int hi35xx_aiao_remove(struct platform_device *pdev)
+static compat_platform_remove_ret hi35xx_aiao_remove(struct platform_device *pdev)
 {
     aiao_module_exit();
     g_aio_base = HI_NULL;
     g_acodec_base = HI_NULL;
-    return 0;
+    compat_platform_remove_return;
 }
 
 
@@ -96,6 +97,6 @@ static struct platform_driver hi35xx_aiao_driver = {
 
 osal_module_platform_driver(hi35xx_aiao_driver);
 
-MODULE_LICENSE("Proprietary");
+MODULE_LICENSE("GPL");
 #endif
 

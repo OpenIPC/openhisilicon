@@ -8,6 +8,7 @@
 #include "hi_comm_video.h"
 #include "hi_common.h"
 #include "hi_osal.h"
+#include "../../compat/kernel_compat.h"
 
 extern int vi_do_mod_init(void);
 extern void vi_do_mod_exit(void);
@@ -76,7 +77,7 @@ static int hi35xx_vi_probe(struct platform_device* pdev)
     return 0;
 }
 
-static int hi35xx_vi_remove(struct platform_device* pdev)
+static compat_platform_remove_ret hi35xx_vi_remove(struct platform_device* pdev)
 {
     HI_U32  i;
     vi_do_mod_exit();
@@ -91,7 +92,7 @@ static int hi35xx_vi_remove(struct platform_device* pdev)
         g_past_vi_proc_reg[i] = HI_NULL;
     }
 
-    return 0;
+    compat_platform_remove_return;
 }
 
 
@@ -114,5 +115,5 @@ static struct platform_driver hi35xx_vi_driver =
 
 osal_module_platform_driver(hi35xx_vi_driver);
 
-MODULE_LICENSE("Proprietary");
+MODULE_LICENSE("GPL");
 

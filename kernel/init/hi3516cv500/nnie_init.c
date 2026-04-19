@@ -12,6 +12,7 @@
 #include <linux/of_platform.h>
 #include "hi_common.h"
 #include "hi_osal.h"
+#include "../../compat/kernel_compat.h"
 
 extern hi_u8 g_nnie_power_save_enable;
 extern hi_u16 g_nnie_task_buf_num;
@@ -63,7 +64,7 @@ static int hi35xx_svp_nnie_probe(struct platform_device *pf_dev)
     return svp_nnie_module_init();
 }
 
-static int hi35xx_svp_nnie_remove(struct platform_device *pf_dev)
+static compat_platform_remove_ret hi35xx_svp_nnie_remove(struct platform_device *pf_dev)
 {
     hi_u32 i;
 
@@ -71,7 +72,7 @@ static int hi35xx_svp_nnie_remove(struct platform_device *pf_dev)
     for (i = 0; i < SVP_NNIE_DEV_NUM; i++) {
         g_nnie_reg[i] = HI_NULL;
     }
-    return 0;
+    compat_platform_remove_return;
 }
 
 static const struct of_device_id g_hi35xx_svp_nnie_match[] = {
@@ -92,5 +93,5 @@ static struct platform_driver g_hi35xx_svp_nnie_driver = {
 
 osal_module_platform_driver(g_hi35xx_svp_nnie_driver);
 
-MODULE_LICENSE("Proprietary");
+MODULE_LICENSE("GPL");
 

@@ -8,6 +8,7 @@
 #include <linux/fs.h>
 #include <asm/uaccess.h>
 #include "hi_osal.h" /* because of ioctl redefine, hi_osal.h should not be the first included file */
+#include "../../compat/kernel_compat.h"
 
 struct file *klib_fopen(const char *filename, int flags, int mode)
 {
@@ -38,18 +39,24 @@ int klib_fwrite(const char *buf, int len, struct file *filp)
 
 int klib_fread(char *buf, unsigned int len, struct file *filp)
 {
-    mm_segment_t old_fs;
     int readlen;
 
     if (filp == NULL) {
         return -ENOENT;
     }
 
-    old_fs = get_fs();
-    set_fs(get_ds());
-    /* The cast to a user pointer is valid due to the set_fs() */
-    readlen = vfs_read(filp, (void __user *)buf, len, &filp->f_pos);
-    set_fs(old_fs);
+#ifdef COMPAT_NO_SET_FS
+    readlen = kernel_read(filp, buf, len, &filp->f_pos);
+#else
+    {
+        mm_segment_t old_fs;
+        old_fs = get_fs();
+        set_fs(get_ds());
+        /* The cast to a user pointer is valid due to the set_fs() */
+        readlen = vfs_read(filp, (void __user *)buf, len, &filp->f_pos);
+        set_fs(old_fs);
+    }
+#endif
     return readlen;
 }
 

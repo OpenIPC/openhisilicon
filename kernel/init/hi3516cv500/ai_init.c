@@ -4,6 +4,7 @@
 
 #include "hi_type.h"
 #include "hi_defines.h"
+#include "../../compat/kernel_compat.h"
 
 extern int ai_module_init(void);
 extern void ai_module_exit(void);
@@ -19,5 +20,5 @@ static void __exit ai_mod_exit(void){
 module_init(ai_mod_init);
 module_exit(ai_mod_exit);
 
-MODULE_LICENSE("Proprietary");
+MODULE_LICENSE("GPL");
 

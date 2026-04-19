@@ -3,6 +3,7 @@
 #include <linux/printk.h>
 
 #include "hi_type.h"
+#include "../../compat/kernel_compat.h"
 
 extern int aenc_module_init(void);
 extern void aenc_module_exit(void);
@@ -20,5 +21,5 @@ module_init(aenc_mod_init);
 module_exit(aenc_mod_exit);
 
 
-MODULE_LICENSE("Proprietary");
+MODULE_LICENSE("GPL");
 

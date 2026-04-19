@@ -6,6 +6,7 @@
  */
 
 #include <linux/module.h>
+#include "../../compat/kernel_compat.h"
 
 extern int h264e_module_init(void);
 extern void h264e_module_exit(void);
@@ -22,6 +23,6 @@ static void __exit h264e_mod_exit(void){
 module_init(h264e_mod_init);
 module_exit(h264e_mod_exit);
 
-MODULE_LICENSE("Proprietary");
+MODULE_LICENSE("GPL");
 
 

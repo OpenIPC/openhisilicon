@@ -11,6 +11,7 @@
 ******************************************************************************/
 
 #include <linux/module.h>
+#include "../../compat/kernel_compat.h"
 
 
 extern int chnl_module_init(void);
@@ -30,5 +31,5 @@ static void __exit chnl_mod_exit(void)
 module_init(chnl_mod_init);
 module_exit(chnl_mod_exit);
 
-MODULE_LICENSE("Proprietary");
+MODULE_LICENSE("GPL");
 

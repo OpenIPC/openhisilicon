@@ -12,6 +12,7 @@
 #include <linux/of.h>
 #include "hi_osal.h"
 #include "osal_mmz.h"
+#include "../../compat/kernel_compat.h"
 
 static int __init osal_init(void)
 {
@@ -59,10 +60,10 @@ static int osal_probe(struct platform_device* pdev)
     return 0;
 }
 
-static int osal_remove(struct platform_device* pdev)
+static compat_platform_remove_ret osal_remove(struct platform_device* pdev)
 {
     osal_exit();
-    return 0;
+    compat_platform_remove_return;
 }
 
 static const struct of_device_id g_osal_match[] = {
@@ -85,3 +86,23 @@ osal_module_platform_driver(g_osal_driver);
 MODULE_AUTHOR("Hisilicon");
 MODULE_LICENSE("GPL");
 MODULE_VERSION("1.0");
+
+/*
+ * printk shim: 4.9-era blobs reference 'printk' directly, but 6.x+ renamed
+ * it to '_printk' (printk is now an inline wrapper). Provide a real function
+ * named 'printk' that blob modules can link against.
+ */
+#ifdef COMPAT_NEEDS_PRINTK_SHIM
+#include <linux/printk.h>
+#undef printk
+asmlinkage __visible int printk(const char *fmt, ...)
+{
+	va_list args;
+	int r;
+	va_start(args, fmt);
+	r = vprintk(fmt, args);
+	va_end(args);
+	return r;
+}
+EXPORT_SYMBOL(printk);
+#endif

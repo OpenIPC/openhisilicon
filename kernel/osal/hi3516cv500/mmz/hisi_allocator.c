@@ -16,6 +16,8 @@
 #include <linux/version.h>
 #include "allocator.h"
 
+#include "../../../compat/kernel_compat.h"
+
 long long g_hi_max_malloc_size = 0x40000000UL;        /* 1GB */
 
 static unsigned long _strtoul_ex(const char *s, char **ep, unsigned int base)
@@ -64,16 +66,16 @@ static unsigned long find_fixed_region(unsigned long *region_len,
     start = mmz_align2(mmz->phys_start, align);
     len = mmz_grain_align(size);
 
-    list_for_each_entry(p, &mmz->mmb_list, list) {
+    osal_list_for_each_entry(p, &mmz->mmb_list, list) {
         hil_mmb_t *next = NULL;
         mmz_trace(4, "p->phys_addr=0x%08lX p->length = %luKB \t", /* 4: log debug level */
                   p->phys_addr, p->length / SZ_1K);
-        next = list_entry(p->list.next, typeof(*p), list);
+        next = osal_list_entry(p->list.next, typeof(*p), list);
         mmz_trace(4, ",next = 0x%08lX\n\n", next->phys_addr); /* 4: log debug level */
         /*
          * if p is the first entry or not.
          */
-        if (list_first_entry(&mmz->mmb_list, typeof(*p), list) == p) {
+        if (osal_list_first_entry(&mmz->mmb_list, typeof(*p), list) == p) {
             blank_len = p->phys_addr - start;
             if ((blank_len < fixed_len) && (blank_len >= len)) {
                 fixed_len = blank_len;
@@ -266,7 +268,7 @@ static hil_mmb_t *__mmb_alloc(const char *name,
     mmb->phys_addr = fixed_start;
     mmb->length = size;
     if (name != NULL) {
-        strlcpy(mmb->name, name, HIL_MMB_NAME_LEN);
+        compat_strlcpy(mmb->name, name, HIL_MMB_NAME_LEN);
     } else {
         strncpy(mmb->name, "<null>", HIL_MMB_NAME_LEN - 1);
     }
@@ -360,7 +362,7 @@ static hil_mmb_t *__mmb_alloc_v2(const char *name,
     mmb->order = order;
 
     if (name != NULL) {
-        strlcpy(mmb->name, name, HIL_MMB_NAME_LEN);
+        compat_strlcpy(mmb->name, name, HIL_MMB_NAME_LEN);
     } else {
         strncpy(mmb->name, "<null>", HIL_MMB_NAME_LEN);
     }
@@ -500,7 +502,7 @@ static int __allocator_init(char *s)
                 continue;
             }
 
-            strlcpy(zone->name, argv[0], HIL_MMZ_NAME_LEN); /* 0: the first args */
+            compat_strlcpy(zone->name, argv[0], HIL_MMZ_NAME_LEN); /* 0: the first args */
             zone->gfp = _strtoul_ex(argv[1], NULL, 0); /* 1: the second args */
             zone->phys_start = _strtoul_ex(argv[2], NULL, 0); /* 2: the third args */
             zone->nbytes = _strtoul_ex(argv[3], NULL, 0); /* 3: the fourth args */
@@ -513,7 +515,7 @@ static int __allocator_init(char *s)
                 continue;
             }
 
-            strlcpy(zone->name, argv[0], HIL_MMZ_NAME_LEN); /* 0: the first args */
+            compat_strlcpy(zone->name, argv[0], HIL_MMZ_NAME_LEN); /* 0: the first args */
             zone->gfp = _strtoul_ex(argv[1], NULL, 0); /* 1: the second args */
             zone->phys_start = _strtoul_ex(argv[2], NULL, 0); /* 2: the third args */
             zone->nbytes = _strtoul_ex(argv[3], NULL, 0); /* 3: the fourth args */

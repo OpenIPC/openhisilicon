@@ -11,6 +11,7 @@
 #include <linux/version.h>
 #include <linux/of_platform.h>
 #include "hiir.h"
+#include "../../compat/kernel_compat.h"
 
 #define OSDRV_MODULE_VERSION_STRING "HISI_ir @HiMPP"
 
@@ -35,10 +36,10 @@ static int hi_ir_probe(struct platform_device *pdev)
     return hiir_init();
 }
 
-static int hi_ir_remove(struct platform_device *pdev)
+static compat_platform_remove_ret hi_ir_remove(struct platform_device *pdev)
 {
     hiir_exit();
-    return 0;
+    compat_platform_remove_return;
 }
 
 static const struct of_device_id g_hi_ir_match[] = {

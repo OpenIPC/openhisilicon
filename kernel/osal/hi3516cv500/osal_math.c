@@ -11,6 +11,8 @@
 #include <linux/version.h>
 #include "hi_osal.h"
 
+#include "../../compat/kernel_compat.h"
+
 /* the result of u64/u32. */
 unsigned long long osal_div_u64(unsigned long long dividend, unsigned int divisor)
 {
@@ -77,7 +79,7 @@ unsigned int osal_random(void)
 #if LINUX_VERSION_CODE < KERNEL_VERSION(3, 18, 0)
     return random32();
 #else
-    return get_random_int();
+    return compat_get_random_int();
 #endif
 }
 EXPORT_SYMBOL(osal_random);

@@ -34,6 +34,7 @@
 #include <linux/of_platform.h>
 #include "hi_type.h"
 #include "watchdog.h"
+#include "../../compat/kernel_compat.h"
 
 #define OSDRV_MODULE_VERSION_STRING "HISI_wtdg @HiMPP"
 
@@ -62,10 +63,10 @@ static int hi_wdg_probe(struct platform_device *pdev)
     return watchdog_init();
 }
 
-static int hi_wdg_remove(struct platform_device *pdev)
+static compat_platform_remove_ret hi_wdg_remove(struct platform_device *pdev)
 {
     watchdog_exit();
-    return 0;
+    compat_platform_remove_return;
 }
 
 static const struct of_device_id g_hi_wdg_match[] = {

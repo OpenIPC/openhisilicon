@@ -4,6 +4,7 @@
 
 
 #include "hi_type.h"
+#include "../../compat/kernel_compat.h"
 
 extern int ao_module_init(void);
 extern void ao_module_exit(void);
@@ -19,5 +20,5 @@ static void __exit ao_mod_exit(void){
 module_init(ao_mod_init);
 module_exit(ao_mod_exit);
 
-MODULE_LICENSE("Proprietary");
+MODULE_LICENSE("GPL");
 

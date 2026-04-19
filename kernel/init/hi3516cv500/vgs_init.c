@@ -6,6 +6,7 @@
 
 #include "hi_common.h"
 #include "hi_osal.h"
+#include "../../compat/kernel_compat.h"
 
 #define VGS_DEV_NAME_LENGTH 10
 
@@ -53,7 +54,7 @@ static int hi35xx_vgs_probe(struct platform_device *pdev)
     return vgs_module_init();
 }
 
-static int hi35xx_vgs_remove(struct platform_device *pdev)
+static compat_platform_remove_ret hi35xx_vgs_remove(struct platform_device *pdev)
 {
     HI_U32 i = 0;
 
@@ -63,7 +64,7 @@ static int hi35xx_vgs_remove(struct platform_device *pdev)
         g_vgs_reg[i] = HI_NULL;
     }
 
-    return 0;
+    compat_platform_remove_return;
 }
 
 static const struct of_device_id hi35xx_vgs_match[] = {
@@ -82,4 +83,4 @@ static struct platform_driver hi35xx_vgs_driver = {
 };
 osal_module_platform_driver(hi35xx_vgs_driver);
 
-MODULE_LICENSE("Proprietary");
+MODULE_LICENSE("GPL");

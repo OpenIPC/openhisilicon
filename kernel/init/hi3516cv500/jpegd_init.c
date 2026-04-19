@@ -4,6 +4,7 @@
 #include "hi_type.h"
 #include "hi_defines.h"
 #include "hi_osal.h"
+#include "../../compat/kernel_compat.h"
 
 extern int jpegd_module_init(void);
 extern void jpegd_module_exit(void);
@@ -69,12 +70,12 @@ static int hi35xx_jpegd_probe(struct platform_device* pdev)
     return ret;
 }
 
-static int hi35xx_jpegd_remove(struct platform_device* pdev)
+static compat_platform_remove_ret hi35xx_jpegd_remove(struct platform_device* pdev)
 {
     jpegd_module_exit();
     jpegd_dev_exit();
 
-    return HI_SUCCESS;
+    compat_platform_remove_return;
 }
 
 
@@ -108,3 +109,4 @@ osal_module_platform_driver(hi35xx_jpegd_driver);
 
 
 
+MODULE_LICENSE("GPL");

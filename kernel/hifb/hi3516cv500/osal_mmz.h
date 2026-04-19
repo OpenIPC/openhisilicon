@@ -120,7 +120,7 @@ typedef struct hil_media_memory_block hil_mmb_t;
 #define mmz_length2grain(len) (mmz_grain_align(len) / MMZ_GRAIN)
 
 #define begin_list_for_each_mmz(p, gfp, mmz_name)        \
-    list_for_each_entry(p, &g_mmz_list, list)            \
+    osal_list_for_each_entry(p, &g_mmz_list, list)       \
     {                                                    \
         if ((gfp) == 0 ? 0 : (p)->gfp != (gfp)) {        \
             continue;                                    \

@@ -11,6 +11,7 @@
 ******************************************************************************/
 
 #include <linux/module.h>
+#include "../../compat/kernel_compat.h"
 
 extern int jpege_module_init(void);
 extern void jpege_module_exit(void);
@@ -29,7 +30,7 @@ static void __exit jpege_mod_exit(void)
 module_init(jpege_mod_init);
 module_exit(jpege_mod_exit);
 
-MODULE_LICENSE("Proprietary");
+MODULE_LICENSE("GPL");
 
 
 
