@@ -266,6 +266,19 @@ static inline struct spi_controller *compat_spi_busnum_to_controller(u16 bus_num
 #endif
 
 /*
+ * <stdarg.h> no longer reachable from -nostdinc kernel builds in 5.15+.
+ * The kernel provides <linux/stdarg.h> as a wrapper since 5.15.
+ * Since kernel_compat.h is force-included via -include before any OSAL
+ * header, redirect <stdarg.h> to <linux/stdarg.h> for new kernels.
+ */
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(5, 15, 0)
+#include <linux/stdarg.h>
+#define stdarg_h  /* prevent re-inclusion of <stdarg.h> */
+#define _STDARG_H /* GCC internal guard */
+#define _ANSI_STDARG_H_ /* another common guard */
+#endif
+
+/*
  * Linux 7.0+ API changes
  */
 #if LINUX_VERSION_CODE >= KERNEL_VERSION(7, 0, 0)
