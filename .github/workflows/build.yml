@@ -482,13 +482,32 @@ jobs:
 
           echo
           echo "=== Checking for successful boot ==="
-          if grep -qE "Starting crond: OK" qemu-output.txt; then
-              echo "PASS: ${{ matrix.machine }} kernel booted to userspace"
-          else
-              echo "--- last 30 lines ---"
-              tail -30 qemu-output.txt
-              echo "FAIL: no 'Starting crond: OK' in QEMU output" >&2
+
+          fail_with() {
+              echo "--- last 50 lines of QEMU output ---"
+              tail -50 qemu-output.txt
+              echo "FAIL (${{ matrix.machine }}): $1" >&2
               exit 1
+          }
+
+          # Module-load regression checks — see OpenIPC/openhisilicon#62.
+          # A silent insmod/rmmod failure used to slip through because the only
+          # assertion was that crond reached userspace; load_hisilicon can exit
+          # mid-sequence and still get there.
+          if grep -q "insmod: can't insert" qemu-output.txt; then
+              fail_with "'insmod: can't insert' detected — module failed to load"
+          fi
+          if grep -qF "Error: There's something wrong, please check!" qemu-output.txt; then
+              fail_with "load_hisilicon report_error exit"
+          fi
+          if grep -q "Cannot get chip id" qemu-output.txt; then
+              fail_with "majestic 'Cannot get chip id' — sys module not active"
+          fi
+
+          if grep -qE "Starting crond: OK" qemu-output.txt; then
+              echo "PASS: ${{ matrix.machine }} kernel booted to userspace, no module-load regressions"
+          else
+              fail_with "no 'Starting crond: OK' in QEMU output"
           fi
 
       - name: Upload QEMU output
