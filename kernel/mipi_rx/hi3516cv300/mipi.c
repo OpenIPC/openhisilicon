@@ -19,6 +19,8 @@
  *      2013.04.03 create this file <zengwen@huawei.com>
  */
 
+#include <linux/module.h>
+
 #include "hi_osal.h"
 #include "hi_mipi.h"
 #include "mipi_hal.h"
@@ -2292,3 +2294,6 @@ void mipi_exit(void)
     osal_printk("unload hi_mipi driver successful!\n");
 }
 
+module_init(mipi_init);
+module_exit(mipi_exit);
+MODULE_LICENSE("GPL");

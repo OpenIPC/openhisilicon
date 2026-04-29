@@ -136,6 +136,38 @@ HI_VOID sensor_dev_exit(HI_S32 s32SensorIndex)
 	g_stSensorDev[s32SensorIndex] = NULL;
 }
 
+/* OpenIPC's load_hisilicon passes these as insmod parameters. We accept them
+ * (so insmod doesn't reject the module) but the actual bus configuration is
+ * driven later by user-space via the ISP callback path: the SDK populates
+ * g_stSensorDev[index]->stCtrlBus, then invokes sensor_dev_init() which
+ * dispatches into i2c_drv_init / ssp_drv_init based on the per-sensor bus
+ * type. So this module just needs to load cleanly with module_init returning
+ * 0 — the vendor's combined hi3516cv300_sensor.ko did the same.
+ */
+static int sensor_bus_type      = 0;
+static int sensor_clk_frequency = 0;
+static int sensor_pinmux_mode   = 0;
+module_param(sensor_bus_type,      int, S_IRUGO);
+MODULE_PARM_DESC(sensor_bus_type,      "Sensor control bus: 0=I2C, 1=SSP");
+module_param(sensor_clk_frequency, int, S_IRUGO);
+MODULE_PARM_DESC(sensor_clk_frequency, "Sensor clock frequency");
+module_param(sensor_pinmux_mode,   int, S_IRUGO);
+MODULE_PARM_DESC(sensor_pinmux_mode,   "Sensor pinmux mode");
+
+static int __init sensor_mod_init(void)
+{
+	osal_printk("load hi3516cv300_sensor.ko ... OK!\n");
+	return 0;
+}
+
+static void __exit sensor_mod_exit(void)
+{
+	osal_printk("unload hi3516cv300_sensor.ko ... OK!\n");
+}
+
+module_init(sensor_mod_init);
+module_exit(sensor_mod_exit);
+
 /* The kernel's i2c_new_device / i2c_unregister_device are EXPORT_SYMBOL_GPL,
  * so this module must declare a GPL-compatible license or insmod fails with
  * "Unknown symbol" on those calls in i2c_drv_init / i2c_drv_exit.
