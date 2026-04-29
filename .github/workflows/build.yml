@@ -491,11 +491,14 @@ jobs:
           }
 
           # Module-load regression checks — see OpenIPC/openhisilicon#62.
-          # A silent insmod/rmmod failure used to slip through because the only
-          # assertion was that crond reached userspace; load_hisilicon can exit
-          # mid-sequence and still get there.
-          if grep -q "insmod: can't insert" qemu-output.txt; then
-              fail_with "'insmod: can't insert' detected — module failed to load"
+          # The bug: load_hisilicon's remove_detect() rmmods modules by vendor
+          # name (mmz, hi_media, sys_config, hi_sensor_i2c, ...) but openhisilicon
+          # source-built modules announce themselves as open_* internally, so
+          # those rmmods fail silently. The previous QEMU assertion (just "crond
+          # reached userspace") missed it because the script exits cleanly when
+          # SENSOR=unknown and crond starts regardless.
+          if grep -qE "^rmmod: can't unload" qemu-output.txt; then
+              fail_with "rmmod failure during boot — vendor name does not match loaded module name (#62)"
           fi
           if grep -qF "Error: There's something wrong, please check!" qemu-output.txt; then
               fail_with "load_hisilicon report_error exit"
