@@ -1,3 +1,5 @@
+#include <linux/module.h>
+
 #include "hi_osal.h"
 
 #include "sensor.h"
@@ -133,3 +135,9 @@ HI_VOID sensor_dev_exit(HI_S32 s32SensorIndex)
     osal_printk("sensor dev exit OK.\n");
 	g_stSensorDev[s32SensorIndex] = NULL;
 }
+
+/* The kernel's i2c_new_device / i2c_unregister_device are EXPORT_SYMBOL_GPL,
+ * so this module must declare a GPL-compatible license or insmod fails with
+ * "Unknown symbol" on those calls in i2c_drv_init / i2c_drv_exit.
+ */
+MODULE_LICENSE("GPL");
