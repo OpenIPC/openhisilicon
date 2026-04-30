@@ -144,15 +144,17 @@ HI_VOID sensor_dev_exit(HI_S32 s32SensorIndex)
  * type. So this module just needs to load cleanly with module_init returning
  * 0 — the vendor's combined hi3516cv300_sensor.ko did the same.
  */
-static int sensor_bus_type      = 0;
-static int sensor_clk_frequency = 0;
-static int sensor_pinmux_mode   = 0;
-module_param(sensor_bus_type,      int, S_IRUGO);
-MODULE_PARM_DESC(sensor_bus_type,      "Sensor control bus: 0=I2C, 1=SSP");
-module_param(sensor_clk_frequency, int, S_IRUGO);
-MODULE_PARM_DESC(sensor_clk_frequency, "Sensor clock frequency");
-module_param(sensor_pinmux_mode,   int, S_IRUGO);
-MODULE_PARM_DESC(sensor_pinmux_mode,   "Sensor pinmux mode");
+/* load_hisilicon passes these as strings (e.g. sensor_bus_type="i2c",
+ * sensor_pinmux_mode="i2c_mipi") and a numeric Hz for the clock. */
+static char *sensor_bus_type      = "";
+static int   sensor_clk_frequency = 0;
+static char *sensor_pinmux_mode   = "";
+module_param(sensor_bus_type,      charp, S_IRUGO);
+MODULE_PARM_DESC(sensor_bus_type,      "Sensor control bus: i2c or ssp");
+module_param(sensor_clk_frequency, int,   S_IRUGO);
+MODULE_PARM_DESC(sensor_clk_frequency, "Sensor clock frequency in Hz");
+module_param(sensor_pinmux_mode,   charp, S_IRUGO);
+MODULE_PARM_DESC(sensor_pinmux_mode,   "Sensor pinmux mode (i2c_mipi/ssp_mipi/i2c_dc/ssp_dc)");
 
 static int __init sensor_mod_init(void)
 {
