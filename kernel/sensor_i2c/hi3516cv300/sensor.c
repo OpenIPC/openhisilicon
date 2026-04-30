@@ -1,5 +1,7 @@
 #include <linux/module.h>
 #include <linux/string.h>
+#include <linux/clk.h>
+#include <linux/err.h>
 
 #include "hi_osal.h"
 
@@ -149,12 +151,61 @@ MODULE_PARM_DESC(sensor_clk_frequency, "Sensor clock frequency in Hz");
 module_param(sensor_pinmux_mode,   charp, S_IRUGO);
 MODULE_PARM_DESC(sensor_pinmux_mode,   "Sensor pinmux mode (i2c_mipi/ssp_mipi/i2c_dc/ssp_dc)");
 
-/* Mirror what cv200/hi3519v101 do at module_init: bring up the kernel-side
- * i2c bus driver (i2c_new_device on bus 0) and register the read/write
- * callback with ISP so it can issue sensor register accesses through us.
- * Without this, the SDK's ISP_QueryExposureInfo / VENC chain never gets
- * stat data — frames land in MIPI/VI/ISP but ISP can't classify them
- * because the sensor side wasn't ever programmed at the kernel layer.
+/* clk_sensor / clk_mipi handles obtained at module_init. The cv300 SoC's
+ * sensor MCLK output is gated by the kernel CCF; until clk_prepare_enable
+ * is called the sensor sees no clock and does not respond to i2c — the
+ * symptom on real hardware is `hibvt-i2c wait idle abort` floods at the
+ * point libsns_<sensor>.so writes sensor config. The vendor's combined
+ * hi3516cv300_sensor.ko enabled these clocks at module_init from the
+ * sensor_clk_frequency= insmod param; openhisilicon's split form lost
+ * this setup. */
+static struct clk *g_sensor_clk;
+static struct clk *g_mipi_clk;
+
+static void sensor_clk_enable(void)
+{
+	g_sensor_clk = clk_get(NULL, "clk_sensor");
+	if (IS_ERR(g_sensor_clk)) {
+		osal_printk("hi3516cv300_sensor: clk_get(clk_sensor) failed (%ld)\n", PTR_ERR(g_sensor_clk));
+		g_sensor_clk = NULL;
+	} else {
+		if (sensor_clk_frequency > 0) {
+			clk_set_rate(g_sensor_clk, sensor_clk_frequency);
+		}
+		clk_prepare_enable(g_sensor_clk);
+	}
+
+	g_mipi_clk = clk_get(NULL, "clk_mipi");
+	if (IS_ERR(g_mipi_clk)) {
+		osal_printk("hi3516cv300_sensor: clk_get(clk_mipi) failed (%ld)\n", PTR_ERR(g_mipi_clk));
+		g_mipi_clk = NULL;
+	} else {
+		clk_prepare_enable(g_mipi_clk);
+	}
+}
+
+static void sensor_clk_disable(void)
+{
+	if (g_mipi_clk) {
+		clk_disable_unprepare(g_mipi_clk);
+		clk_put(g_mipi_clk);
+		g_mipi_clk = NULL;
+	}
+	if (g_sensor_clk) {
+		clk_disable_unprepare(g_sensor_clk);
+		clk_put(g_sensor_clk);
+		g_sensor_clk = NULL;
+	}
+}
+
+/* Mirror what cv200/hi3519v101 do at module_init: enable the SoC sensor and
+ * mipi clocks (vendor's combined hi3516cv300_sensor.ko did this from the
+ * sensor_clk_frequency insmod param), bring up the kernel-side i2c bus
+ * driver (i2c_new_device on bus 0), and register the read/write callback
+ * with ISP so it can issue sensor register accesses through us. Without
+ * any of this, the SDK's ISP_QueryExposureInfo / VENC chain never gets
+ * stat data — frames don't land in MIPI/VI/ISP because the sensor side
+ * wasn't ever programmed at the kernel layer.
  */
 static int __init sensor_mod_init(void)
 {
@@ -162,10 +213,13 @@ static int __init sensor_mod_init(void)
 	ISP_BUS_CALLBACK_S stBusCb = {0};
 	SENSOR_CTRL_OPS_S stCtrlOps = {0};
 
+	sensor_clk_enable();
+
 	if (sensor_bus_type && 0 == strcmp(sensor_bus_type, "ssp")) {
 		ret = ssp_drv_init(0);
 		if (ret) {
 			osal_printk("hi3516cv300_sensor: ssp_drv_init failed (%d)\n", ret);
+			sensor_clk_disable();
 			return ret;
 		}
 		ssp_get_ops(0, &stCtrlOps);
@@ -173,6 +227,7 @@ static int __init sensor_mod_init(void)
 		ret = i2c_drv_init(0);
 		if (ret) {
 			osal_printk("hi3516cv300_sensor: i2c_drv_init failed (%d)\n", ret);
+			sensor_clk_disable();
 			return ret;
 		}
 		i2c_get_ops(0, &stCtrlOps);
@@ -195,6 +250,7 @@ static void __exit sensor_mod_exit(void)
 	} else {
 		i2c_drv_exit(0);
 	}
+	sensor_clk_disable();
 	osal_printk("unload hi3516cv300_sensor.ko ... OK!\n");
 }
 
