@@ -2,6 +2,10 @@
 #include <linux/string.h>
 #include <linux/clk.h>
 #include <linux/err.h>
+#include <linux/of.h>
+#include <linux/of_platform.h>
+#include <linux/platform_device.h>
+#include <linux/pinctrl/consumer.h>
 
 #include "hi_osal.h"
 
@@ -151,61 +155,95 @@ MODULE_PARM_DESC(sensor_clk_frequency, "Sensor clock frequency in Hz");
 module_param(sensor_pinmux_mode,   charp, S_IRUGO);
 MODULE_PARM_DESC(sensor_pinmux_mode,   "Sensor pinmux mode (i2c_mipi/ssp_mipi/i2c_dc/ssp_dc)");
 
-/* clk_sensor / clk_mipi handles obtained at module_init. The cv300 SoC's
- * sensor MCLK output is gated by the kernel CCF; until clk_prepare_enable
- * is called the sensor sees no clock and does not respond to i2c — the
- * symptom on real hardware is `hibvt-i2c wait idle abort` floods at the
- * point libsns_<sensor>.so writes sensor config. The vendor's combined
- * hi3516cv300_sensor.ko enabled these clocks at module_init from the
- * sensor_clk_frequency= insmod param; openhisilicon's split form lost
- * this setup. */
-static struct clk *g_sensor_clk;
-static struct clk *g_mipi_clk;
+/* The cv300 SoC routes the sensor MCLK and pinmux through devicetree-bound
+ * resources: /media/sensor_device0 with `compatible = "hisilicon,hi35xx_sensor"`,
+ * exposing a clock phandle and pinctrl states named "i2c_mipi", "ssp_mipi",
+ * "i2c_dc", "ssp_dc", "sleep". The vendor's combined hi3516cv300_sensor.ko
+ * registered a platform_driver matching that node; its probe ran of_clk_get +
+ * clk_set_rate(sensor_clk_frequency) + clk_prepare_enable plus pinctrl_select
+ * for sensor_pinmux_mode. Without that setup the sensor MCLK stays gated
+ * (clk_summary shows `clk_sensor enable_cnt=0`), the IMX291 sees no clock
+ * and NACKs every i2c write — the `hibvt-i2c wait idle abort, RIS:0x611`
+ * flood — so MIPI never gets framed pixels, ISP stat buffers stay empty,
+ * VENC times out. Replicate the vendor's wiring as a platform_driver here
+ * so cv300 cameras stream again under the openhisilicon-built form. */
 
-static void sensor_clk_enable(void)
+static struct clk *g_sensor_clk;
+static struct pinctrl *g_pctrl;
+static struct platform_device *g_pdev;
+
+static int hi35xx_sensor_probe(struct platform_device *pdev)
 {
-	g_sensor_clk = clk_get(NULL, "clk_sensor");
+	struct device *dev = &pdev->dev;
+	struct device_node *np = dev->of_node;
+	struct pinctrl_state *state;
+	const char *pinmux_name;
+
+	/* Cache for unwind on driver remove (module_exit isn't always reached
+	 * before the device goes away during late shutdown). */
+	g_pdev = pdev;
+
+	g_sensor_clk = of_clk_get(np, 0);
 	if (IS_ERR(g_sensor_clk)) {
-		osal_printk("hi3516cv300_sensor: clk_get(clk_sensor) failed (%ld)\n", PTR_ERR(g_sensor_clk));
+		dev_err(dev, "of_clk_get failed (%ld)\n", PTR_ERR(g_sensor_clk));
 		g_sensor_clk = NULL;
 	} else {
-		if (sensor_clk_frequency > 0) {
+		if (sensor_clk_frequency > 0)
 			clk_set_rate(g_sensor_clk, sensor_clk_frequency);
-		}
 		clk_prepare_enable(g_sensor_clk);
 	}
 
-	g_mipi_clk = clk_get(NULL, "clk_mipi");
-	if (IS_ERR(g_mipi_clk)) {
-		osal_printk("hi3516cv300_sensor: clk_get(clk_mipi) failed (%ld)\n", PTR_ERR(g_mipi_clk));
-		g_mipi_clk = NULL;
+	g_pctrl = devm_pinctrl_get(dev);
+	if (IS_ERR(g_pctrl)) {
+		dev_warn(dev, "devm_pinctrl_get failed (%ld)\n", PTR_ERR(g_pctrl));
+		g_pctrl = NULL;
 	} else {
-		clk_prepare_enable(g_mipi_clk);
+		pinmux_name = (sensor_pinmux_mode && *sensor_pinmux_mode)
+			? sensor_pinmux_mode : "i2c_mipi";
+		state = pinctrl_lookup_state(g_pctrl, pinmux_name);
+		if (IS_ERR(state)) {
+			dev_warn(dev, "pinctrl state '%s' not found (%ld)\n",
+				 pinmux_name, PTR_ERR(state));
+		} else {
+			pinctrl_select_state(g_pctrl, state);
+		}
 	}
+
+	return 0;
 }
 
-static void sensor_clk_disable(void)
+static int hi35xx_sensor_remove(struct platform_device *pdev)
 {
-	if (g_mipi_clk) {
-		clk_disable_unprepare(g_mipi_clk);
-		clk_put(g_mipi_clk);
-		g_mipi_clk = NULL;
-	}
 	if (g_sensor_clk) {
 		clk_disable_unprepare(g_sensor_clk);
 		clk_put(g_sensor_clk);
 		g_sensor_clk = NULL;
 	}
+	g_pctrl = NULL;
+	g_pdev = NULL;
+	return 0;
 }
 
-/* Mirror what cv200/hi3519v101 do at module_init: enable the SoC sensor and
- * mipi clocks (vendor's combined hi3516cv300_sensor.ko did this from the
- * sensor_clk_frequency insmod param), bring up the kernel-side i2c bus
- * driver (i2c_new_device on bus 0), and register the read/write callback
- * with ISP so it can issue sensor register accesses through us. Without
- * any of this, the SDK's ISP_QueryExposureInfo / VENC chain never gets
- * stat data — frames don't land in MIPI/VI/ISP because the sensor side
- * wasn't ever programmed at the kernel layer.
+static const struct of_device_id hi35xx_sensor_match[] = {
+	{ .compatible = "hisilicon,hi35xx_sensor" },
+	{}
+};
+MODULE_DEVICE_TABLE(of, hi35xx_sensor_match);
+
+static struct platform_driver hi35xx_sensor_driver = {
+	.driver = {
+		.name = "hi35xx_sensor",
+		.of_match_table = hi35xx_sensor_match,
+	},
+	.probe  = hi35xx_sensor_probe,
+	.remove = hi35xx_sensor_remove,
+};
+
+/* On insmod we (1) register the platform_driver so the sensor clock + pinmux
+ * gets wired up via DT, then (2) bring the i2c bus driver up and register the
+ * ISP read/write callback. Order matters: i2c_drv_init's i2c_new_device call
+ * needs the bus to actually be alive (i.e. clock enabled, pinmux selected),
+ * otherwise the very first transaction NACKs and the sensor stays unreachable.
  */
 static int __init sensor_mod_init(void)
 {
@@ -213,13 +251,17 @@ static int __init sensor_mod_init(void)
 	ISP_BUS_CALLBACK_S stBusCb = {0};
 	SENSOR_CTRL_OPS_S stCtrlOps = {0};
 
-	sensor_clk_enable();
+	ret = platform_driver_register(&hi35xx_sensor_driver);
+	if (ret) {
+		osal_printk("hi3516cv300_sensor: platform_driver_register failed (%d)\n", ret);
+		return ret;
+	}
 
 	if (sensor_bus_type && 0 == strcmp(sensor_bus_type, "ssp")) {
 		ret = ssp_drv_init(0);
 		if (ret) {
 			osal_printk("hi3516cv300_sensor: ssp_drv_init failed (%d)\n", ret);
-			sensor_clk_disable();
+			platform_driver_unregister(&hi35xx_sensor_driver);
 			return ret;
 		}
 		ssp_get_ops(0, &stCtrlOps);
@@ -227,7 +269,7 @@ static int __init sensor_mod_init(void)
 		ret = i2c_drv_init(0);
 		if (ret) {
 			osal_printk("hi3516cv300_sensor: i2c_drv_init failed (%d)\n", ret);
-			sensor_clk_disable();
+			platform_driver_unregister(&hi35xx_sensor_driver);
 			return ret;
 		}
 		i2c_get_ops(0, &stCtrlOps);
@@ -250,7 +292,7 @@ static void __exit sensor_mod_exit(void)
 	} else {
 		i2c_drv_exit(0);
 	}
-	sensor_clk_disable();
+	platform_driver_unregister(&hi35xx_sensor_driver);
 	osal_printk("unload hi3516cv300_sensor.ko ... OK!\n");
 }
 
