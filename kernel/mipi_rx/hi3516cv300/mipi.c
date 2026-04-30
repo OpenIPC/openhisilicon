@@ -2291,4 +2291,3 @@ void mipi_exit(void)
     osal_mutex_destory(&hi_mipi_lock);
     osal_printk("unload hi_mipi driver successful!\n");
 }
-
