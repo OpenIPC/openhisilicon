@@ -75,7 +75,11 @@ unsigned int mipi_drv_init_reg(void)
 
     if (!gpMipiAllReg)
     {
-        gpMipiAllReg = (MIPI_REGS_TYPE_S*)OSAL_IO_ADDRESS(MIPI_BASE_ADDR);
+        /* OSAL_IO_ADDRESS is a hard panic on Linux >= 3.18 (see osal_ioaddress
+         * in kernel/osal/hi3516cv300/osal_addr.c). cv300's kernel is 3.18.20,
+         * so we must use osal_ioremap_nocache here to map the MIPI register
+         * region dynamically. */
+        gpMipiAllReg = (MIPI_REGS_TYPE_S*)osal_ioremap_nocache(MIPI_BASE_ADDR, sizeof(MIPI_REGS_TYPE_S));
         if(NULL == gpMipiAllReg)
         {
             ret = HI_FAILURE;
@@ -85,6 +89,15 @@ unsigned int mipi_drv_init_reg(void)
 
     HI_MSG("mipi_base_address: 0x%x\n", gpMipiAllReg);
     return ret;
+}
+
+void mipi_drv_exit_reg(void)
+{
+    if (gpMipiAllReg)
+    {
+        osal_iounmap(gpMipiAllReg);
+        gpMipiAllReg = NULL;
+    }
 }
 
 void mipi_drv_reset_sensor(COMBO_DEV dev)

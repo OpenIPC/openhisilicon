@@ -19,9 +19,13 @@
  *      2013.04.03 create this file <zengwen@huawei.com>
  */
 
+#include <linux/module.h>
+
 #include "hi_osal.h"
 #include "hi_mipi.h"
 #include "mipi_hal.h"
+
+extern void mipi_drv_exit_reg(void);
 
 /****************************************************************************
  * MACRO DEFINITION                                                         *
@@ -2288,6 +2292,12 @@ void mipi_exit(void)
     osal_destroydev(s_pstHiMipiDevice);
     s_pstHiMipiDevice = NULL;
 
+    mipi_drv_exit_reg();
+
     osal_mutex_destory(&hi_mipi_lock);
     osal_printk("unload hi_mipi driver successful!\n");
 }
+
+module_init(mipi_init);
+module_exit(mipi_exit);
+MODULE_LICENSE("GPL");
