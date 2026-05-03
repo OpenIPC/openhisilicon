@@ -81,8 +81,10 @@ unsigned int mipi_drv_init_reg(void)
 
     if (!gpMipiAllReg)
     {
-        gpMipiAllReg = (MIPI_REGS_TYPE_S*)OSAL_IO_ADDRESS(MIPI_BASE_ADDR);    
-
+        /* OSAL_IO_ADDRESS panics on Linux >= 3.18 (osal_ioaddress in
+         * kernel/osal/hi3519v101/osal_addr.c); v101 ships kernel 3.18.20,
+         * so map the MIPI register region with osal_ioremap_nocache. */
+        gpMipiAllReg = (MIPI_REGS_TYPE_S*)osal_ioremap_nocache(MIPI_BASE_ADDR, sizeof(MIPI_REGS_TYPE_S));
         if(NULL == gpMipiAllReg)
         {
             ret = HI_FAILURE;
@@ -109,6 +111,14 @@ unsigned int mipi_drv_init_reg(void)
     return ret;
 }
 
+void mipi_drv_exit_reg(void)
+{
+    if (gpMipiAllReg)
+    {
+        osal_iounmap(gpMipiAllReg);
+        gpMipiAllReg = NULL;
+    }
+}
 
 void mipi_drv_reset_sensor(COMBO_DEV dev)
 {
