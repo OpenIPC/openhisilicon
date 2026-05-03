@@ -171,6 +171,12 @@ make CROSS_COMPILE=arm-openipc-linux-musleabi- \
 
 Sensor drivers are per-platform — each generation's SDK provides drivers for the sensors available on boards of that era. Some sensors (like IMX307, OV2718) appear across multiple platforms.
 
+For the API surface differences between platforms — what changes in the
+`sensor_register_callback` signature across CV100 / CV200 / V101 / CV500 /
+EV200, the side-by-side porting diffs, and how to identify which SDK a
+sensor driver found online came from — see
+[**docs/sensor-driver-api.md**](docs/sensor-driver-api.md).
+
 | Manufacturer | Sensor | CV100 | CV200 | AV100 | CV300 | 3519V101 | CV500 | EV200 |
 |---|---|---|---|---|---|---|---|---|
 | **Sony** | IMX104 | x | | | | | | |
