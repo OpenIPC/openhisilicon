@@ -1,3 +1,4 @@
+#define _GNU_SOURCE
 #include <stdio.h>
 #include <string.h>
 #include <sys/types.h>
@@ -5,8 +6,45 @@
 #include <sys/ioctl.h>
 #include <fcntl.h>
 #include <unistd.h>
+#include <dlfcn.h>
 
 #include "hi_comm_video.h"
+
+/*
+ * ov2710_is_parallel_mode() — runtime interface-mode detection.
+ *
+ * OV2710 supports both MIPI and DVP/parallel output. Which one a board uses
+ * is wired in PCB; the streamer (e.g. majestic) doesn't know either. To let
+ * a single .so cover both, we ship one physical binary plus thin symlinks:
+ *
+ *     /usr/lib/sensors/libsns_ov2710.so          (real .so, defaults to MIPI)
+ *     /usr/lib/sensors/libsns_ov2710_mipi.so  -> libsns_ov2710.so
+ *     /usr/lib/sensors/libsns_ov2710_dc.so    -> libsns_ov2710.so
+ *
+ * The .ini file (or whatever the streamer reads) selects the path; dlopen
+ * follows the symlink to the same file but the dynamic linker remembers the
+ * path string the caller passed in. dladdr() reads that back from any
+ * address inside this DSO, and we key off the "_dc." substring in the
+ * basename to flip the four interface-specific register writes.
+ *
+ * Default (canonical or _mipi-named path): MIPI, the more common case.
+ */
+static int ov2710_is_parallel_mode(void)
+{
+	Dl_info info;
+	const char *base;
+
+	if (dladdr((void *)&ov2710_is_parallel_mode, &info) == 0)
+		return 0;
+	if (info.dli_fname == NULL)
+		return 0;
+
+	base = strrchr(info.dli_fname, '/');
+	base = base ? base + 1 : info.dli_fname;
+
+	/* Match suffix before extension, e.g. libsns_ov2710_dc.so */
+	return strstr(base, "_dc.") != NULL;
+}
 
 #ifdef HI_GPIO_I2C
 #include "gpioi2c_ex.h"
@@ -277,24 +315,27 @@ void sensor_linear_1080p30_init()
     sensor_write_register(0x5686,0x04);
     sensor_write_register(0x5687,0x43);
 
-#ifdef OV2710_PARALLEL
-    /* DVP/parallel output (cv100 V1 reference register values) */
-    sensor_write_register(0x3011,0x28);
-    sensor_write_register(0x300f,0x88);
+    {
+        int parallel = ov2710_is_parallel_mode();
+        if (parallel) {
+            /* DVP/parallel output (cv100 V1 reference register values) */
+            sensor_write_register(0x3011, 0x28);
+            sensor_write_register(0x300f, 0x88);
 
-    usleep(10*1000);
-    /* 0x300e/0x3030/0x4801 are MIPI-only, omitted in parallel mode */
-#else
-    /* MIPI output (default) */
-    sensor_write_register(0x3011,0x0a);
-    sensor_write_register(0x300f,0xc3);
+            usleep(10*1000);
+            /* 0x300e/0x3030/0x4801 are MIPI-only, omitted in parallel mode */
+        } else {
+            /* MIPI output (default) */
+            sensor_write_register(0x3011, 0x0a);
+            sensor_write_register(0x300f, 0xc3);
 
-    usleep(10*1000);
+            usleep(10*1000);
 
-    sensor_write_register(0x300e,0x04);
-    sensor_write_register(0x3030,0x2b);
-    sensor_write_register(0x4801,0x0f);
-#endif
+            sensor_write_register(0x300e, 0x04);
+            sensor_write_register(0x3030, 0x2b);
+            sensor_write_register(0x4801, 0x0f);
+        }
+    }
 
     sensor_write_register(0x3a0f,0x40);
     sensor_write_register(0x3a10,0x38);
@@ -339,11 +380,8 @@ void sensor_linear_1080p30_init()
 
     bSensorInit = HI_TRUE;
     printf("======================================================================\n");
-#ifdef OV2710_PARALLEL
-    printf("===omnivision ov2710 sensor 1080P30fps(DVP/parallel port) init success!===\n");
-#else
-    printf("===omnivision ov2710 sensor 1080P30fps(MIPI port) init success!===\n");
-#endif
+    printf("===omnivision ov2710 sensor 1080P30fps(%s port) init success!===\n",
+           ov2710_is_parallel_mode() ? "DVP/parallel" : "MIPI");
     printf("======================================================================\n");
     return;
 }
