@@ -957,6 +957,7 @@ static int media_mem_parse_cmdline(char *s)
 {
 	hil_mmz_t *zone = NULL;
 	char *line;
+	int attempted = 0, registered = 0;
 
 	while( (line = strsep(&s,":")) !=NULL) {
 		int i;
@@ -992,12 +993,21 @@ static int media_mem_parse_cmdline(char *s)
 			printk(KERN_ERR "MMZ: your parameter num is not correct!\n");	
 			continue;
 		}
-		mmz_info_phys_start = zone->phys_start + zone->nbytes - 0x2000;	
+		mmz_info_phys_start = zone->phys_start + zone->nbytes - 0x2000;
+		attempted++;
 		if (hil_mmz_register(zone)) {
 			printk(KERN_WARNING "Add MMZ failed: " HIL_MMZ_FMT_S "\n", hil_mmz_fmt_arg(zone));
 			hil_mmz_destroy(zone);
+		} else {
+			registered++;
 		}
 		zone = NULL;
+	}
+
+	if (attempted > 0 && registered == 0) {
+		printk(KERN_ERR "MMZ: all %d configured zone(s) failed to register; refusing to load\n",
+				attempted);
+		return -ENODEV;
 	}
 
 	return 0;
@@ -1150,11 +1160,15 @@ MODULE_PARM_DESC(mmz,"mmz=name,0,start,size,type,eqsize:[others]");
 
 static int __init media_mem_init(void)
 {
+	int ret;
+
 	printk(KERN_INFO "Hisilicon Media Memory Zone Manager\n");
 
 	media_mem_proc_init();
 
-	media_mem_parse_cmdline(setup_zones);
+	ret = media_mem_parse_cmdline(setup_zones);
+	if (ret)
+		return ret;
 
 	//kcom_mmz_register();
 

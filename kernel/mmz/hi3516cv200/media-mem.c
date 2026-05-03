@@ -1028,6 +1028,7 @@ static int media_mem_parse_cmdline(char *s)
 	hil_mmz_t *zone = NULL;
 	char *line;
     unsigned long phys_end = 0;
+	int attempted = 0, registered = 0;
 
 	while( (line = strsep(&s,":")) !=NULL) {
 		int i;
@@ -1065,10 +1066,14 @@ static int media_mem_parse_cmdline(char *s)
 		}
 		mmz_info_phys_start = zone->phys_start + zone->nbytes - 0x2000;
 
+		attempted++;
 		if (hil_mmz_register(zone)) {
 			printk(KERN_WARNING "Add MMZ failed: " HIL_MMZ_FMT_S "\n", hil_mmz_fmt_arg(zone));
 			hil_mmz_destroy(zone);
+			zone = NULL;
+			continue;
 		}
+		registered++;
 
         // if phys_end is 0xFFFFFFFF (32bit)
         phys_end = (zone->phys_start + zone->nbytes);
@@ -1087,6 +1092,12 @@ static int media_mem_parse_cmdline(char *s)
         }
 
 		zone = NULL;
+	}
+
+	if (attempted > 0 && registered == 0) {
+		printk(KERN_ERR "MMZ: all %d configured zone(s) failed to register; refusing to load\n",
+				attempted);
+		return -ENODEV;
 	}
 
 	return 0;

@@ -15,6 +15,8 @@
 
 static int __init osal_init(void)
 {
+    int ret;
+
     if (mem_check_module_param() == -1) {
         return -1;
     }
@@ -22,7 +24,12 @@ static int __init osal_init(void)
     osal_device_init();
     osal_proc_init();
     himedia_init();
-    media_mem_init();
+    ret = media_mem_init();
+    if (ret) {
+        himedia_exit();
+        osal_proc_exit();
+        return ret;
+    }
     osal_printk("hi_osal %s init success!\n", HI_OSAL_VERSION);
     return 0;
 }
