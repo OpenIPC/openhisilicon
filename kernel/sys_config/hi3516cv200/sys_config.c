@@ -601,6 +601,30 @@ static void insert_sns(void)
 
 		sys_write_reg(0x2003002c, 0xc4001);			// sensor unreset, clk 24MHz, VI 99MHz
 	}
+    else if (!strcmp(sensor, "ov2710_mipi"))
+	{
+		// MIPI variant — uses libsns_ov2710_mipi.so via ov2710_mipi_1080p.ini
+		sys_write_reg(0x200f0040, 0x2);    			// I2C0_SCL
+		sys_write_reg(0x200f0044, 0x2);    			// I2C0_SDA
+
+		sys_write_reg(0x2003002c, 0xc4001);			// sensor unreset, clk 24MHz, VI 99MHz
+	}
+    else if (!strcmp(sensor, "ov2710_dc"))
+	{
+		// DVP/parallel variant — uses libsns_ov2710_dc.so via ov2710_dc_1080p.ini
+		sys_write_reg(0x200f0040, 0x2);    			// I2C0_SCL
+		sys_write_reg(0x200f0044, 0x2);    			// I2C0_SDA
+
+		sys_write_reg(0x200f007c, 0x1);    			// VI_DATA13
+		sys_write_reg(0x200f0080, 0x1);    			// VI_DATA10
+		sys_write_reg(0x200f0084, 0x1);    			// VI_DATA12
+		sys_write_reg(0x200f0088, 0x1);    			// VI_DATA11
+		sys_write_reg(0x200f008c, 0x2);    			// VI_VS
+		sys_write_reg(0x200f0090, 0x2);    			// VI_HS
+		sys_write_reg(0x200f0094, 0x1);    			// VI_DATA9
+
+		sys_write_reg(0x2003002c, 0xc4001);			// sensor unreset, clk 24MHz, VI 99MHz
+	}
     else if (!strcmp(sensor, "bt1120"))
     {
         sys_write_reg( 0x200f0008, 0x4 );    			// VI_VS
