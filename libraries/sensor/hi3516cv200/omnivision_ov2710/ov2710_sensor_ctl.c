@@ -277,7 +277,15 @@ void sensor_linear_1080p30_init()
     sensor_write_register(0x5686,0x04);
     sensor_write_register(0x5687,0x43);
 
-    //set for mipi
+#ifdef OV2710_PARALLEL
+    /* DVP/parallel output (cv100 V1 reference register values) */
+    sensor_write_register(0x3011,0x28);
+    sensor_write_register(0x300f,0x88);
+
+    usleep(10*1000);
+    /* 0x300e/0x3030/0x4801 are MIPI-only, omitted in parallel mode */
+#else
+    /* MIPI output (default) */
     sensor_write_register(0x3011,0x0a);
     sensor_write_register(0x300f,0xc3);
 
@@ -286,6 +294,7 @@ void sensor_linear_1080p30_init()
     sensor_write_register(0x300e,0x04);
     sensor_write_register(0x3030,0x2b);
     sensor_write_register(0x4801,0x0f);
+#endif
 
     sensor_write_register(0x3a0f,0x40);
     sensor_write_register(0x3a10,0x38);
@@ -330,7 +339,11 @@ void sensor_linear_1080p30_init()
 
     bSensorInit = HI_TRUE;
     printf("======================================================================\n");
-    printf("===omnivision ov2710 sensor 1080P30fps(mipi port) init success!===\n");
+#ifdef OV2710_PARALLEL
+    printf("===omnivision ov2710 sensor 1080P30fps(DVP/parallel port) init success!===\n");
+#else
+    printf("===omnivision ov2710 sensor 1080P30fps(MIPI port) init success!===\n");
+#endif
     printf("======================================================================\n");
     return;
 }
