@@ -542,10 +542,11 @@ static void __mmf_unmap(void *virt)
 
 static int __allocator_init(char *s)
 {
-    #ifdef CONFIG_CMA 
+    #ifdef CONFIG_CMA
 	hil_mmz_t *zone = NULL;
 	char *line;
 	struct cma_zone *cma_zone = NULL;
+	int attempted = 0, registered = 0;
 
 	while ((line = strsep(&s, ":")) != NULL) {
 		int i;
@@ -601,12 +602,21 @@ static int __allocator_init(char *s)
 			continue;
 		}
 
+		attempted++;
 		if (hil_mmz_register(zone)) {
 			printk(KERN_WARNING "Add MMZ failed: " HIL_MMZ_FMT_S "\n", hil_mmz_fmt_arg(zone));
 			hil_mmz_destroy(zone);
+		} else {
+			registered++;
 		}
 
 		zone = NULL;
+	}
+
+	if (attempted > 0 && registered == 0) {
+		printk(KERN_ERR "MMZ: all %d configured zone(s) failed to register; refusing to load\n",
+				attempted);
+		return -ENODEV;
 	}
     #endif
 	return 0;

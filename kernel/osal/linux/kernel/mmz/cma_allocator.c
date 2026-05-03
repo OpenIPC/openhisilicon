@@ -543,6 +543,7 @@ static int __allocator_init(char *s)
 	mmz_mmz_t *zone = NULL;
 	char *line = NULL;
 	struct cma_zone *cma_zone = NULL;
+	int attempted = 0, registered = 0;
 
 	while ((line = strsep(&s, ":")) != NULL) {
 		int i;
@@ -592,13 +593,22 @@ static int __allocator_init(char *s)
 			continue;
 		}
 
+		attempted++;
 		if (mmz_mmz_register(zone)) {
 			printk(KERN_WARNING "Add MMZ failed: " MMZ_MMZ_FMT_S "\n",
 			       mmz_mmz_fmt_arg(zone));
 			mmz_mmz_destroy(zone);
+		} else {
+			registered++;
 		}
 
 		zone = NULL;
+	}
+
+	if (attempted > 0 && registered == 0) {
+		printk(KERN_ERR "MMZ: all %d configured zone(s) failed to register; refusing to load\n",
+				attempted);
+		return -ENODEV;
 	}
 
 	return 0;

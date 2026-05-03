@@ -484,6 +484,7 @@ static int __allocator_init(char *s)
 {
 	hil_mmz_t *zone = NULL;
 	char *line;
+	int attempted = 0, registered = 0;
 
 	while ((line = strsep(&s, ":")) != NULL) {
 		int i;
@@ -519,11 +520,20 @@ static int __allocator_init(char *s)
 
 		//mmz_info_phys_start = zone->phys_start + zone->nbytes - 0x2000;
 
+		attempted++;
 		if (hil_mmz_register(zone)) {
 			printk(KERN_WARNING "Add MMZ failed: " HIL_MMZ_FMT_S "\n", hil_mmz_fmt_arg(zone));
 			hil_mmz_destroy(zone);
+		} else {
+			registered++;
 		}
 		zone = NULL;
+	}
+
+	if (attempted > 0 && registered == 0) {
+		printk(KERN_ERR "MMZ: all %d configured zone(s) failed to register; refusing to load\n",
+				attempted);
+		return -ENODEV;
 	}
 
 	return 0;
