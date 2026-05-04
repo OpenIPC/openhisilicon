@@ -220,7 +220,7 @@ sensor driver found online came from — see
 | **SmartSens** | SC1135 | | x | | | | | |
 | | SC2035 | | x | | | | | |
 | | SC2135 | | x | | | | | |
-| | SC2235 | | | | x | | | x |
+| | SC2235 | | x | | x | | | x |
 | | SC4210 | | | | | | x | |
 | | SC4236 | | | x | | | | x |
 | **Panasonic** | MN34031 | x | | | | | | |
