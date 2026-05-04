@@ -194,7 +194,7 @@ sensor driver found online came from — see
 | | IMX307 | | | | x | | x | x |
 | | IMX323 | | | | x | | | |
 | | IMX326 | | | | | x | | |
-| | IMX327 | | | | | | x | x |
+| | IMX327 | | | | | x | x | x |
 | | IMX335 | | | | | | x | x |
 | | IMX385 | | | | x | x | | |
 | | IMX390 | | | | | | x | |
@@ -224,6 +224,11 @@ sensor driver found online came from — see
 | | MN34041 | x | | | | | | |
 | | MN34220 | | | x | | | x | |
 | | MN34222 | | x | | | | | |
+| **Silicon Optronics (JX)** | JXH22 | x | | | | | | |
+| | JXH42 | x | | | | | | |
+| | JXH63 | | | | | | | x |
+| | JXF22 | | | | x | | | |
+| | JXF37 | | | | | | | x |
 | **GalaxyCore** | GC2053 | | | | | | x | x |
 
 Each sensor has `.so` (shared) and `.a` (static) library builds. The goal is to eventually unify sensor drivers across platforms where the same sensor model is used.

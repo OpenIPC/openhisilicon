@@ -3,10 +3,13 @@
 
 #include <stdio.h>
 #include <string.h>
+#include <assert.h>
 #include "hi_comm_sns.h"
 #include "hi_sns_ctrl.h"
 #include "mpi_isp.h"
-#include "hi_isp_debug.h"
+#include "mpi_ae.h"
+#include "mpi_awb.h"
+#include "mpi_af.h"
 
 #ifdef __cplusplus
 #if __cplusplus
@@ -14,87 +17,86 @@ extern "C"{
 #endif
 #endif /* End of #ifdef __cplusplus */
 
+#define MT9P006_ID 9006
+
+/*set Frame End Update Mode 2 with HI_MPI_ISP_SetAEAttr and set this value 1 to avoid flicker */
+/*when use Frame End Update Mode 2, the speed of i2c will affect whole system's performance   */
+/*increase I2C_DFT_RATE in Hii2c.c to 400000 to increase the speed of i2c                     */
+#define CMOS_MT9P006_ISP_WRITE_SENSOR_ENABLE (1)
 /****************************************************************************
- * local variables															*
+ * local variables                                                            *
  ****************************************************************************/
 
 extern const unsigned int sensor_i2c_addr;
 extern const unsigned int sensor_addr_byte;
 extern const unsigned int sensor_data_byte;
 
-static cmos_inttime_t cmos_inttime;
-static cmos_gains_t cmos_gains;
-static HI_U8 gu8SensorMode = 0;
+HI_U32 gu32FullLinesStd = 1132;
+HI_U8 gu8SensorMode = 0;
+#if CMOS_MT9P006_ISP_WRITE_SENSOR_ENABLE
+ISP_SNS_REGS_INFO_S g_stSnsRegsInfo = {0};
+static HI_BOOL gsbRegInit = HI_FALSE;
+#endif
 
-/****************************************************************************
- * MACRO DEFINITION                                                         *
- ****************************************************************************/
-
-/*set Frame End Update Mode 2 with HI_MPI_ISP_SetAEAttr and set this value 1 to avoid flicker */
-/*when use Frame End Update Mode 2, the speed of i2c will affect whole system's performance   */
-/*increase I2C_DFT_RATE in Hii2c.c to 400000 to increase the speed of i2c                     */
-#define CMOS_MT9P006_ISP_WRITE_SENSOR_ENABLE (1)
-
-static cmos_isp_default_t st_coms_isp_default = 
+static AWB_CCM_S g_stAwbCcm =
 {
-	// color matrix[9]
-    {
-        5000,
-        {   0x0236, 0x80fd, 0x8039,
-            0x804b, 0x018d, 0x8041,
-            0x8006, 0x80ca, 0x01d0
-        },
-        3200,
-        {   0x025a, 0x80e7, 0x8073,
-            0x8078, 0x01b5, 0x803d,
-            0x802b, 0x8119, 0x0244
-        },
-        2450,
-        {
-            0x0214, 0x8089, 0x808b,
-            0x809d, 0x01ce, 0x8031,
-            0x8068, 0x81e7, 0x034f
-        }
-    },
-
-
-	// black level
-	{0xAc,0xAc,0xAc,0xAc},
-
-    //calibration reference color temperature 
     5000,
-
-    //WB gain at 6500K, must keep consistent with calibration color temperature 
-	{0x158, 0x100, 0x100, 0x18f},
-
-    // WB curve parameters, must keep consistent with reference color temperature.
-	{89, 3, -164, 232133, 128, -183491},
-
-	// hist_thresh
-	{0xd,0x28,0x60,0x80},
-
-	0x0,	// iridix_balck
-	0x1,	// grbg
-
-	/* limit max gain for reducing noise,    */
-    /* when again equals its max value,there will be much noise */
-	0x8,	0x10,
-
-	// iridix
-	0x04,	0x08,	0xa0, 	0x4ff,
-
-	0x1, 	// balance_fe
-	0x80,	// ae compensation
-	0x15, 	// sinter threshold
-
-	0x0,  0,  0,  //noise profile=0, use the default noise profile lut, don't need to set nr0 and nr1
-
-    2
+    {   0x0236, 0x80fd, 0x8039,
+        0x804b, 0x018d, 0x8041,
+        0x8006, 0x80ca, 0x01d0
+    },
+    3200,
+    {   0x025a, 0x80e7, 0x8073,
+        0x8078, 0x01b5, 0x803d,
+        0x802b, 0x8119, 0x0244
+    },
+    2450,
+    {
+        0x0214, 0x8089, 0x808b,
+        0x809d, 0x01ce, 0x8031,
+        0x8068, 0x81e7, 0x034f
+    }
 };
 
-static cmos_isp_noise_table_t st_isp_noise_table =
+static AWB_AGC_TABLE_S g_stAwbAgcTable =
 {
-    //nosie_profile_weight_lut
+    /* bvalid */
+    1,
+
+    /* saturation */    
+    {0x80,0x80,0x80,0x80,0x68,0x48,0x35,0x30}
+};
+
+static ISP_CMOS_AGC_TABLE_S g_stIspAgcTable =
+{
+    /* bvalid */
+    1,
+
+    /* sharpen_alt_d */
+    {0xeb,0xea,0xe9,0xe8,0xe7,0xe6,0xe5,0x89},
+        
+    /* sharpen_alt_ud */
+    {0xa2,0xa0,0x97,0x91,0x90,0x8e,0x3e,0x3c},
+        
+    /* snr_thresh */
+    {0x13,0x14,0x16,0x25,0x2a,0x2e,0x3a,0x44},
+        
+    /* demosaic_lum_thresh */
+    {0x40,0x60,0x80,0x80,0x80,0x80,0x80,0x80},
+        
+    /* demosaic_np_offset */
+    {0x0,0xa,0x12,0x1a,0x20,0x28,0x30,0x30},
+        
+    /* ge_strength */
+    {0x55,0x55,0x55,0x55,0x55,0x55,0x55,0x55}
+};
+
+static ISP_CMOS_NOISE_TABLE_S g_stIspNoiseTable =
+{
+    /* bvalid */
+    1,
+    
+    /* nosie_profile_weight_lut */
     {0x0,0x0,0x0,0x0,0x0,0x0,0x2a,0x2e,0x30,0x32,0x33,0x34,0x35,0x36,0x36,0x37,0x38,0x38,
 	0x38,0x39,0x39,0x3a,0x3a,0x3a,0x3b,0x3b,0x3b,0x3c,0x3c,0x3c,0x3c,0x3c,0x3d,0x3d,0x3d,
 	0x3d,0x3e,0x3e,0x3e,0x3e,0x3e,0x3e,0x3f,0x3f,0x3f,0x3f,0x3f,0x3f,0x3f,0x40,0x40,0x40,
@@ -104,7 +106,7 @@ static cmos_isp_noise_table_t st_isp_noise_table =
 	0x44,0x44,0x44,0x44,0x44,0x44,0x44,0x45,0x45,0x45,0x45,0x45,0x45,0x45,0x45,0x45,0x45,
 	0x45,0x45,0x45,0x45,0x45,0x45,0x45,0x45},
 
-    //demosaic_weight_lut
+    /* demosaic_weight_lut */
     {0x0,0x2a,0x2e,0x30,0x32,0x33,0x34,0x35,0x36,0x36,0x37,0x38,0x38,0x38,0x39,0x39,0x3a,
 	0x3a,0x3a,0x3b,0x3b,0x3b,0x3c,0x3c,0x3c,0x3c,0x3c,0x3d,0x3d,0x3d,0x3d,0x3e,0x3e,0x3e,
 	0x3e,0x3e,0x3e,0x3f,0x3f,0x3f,0x3f,0x3f,0x3f,0x3f,0x40,0x40,0x40,0x40,0x40,0x40,0x40,
@@ -115,34 +117,11 @@ static cmos_isp_noise_table_t st_isp_noise_table =
 	0x45,0x45,0x45,0x45,0x45,0x45,0x45,0x45,0x45}
 };
 
-static cmos_isp_agc_table_t st_isp_agc_table =
+static ISP_CMOS_DEMOSAIC_S g_stIspDemosaic =
 {
-    //sharpen_alt_d
-    {0xeb,0xea,0xe9,0xe8,0xe7,0xe6,0xe5,0x89},
-
-    //sharpen_alt_ud
-    {0xa2,0xa0,0x97,0x91,0x90,0x8e,0x3e,0x3c},
-
-    //snr_thresh
-    {0x13,0x14,0x16,0x25,0x2a,0x2e,0x3a,0x44},
-
-    //demosaic_lum_thresh
-    {0x40,0x60,0x80,0x80,0x80,0x80,0x80,0x80},
-
-    //demosaic_np_offset
-    {0x0,0xa,0x12,0x1a,0x20,0x28,0x30,0x30},
-
-    //ge_strength
-    {0x55,0x55,0x55,0x55,0x55,0x55,0x55,0x55},
-
-    /* saturation */
-    {0x80,0x80,0x80,0x80,0x68,0x48,0x35,0x30}
-
-};
-
-
-static cmos_isp_demosaic_t st_isp_demosaic =
-{
+    /* bvalid */
+    1,
+    
     /*vh_slope*/
     0xc2,
 
@@ -180,434 +159,78 @@ static cmos_isp_demosaic_t st_isp_demosaic =
     0x1b3
 };
 
-/*
- * This function initialises an instance of cmos_inttime_t.
- */
-static __inline cmos_inttime_const_ptr_t cmos_inttime_initialize()
+HI_U32 cmos_get_isp_default(ISP_CMOS_DEFAULT_S *pstDef)
 {
-	cmos_inttime.full_lines_std = 1132;
-	cmos_inttime.full_lines_std_30fps = 1132;
-    cmos_inttime.full_lines_std_25fps = 1358;
-	cmos_inttime.vblanking_lines = 48;
+    if (HI_NULL == pstDef)
+    {
+        printf("null pointer when get isp default value!\n");
+        return -1;
+    }
 
-	cmos_inttime.exposure_ashort = 0;
-	cmos_inttime.exposure_shift = 0;
+    memset(pstDef, 0, sizeof(ISP_CMOS_DEFAULT_S));
 
-	cmos_inttime.lines_per_500ms = cmos_inttime.full_lines_std_30fps * 30 / 2;
-	cmos_inttime.flicker_freq = 0;//60*256;//50*256;
+    pstDef->stComm.u8Rggb           = 0x1;
+    pstDef->stComm.u8BalanceFe      = 0x1;
 
-	return &cmos_inttime;
+    pstDef->stDenoise.u8SinterThresh= 0x15;
+    pstDef->stDenoise.u8NoiseProfile= 0x0;      //0: use default profile table; 1: use calibrated profile lut, the setting for nr0 and nr1 must be correct.
+    pstDef->stDenoise.u16Nr0        = 0x0;
+    pstDef->stDenoise.u16Nr1        = 0x0;
+
+    pstDef->stDrc.u8DrcBlack        = 0x00;
+    pstDef->stDrc.u8DrcVs           = 0x04;     // variance space
+    pstDef->stDrc.u8DrcVi           = 0x08;     // variance intensity
+    pstDef->stDrc.u8DrcSm           = 0xa0;     // slope max
+    pstDef->stDrc.u16DrcWl          = 0x4FF;    // white level
+
+    memcpy(&pstDef->stNoiseTbl, &g_stIspNoiseTable, sizeof(ISP_CMOS_NOISE_TABLE_S));            
+    memcpy(&pstDef->stAgcTbl, &g_stIspAgcTable, sizeof(ISP_CMOS_AGC_TABLE_S));
+    memcpy(&pstDef->stDemosaic, &g_stIspDemosaic, sizeof(ISP_CMOS_DEMOSAIC_S));
+
+    return 0;
 }
 
-/*
- * This function applies the new integration time to the ISP registers.
- */
-static __inline void cmos_inttime_update(cmos_inttime_ptr_t p_inttime) 
+HI_U32 cmos_get_isp_black_level(ISP_CMOS_BLACK_LEVEL_S *pstBlackLevel)
 {
-#if CMOS_MT9P006_ISP_WRITE_SENSOR_ENABLE
-    ISP_I2C_DATA_S stI2cData;
-
-    stI2cData.bDelayCfg = HI_FALSE;
-    stI2cData.u8DevAddr = sensor_i2c_addr;
-    stI2cData.u32AddrByteNum = sensor_addr_byte;
-    stI2cData.u32DataByteNum = sensor_data_byte;
-    stI2cData.u32RegAddr = 0x09;
-    stI2cData.u32Data = p_inttime->exposure_ashort & 0xffff;
-    HI_MPI_ISP_I2cWrite(&stI2cData);        
-#else
-    //when set exposure time more than one frame, the sensor's fps will be decreased automatically
-    sensor_write_register(0x09, p_inttime->exposure_ashort & 0xffff);
-    //sensor_write_register(0x08, (p_inttime->exposure_ashort >> 16) & 0xffff);
-#endif
-}
-
-/*
- * This function applies the new vert blanking porch to the ISP registers.
- */
-static __inline void cmos_vblanking_update(cmos_inttime_const_ptr_t p_inttime)
-{
-    HI_U16 _vblanking_lines = p_inttime->vblanking_lines;
-
-    _vblanking_lines = (_vblanking_lines > 2048)? 2048: _vblanking_lines;
-    sensor_write_register(0x06, _vblanking_lines - 1);
-
-}
-
-static __inline HI_U16 vblanking_calculate(
-		cmos_inttime_ptr_t p_inttime)
-{
-
-	if(p_inttime->exposure_ashort >= p_inttime->full_lines - 2)
-	{
-		p_inttime->exposure_ashort = p_inttime->full_lines - 2;
-	}
-
-	p_inttime->vblanking_lines = p_inttime->full_lines - 1084;
+    HI_S32  i;
     
-	return p_inttime->exposure_ashort;
-}
+    if (HI_NULL == pstBlackLevel)
+    {
+        printf("null pointer when get isp black level value!\n");
+        return -1;
+    }
 
-/* Set fps base */
-static __inline void cmos_fps_set(
-		cmos_inttime_ptr_t p_inttime,
-		const HI_U8 fps
-		)
-{
-	switch(fps)
-	{
-		case 30:
-			// Change the frame rate via changing the horizontal blanking
-			p_inttime->full_lines_std = cmos_inttime.full_lines_std_30fps;
-    		break;
-		case 25:
-			// Change the frame rate via changing both vertical and horizontal blanking
-			p_inttime->full_lines_std = cmos_inttime.full_lines_std_25fps;
-    		break;
-        default:
-            break;
-	}
+    /* Don't need to update black level when iso change */
+    pstBlackLevel->bUpdate = HI_FALSE;
     
+    for (i=0; i<4; i++)
+    {
+        pstBlackLevel->au16BlackLevel[i] = 0xAc;
+    }
+
+    return 0;    
 }
 
-/*
- * This function initialises an instance of cmos_gains_t.
- */
-static __inline cmos_gains_ptr_t cmos_gains_initialize()
+HI_VOID cmos_set_pixel_detect(HI_BOOL bEnable)
 {
-    cmos_gains.max_again = 126;
-	cmos_gains.max_dgain = 128;
-
-	cmos_gains.again_shift = 3;
-	cmos_gains.dgain_shift = 3;
-	cmos_gains.dgain_fine_shift = 0;
-    cmos_gains.isp_dgain_shift = 8;
-    cmos_gains.isp_dgain = 1 << cmos_gains.isp_dgain_shift;  
-    cmos_gains.max_isp_dgain_target = 4 << cmos_gains.isp_dgain_shift;
-    cmos_gains.isp_dgain_delay_cfg = HI_TRUE;
-	
-	return &cmos_gains;
-}
-
-/*
- * This function applies the new gains to the ISP registers.
- */
-static __inline void cmos_gains_update(cmos_gains_const_ptr_t p_gains)
-{
-#if CMOS_MT9P006_ISP_WRITE_SENSOR_ENABLE
-    ISP_I2C_DATA_S stI2cData;
-
-    stI2cData.bDelayCfg = HI_TRUE;
-    stI2cData.u8DevAddr = sensor_i2c_addr;
-    stI2cData.u32AddrByteNum = sensor_addr_byte;
-    stI2cData.u32DataByteNum = sensor_data_byte;
-    stI2cData.u32RegAddr = 0x35;
-    stI2cData.u32Data = (((p_gains->dgain - 8) << 8) 
-        + ((p_gains->again > 32) ? (0x40 + (p_gains->again >> 1)) : p_gains->again));
-    HI_MPI_ISP_I2cWrite(&stI2cData);
-
-    stI2cData.u32RegAddr = 0x3e;
-    if(p_gains->again > 32)
+    if (bEnable) /* setup for ISP pixel calibration mode */
     {
-        stI2cData.u32Data = 0x0087;
-    }
-    else
-    {
-        stI2cData.u32Data = 0x0007;
-    }
-    HI_MPI_ISP_I2cWrite(&stI2cData);
-#else
-    sensor_write_register(0x35, (((p_gains->dgain - 8) << 8) 
-        + ((p_gains->again > 32) ? (0x40 + (p_gains->again >> 1)) : p_gains->again)));
-
-    if(p_gains->again > 32)
-    {
-        sensor_write_register(0x3e, 0x0087);
-    }
-    else
-    {
-        sensor_write_register(0x3e, 0x0007);
-    }
-
-#endif
-}
-
-static __inline HI_U32 analog_gain_from_exposure_calculate(
-		cmos_gains_ptr_t p_gains,
-		HI_U32 exposure,
-		HI_U32 exposure_max,
-		HI_U32 exposure_shift)
-{
-	HI_U32 _again = 12;
-	int shft = 0;
-
-	while (exposure > (1 << 27))
-	{
-		exposure >>= 1;
-		exposure_max >>= 1;
-		++shft;
-	}
-    exposure_max = DIV_0_TO_1(exposure_max);
-
-    if(exposure > exposure_max)
-    {
-    	_again = (exposure << p_gains->again_shift) / exposure_max;
-        
-        /*limit again to more than 1.5 times*/
-    	_again = _again < 12 ? 12 : _again;
-
-    	if(_again > 32) 
-    	{
-            _again &= ~(HI_U32)0x1;
-    	}
-
-    	_again = _again > p_gains->max_again_target ? p_gains->max_again_target : _again;
-    }
-    else
-    {
-    }
-    exposure = (exposure << p_gains->again_shift) / _again;
-
-	p_gains->again = _again;
-
-	return (exposure << shft);    
-}
-
-static __inline HI_U32 isp_digital_gain_from_exposure_calculate(
-		cmos_gains_ptr_t p_gains,
-		HI_U32 exposure,
-		HI_U32 exposure_max,
-		HI_U32 exposure_shift)
-{
-    HI_U32 isp_dgain = (1 << p_gains->isp_dgain_shift);
-    int shft = 0;
-
-    while (exposure > (1 << 22))
-	{
-		exposure >>= 1;
-		exposure_max >>= 1;
-		++shft;
-	}
-    exposure_max = DIV_0_TO_1(exposure_max);
-
-    if(exposure > exposure_max)
-    {
-        isp_dgain = ((exposure << p_gains->isp_dgain_shift) + (exposure_max >> 1)) / exposure_max;
-        exposure = exposure_max;
-        isp_dgain = (isp_dgain > p_gains->max_isp_dgain_target) ? (p_gains->max_isp_dgain_target) : isp_dgain;        
-    }
-    else
-	{
-	}
-    p_gains->isp_dgain = isp_dgain;
-
-    return exposure << shft;
-}
-
-static __inline HI_U32 digital_gain_from_exposure_calculate(
-		cmos_gains_ptr_t p_gains,
-		HI_U32 exposure,
-		HI_U32 exposure_max,
-		HI_U32 exposure_shift)
-{
-
-	HI_U32 _dgain = 1 << p_gains->dgain_shift;
-	int shft = 0;
-
-	while (exposure > (1 << 27))
-	{
-		exposure >>= 1;
-		exposure_max >>= 1;
-		++shft;
-	}
-    exposure_max = DIV_0_TO_1(exposure_max);
-
-	if(exposure > exposure_max)
-	{
-		_dgain = (exposure << p_gains->dgain_shift) / exposure_max;
-		_dgain = _dgain < 8 ? 8 : _dgain;
-		_dgain = _dgain > p_gains->max_dgain_target ? p_gains->max_dgain_target : _dgain; 
-
-		exposure = (exposure << p_gains->dgain_shift) / _dgain;
-	}
-	else
-	{
-	}
-    p_gains->dgain = _dgain;
-
-    return  exposure << shft;
-
-
-}
-
-static void setup_sensor(int isp_mode)
-{
-	if(0 == isp_mode) /* ISP 'normal' isp_mode */
-	{
-        sensor_write_register(0x09, 0x046a);
-	}
-	else if(1 == isp_mode) /* ISP pixel calibration isp_mode */
-	{
-        //no need to change vblanking_lines
-        //set exposure time to 200ms/5 fps
+        /* no need to change vblanking_lines */
+        /* set exposure time to 200ms/5 fps */
 		sensor_write_register(0x09, 0x1a86);
 
-        //min gain
+        /* min gain */
 		sensor_write_register(0x35, 0x12);
-	}
+    }
+    else /* setup for ISP 'normal mode' */
+    {
+        sensor_write_register(0x09, 0x046a);
+    }
+
+    return;
 }
 
-static HI_U32 cmos_gains_lin_to_db_convert(HI_U32 data, HI_U32 shift_in)
-{
-	HI_U32 _res = 0;
-	if(0 == data)
-		return _res;
-
-	for(;;)
-	{
-		data = (data*913 + (1<<9)) >> 10;
-		if(data < (1<<shift_in))
-			break;
-		++_res;
-	}
-	return _res;
-}
-
-static HI_U32 cmos_get_isp_demosaic(cmos_isp_demosaic_ptr_t p_cmos_isp_demosaic)
-{
-   if (NULL == p_cmos_isp_demosaic)
-   {
-	    printf("null pointer when get isp demosaic value!\n");
-	    return -1;
-   }
-   memcpy(p_cmos_isp_demosaic, &st_isp_demosaic,sizeof(cmos_isp_demosaic_t));
-   return 0;
-
-}
-
-static HI_U32 cmos_get_isp_noise_table(cmos_isp_noise_table_ptr_t p_cmos_isp_noise_table)
-{
-	if (NULL == p_cmos_isp_noise_table)
-	{
-	    printf("null pointer when get isp noise table value!\n");
-	    return -1;
-	}
-    memcpy(p_cmos_isp_noise_table, &st_isp_noise_table, sizeof(cmos_isp_noise_table_t));
-    return 0;
-}
-
-static HI_U32 cmos_get_isp_agc_table(cmos_isp_agc_table_ptr_t p_cmos_isp_agc_table)
-{
-	if (NULL == p_cmos_isp_agc_table)
-	{
-	    printf("null pointer when get isp agc table value!\n");
-	    return -1;
-	}
-    memcpy(p_cmos_isp_agc_table, &st_isp_agc_table, sizeof(cmos_isp_agc_table_t));
-    return 0;
-}
-
-static __inline HI_U32 cmos_get_ISO(cmos_gains_ptr_t p_gains)
-{
-	HI_U32 _again = p_gains->again == 0 ? 1 : p_gains->again;
-	HI_U32 _dgain = p_gains->dgain == 0 ? 1 : p_gains->dgain;
-    HI_U32 _isp_dgain = p_gains->isp_dgain == 0 ? 1 : p_gains->isp_dgain;
-
-	p_gains->iso =  ((_again * _dgain * _isp_dgain * 100) 
-                     >> (p_gains->again_shift + p_gains->dgain_shift + p_gains->isp_dgain_shift));
-
-	return p_gains->iso;
-}
-
-static HI_U8 cmos_get_analog_gain(cmos_gains_ptr_t p_gains)
-{
-    return cmos_gains_lin_to_db_convert(p_gains->again, p_gains->again_shift);
-}
-
-static HI_U8 cmos_get_digital_gain(cmos_gains_ptr_t p_gains)
-{
-    return cmos_gains_lin_to_db_convert(p_gains->dgain, p_gains->dgain_shift);
-}
-
-static HI_U32 cmos_get_isp_default(cmos_isp_default_ptr_t p_coms_isp_default)
-{
-	if (NULL == p_coms_isp_default)
-	{
-	    printf("null pointer when get isp default value!\n");
-	    return -1;
-	}
-    memcpy(p_coms_isp_default, &st_coms_isp_default, sizeof(cmos_isp_default_t));
-    return 0;
-}
-
-static HI_S32 cmos_get_sensor_max_resolution(cmos_sensor_max_resolution_ptr_t p_cmos_sensor_max_resolution)
-{
-     if(NULL == p_cmos_sensor_max_resolution)
-     {
-       printf("null pointer when get sensor max resolution value!\n");
-       return -1;
-     }
-
-     p_cmos_sensor_max_resolution->u32MaxWidth  = 1920;
-     p_cmos_sensor_max_resolution->u32MaxHeight = 1080;
-
-    return 0;
-}
-
-/****************************************************************************
- * callback structure                                                       *
- ****************************************************************************/
-
-SENSOR_EXP_FUNC_S stSensorExpFuncs =
-{
-    .pfn_cmos_inttime_initialize = cmos_inttime_initialize,
-    .pfn_cmos_inttime_update = cmos_inttime_update,
-
-    .pfn_cmos_gains_initialize = cmos_gains_initialize,
-    .pfn_cmos_gains_update = cmos_gains_update,
-    .pfn_cmos_gains_update2 = NULL,
-    .pfn_analog_gain_from_exposure_calculate = analog_gain_from_exposure_calculate,
-    .pfn_digital_gain_from_exposure_calculate = digital_gain_from_exposure_calculate,
-    .pfn_isp_digital_gain_from_exposure_calculate = isp_digital_gain_from_exposure_calculate,
-    
-
-    .pfn_cmos_fps_set = cmos_fps_set,
-    .pfn_vblanking_calculate = vblanking_calculate,
-    .pfn_cmos_vblanking_front_update = cmos_vblanking_update,
-
-    .pfn_setup_sensor = setup_sensor,
-
-	.pfn_cmos_get_analog_gain = cmos_get_analog_gain,
-	.pfn_cmos_get_digital_gain = cmos_get_digital_gain,
-	.pfn_cmos_get_digital_fine_gain = NULL,
-    .pfn_cmos_get_iso = cmos_get_ISO,
-
-	.pfn_cmos_get_isp_default = cmos_get_isp_default,
-	.pfn_cmos_get_isp_special_alg = NULL,
-	.pfn_cmos_get_isp_agc_table = cmos_get_isp_agc_table,
-	.pfn_cmos_get_isp_noise_table = cmos_get_isp_noise_table,
-	.pfn_cmos_get_isp_demosaic = cmos_get_isp_demosaic,
-	.pfn_cmos_get_isp_shading_table = NULL,
-	.pfn_cmos_get_isp_gamma_table = NULL,
-    .pfn_cmos_get_sensor_max_resolution = cmos_get_sensor_max_resolution,
-    .pfn_cmos_set_sensor_image_mode = NULL,
-	
-};
-
-int sensor_register_callback(void)
-{
-	int ret;
-	ret = HI_MPI_ISP_SensorRegCallBack(&stSensorExpFuncs);
-	if (ret)
-	{
-	    printf("sensor register callback function failed!\n");
-	    return ret;
-	}
-
-	return 0;
-}
-
-//chang sensor mode
-int sensor_mode_set(HI_U8 u8Mode)
+HI_VOID cmos_set_wdr_mode(HI_U8 u8Mode)
 {
     switch(u8Mode)
     {
@@ -624,12 +247,354 @@ int sensor_mode_set(HI_U8 u8Mode)
 
         default:
             printf("NOT support this mode!\n");
-            return -1;
+            return;
         break;
     }
+    
+    return;
+}
+
+static HI_S32 cmos_get_ae_default(AE_SENSOR_DEFAULT_S *pstAeSnsDft)
+{
+    if (HI_NULL == pstAeSnsDft)
+    {
+        printf("null pointer when get ae default value!\n");
+        return -1;
+    }
+
+    gu32FullLinesStd = 1132;
+
+    pstAeSnsDft->au8HistThresh[0] = 0xd;
+    pstAeSnsDft->au8HistThresh[1] = 0x28;
+    pstAeSnsDft->au8HistThresh[2] = 0x60;
+    pstAeSnsDft->au8HistThresh[3] = 0x80;
+    
+    pstAeSnsDft->u8AeCompensation = 0x40;
+    
+    pstAeSnsDft->u32LinesPer500ms = 1132*30/2;
+    pstAeSnsDft->u32FullLinesStd = gu32FullLinesStd;
+    pstAeSnsDft->u32FlickerFreq = 0;//60*256;//50*256;
+
+    pstAeSnsDft->stIntTimeAccu.enAccuType = AE_ACCURACY_LINEAR;
+    pstAeSnsDft->stIntTimeAccu.f32Accuracy = 1;
+    pstAeSnsDft->u32MaxIntTime = 1130;
+    pstAeSnsDft->u32MinIntTime = 2;    
+    pstAeSnsDft->u32MaxIntTimeTarget = 65535;
+    pstAeSnsDft->u32MinIntTimeTarget = 2;
+
+    pstAeSnsDft->stAgainAccu.enAccuType = AE_ACCURACY_LINEAR;
+    pstAeSnsDft->stAgainAccu.f32Accuracy = 0.125;    
+    pstAeSnsDft->u32MaxAgain = 126;  /* 16 / 0.125 = 128 *//* register max */
+    pstAeSnsDft->u32MinAgain = 12;   /* sensor manufactuer suggerts the minimum again is 1.5 */
+    pstAeSnsDft->u32MaxAgainTarget = 126;
+    pstAeSnsDft->u32MinAgainTarget = 12;
+
+    pstAeSnsDft->stDgainAccu.enAccuType = AE_ACCURACY_LINEAR;
+    pstAeSnsDft->stDgainAccu.f32Accuracy = 0.125;    
+    pstAeSnsDft->u32MaxDgain = 128;  /* 16 / 0.125 = 128 */
+    pstAeSnsDft->u32MinDgain = 8;
+    pstAeSnsDft->u32MaxDgainTarget = 128;
+    pstAeSnsDft->u32MinDgainTarget = 8;
+    
+    pstAeSnsDft->u32ISPDgainShift = 8;
+    pstAeSnsDft->u32MaxISPDgainTarget = 4 << pstAeSnsDft->u32ISPDgainShift;
+    pstAeSnsDft->u32MinISPDgainTarget = 1 << pstAeSnsDft->u32ISPDgainShift;
+
     return 0;
 }
 
+
+static HI_S32 cmos_get_sensor_max_resolution(ISP_CMOS_SENSOR_MAX_RESOLUTION *pstSensorMaxResolution)
+{
+    if (HI_NULL == pstSensorMaxResolution)
+    {
+        printf("null pointer when get sensor max resolution \n");
+        return -1;
+    }
+
+    memset(pstSensorMaxResolution, 0, sizeof(ISP_CMOS_SENSOR_MAX_RESOLUTION));
+
+    pstSensorMaxResolution->u32MaxWidth  = 1920;
+    pstSensorMaxResolution->u32MaxHeight = 1080;
+
+    return 0;
+}
+
+
+/* the function of sensor set fps */
+static HI_VOID cmos_fps_set(HI_U8 u8Fps, AE_SENSOR_DEFAULT_S *pstAeSnsDft)
+{
+    HI_U16 u16Vblank;
+    switch(u8Fps)
+    {
+        case 30:
+            // Change the frame rate via changing the vertical blanking
+            gu32FullLinesStd = 1132;
+            pstAeSnsDft->u32MaxIntTime = 1130;
+            pstAeSnsDft->u32LinesPer500ms = 1132 * 30 / 2;
+        break;
+        
+        case 25:
+            // Change the frame rate via changing the vertical blanking
+            gu32FullLinesStd = 1358;
+            pstAeSnsDft->u32MaxIntTime = 1356;
+        break;
+        
+        default:
+        break;
+    }
+
+    pstAeSnsDft->u32FullLinesStd = gu32FullLinesStd;
+    
+    u16Vblank = gu32FullLinesStd - 1084 - 1;
+    sensor_write_register(0x06, u16Vblank);
+
+    return;
+}
+
+static HI_VOID cmos_slow_framerate_set(HI_U16 u16FullLines,
+    AE_SENSOR_DEFAULT_S *pstAeSnsDft)
+{
+    HI_U16 u16FullLine = u16FullLines;
+
+    if (u16FullLine > (2048 + 1084))    /* max vblank lines is 2048 */
+    {
+        u16FullLine = (2048 + 1084);
+    }
+
+    pstAeSnsDft->u32MaxIntTime = u16FullLine - 2;
+
+    sensor_write_register(0x06, (u16FullLine - 1084 - 1));
+    
+    return;
+}
+
+static HI_VOID cmos_init_regs_info(HI_VOID)
+{
+#if CMOS_MT9P006_ISP_WRITE_SENSOR_ENABLE
+    HI_S32 i;
+
+    if (HI_FALSE == gsbRegInit)
+    {
+        g_stSnsRegsInfo.enSnsType = ISP_SNS_I2C_TYPE;
+        g_stSnsRegsInfo.u32RegNum = 3;
+        for (i=0; i<3; i++)
+        {
+            
+            g_stSnsRegsInfo.astI2cData[i].u8DevAddr = sensor_i2c_addr;
+            g_stSnsRegsInfo.astI2cData[i].u32AddrByteNum = sensor_addr_byte;
+            g_stSnsRegsInfo.astI2cData[i].u32DataByteNum = sensor_data_byte;
+        }
+        g_stSnsRegsInfo.astI2cData[0].bDelayCfg = HI_FALSE;
+        g_stSnsRegsInfo.astI2cData[0].u32RegAddr = 0x09;
+        g_stSnsRegsInfo.astI2cData[1].bDelayCfg = HI_TRUE;
+        g_stSnsRegsInfo.astI2cData[1].u32RegAddr = 0x35;
+        g_stSnsRegsInfo.astI2cData[2].bDelayCfg = HI_TRUE;
+        g_stSnsRegsInfo.astI2cData[2].u32RegAddr = 0x3e;
+        g_stSnsRegsInfo.bDelayCfgIspDgain = HI_TRUE;
+        gsbRegInit = HI_TRUE;
+    }
+#endif
+    return;
+}
+
+/* while isp notify ae to update sensor regs, ae call these funcs. */
+static HI_VOID cmos_inttime_update(HI_U32 u32IntTime)
+{
+#if CMOS_MT9P006_ISP_WRITE_SENSOR_ENABLE
+    cmos_init_regs_info();
+    g_stSnsRegsInfo.astI2cData[0].u32Data = u32IntTime & 0xffff;
+#else
+
+    /* when set exposure time more than one frame, the sensor's fps will be decreased automatically */
+    sensor_write_register(0x09, u32IntTime & 0xffff);
+
+    /* Unlock sensor's regisers which were locked at the time of update gains. */
+    //sensor_write_register(0x07, 0x1f8e);
+#endif
+    return;
+}
+
+static HI_VOID cmos_gains_update(HI_U32 u32Again, HI_U32 u32Dgain)
+{
+    HI_U32 u32AgainAdv, u32Tmp;    
+
+    if (u32Again > 32)
+    {
+        u32AgainAdv = 0x0087;
+        u32Tmp = (u32Again >> 1) + 0x40;
+    }
+    else
+    {
+        u32AgainAdv = 0x0007;
+        u32Tmp = u32Again;
+    }
+
+    u32Tmp += ((u32Dgain - 8) << 8);
+
+#if CMOS_MT9P006_ISP_WRITE_SENSOR_ENABLE
+    cmos_init_regs_info();
+    g_stSnsRegsInfo.astI2cData[1].u32Data = u32Tmp;
+    g_stSnsRegsInfo.astI2cData[2].u32Data = u32AgainAdv;
+    HI_MPI_ISP_SnsRegsCfg(&g_stSnsRegsInfo);
+#else
+    /* Lock sensor's regisers which were unlocked at the time of update inttime. */
+    //sensor_write_register(0x07, 0x1f8f);
+    sensor_write_register(0x35, u32Tmp);
+    sensor_write_register(0x3e, u32AgainAdv);
+#endif
+    return;
+}
+
+static HI_S32 cmos_get_awb_default(AWB_SENSOR_DEFAULT_S *pstAwbSnsDft)
+{
+    if (HI_NULL == pstAwbSnsDft)
+    {
+        printf("null pointer when get awb default value!\n");
+        return -1;
+    }
+
+    memset(pstAwbSnsDft, 0, sizeof(AWB_SENSOR_DEFAULT_S));
+
+    pstAwbSnsDft->u16WbRefTemp = 5000;
+    
+    pstAwbSnsDft->au16GainOffset[0] = 0x158;
+    pstAwbSnsDft->au16GainOffset[1] = 0x100;
+    pstAwbSnsDft->au16GainOffset[2] = 0x100;
+    pstAwbSnsDft->au16GainOffset[3] = 0x18f;
+
+    pstAwbSnsDft->as32WbPara[0] = 89;
+    pstAwbSnsDft->as32WbPara[1] = 3;
+    pstAwbSnsDft->as32WbPara[2] = -164;
+    pstAwbSnsDft->as32WbPara[3] = 232133;
+    pstAwbSnsDft->as32WbPara[4] = 128;
+    pstAwbSnsDft->as32WbPara[5] = -183491;
+
+    memcpy(&pstAwbSnsDft->stCcm, &g_stAwbCcm, sizeof(AWB_CCM_S));
+    memcpy(&pstAwbSnsDft->stAgcTbl, &g_stAwbAgcTable, sizeof(AWB_AGC_TABLE_S));
+    
+    return 0;
+}
+
+HI_VOID sensor_global_init()
+{
+
+   gu8SensorMode = 0;
+   
+}
+
+
+/****************************************************************************
+ * callback structure                                                       *
+ ****************************************************************************/
+HI_S32 cmos_init_sensor_exp_function(ISP_SENSOR_EXP_FUNC_S *pstSensorExpFunc)
+{
+    memset(pstSensorExpFunc, 0, sizeof(ISP_SENSOR_EXP_FUNC_S));
+
+    pstSensorExpFunc->pfn_cmos_sensor_init = sensor_init;
+    pstSensorExpFunc->pfn_cmos_sensor_global_init = sensor_global_init;
+    pstSensorExpFunc->pfn_cmos_get_isp_default = cmos_get_isp_default;
+    pstSensorExpFunc->pfn_cmos_get_isp_black_level = cmos_get_isp_black_level;
+    pstSensorExpFunc->pfn_cmos_set_pixel_detect = cmos_set_pixel_detect;
+    pstSensorExpFunc->pfn_cmos_set_wdr_mode = cmos_set_wdr_mode;
+    pstSensorExpFunc->pfn_cmos_get_sensor_max_resolution = cmos_get_sensor_max_resolution;
+
+    return 0;
+}
+
+HI_S32 cmos_init_ae_exp_function(AE_SENSOR_EXP_FUNC_S *pstExpFuncs)
+{
+    memset(pstExpFuncs, 0, sizeof(AE_SENSOR_EXP_FUNC_S));
+
+    pstExpFuncs->pfn_cmos_get_ae_default    = cmos_get_ae_default;
+    pstExpFuncs->pfn_cmos_fps_set           = cmos_fps_set;
+    pstExpFuncs->pfn_cmos_slow_framerate_set= cmos_slow_framerate_set;    
+    pstExpFuncs->pfn_cmos_inttime_update    = cmos_inttime_update;
+    pstExpFuncs->pfn_cmos_gains_update      = cmos_gains_update;
+
+    return 0;
+}
+
+HI_S32 cmos_init_awb_exp_function(AWB_SENSOR_EXP_FUNC_S *pstExpFuncs)
+{
+    memset(pstExpFuncs, 0, sizeof(AWB_SENSOR_EXP_FUNC_S));
+
+    pstExpFuncs->pfn_cmos_get_awb_default = cmos_get_awb_default;
+
+    return 0;
+}
+
+int sensor_register_callback(void)
+{
+    HI_S32 s32Ret;
+    ALG_LIB_S stLib;
+    ISP_SENSOR_REGISTER_S stIspRegister;
+    AE_SENSOR_REGISTER_S  stAeRegister;
+    AWB_SENSOR_REGISTER_S stAwbRegister;
+
+    cmos_init_sensor_exp_function(&stIspRegister.stSnsExp);
+    s32Ret = HI_MPI_ISP_SensorRegCallBack(MT9P006_ID, &stIspRegister);
+    if (s32Ret)
+    {
+        printf("sensor register callback function failed!\n");
+        return s32Ret;
+    }
+    
+    stLib.s32Id = 0;
+    strcpy(stLib.acLibName, HI_AE_LIB_NAME);
+    cmos_init_ae_exp_function(&stAeRegister.stSnsExp);
+    s32Ret = HI_MPI_AE_SensorRegCallBack(&stLib, MT9P006_ID, &stAeRegister);
+    if (s32Ret)
+    {
+        printf("sensor register callback function to ae lib failed!\n");
+        return s32Ret;
+    }
+
+    stLib.s32Id = 0;
+    strcpy(stLib.acLibName, HI_AWB_LIB_NAME);
+    cmos_init_awb_exp_function(&stAwbRegister.stSnsExp);
+    s32Ret = HI_MPI_AWB_SensorRegCallBack(&stLib, MT9P006_ID, &stAwbRegister);
+    if (s32Ret)
+    {
+        printf("sensor register callback function to ae lib failed!\n");
+        return s32Ret;
+    }
+    
+    return 0;
+}
+
+int sensor_unregister_callback(void)
+{
+    HI_S32 s32Ret;
+    ALG_LIB_S stLib;
+
+    s32Ret = HI_MPI_ISP_SensorUnRegCallBack(MT9P006_ID);
+    if (s32Ret)
+    {
+        printf("sensor unregister callback function failed!\n");
+        return s32Ret;
+    }
+    
+    stLib.s32Id = 0;
+    strcpy(stLib.acLibName, HI_AE_LIB_NAME);
+    s32Ret = HI_MPI_AE_SensorUnRegCallBack(&stLib, MT9P006_ID);
+    if (s32Ret)
+    {
+        printf("sensor unregister callback function to ae lib failed!\n");
+        return s32Ret;
+    }
+
+    stLib.s32Id = 0;
+    strcpy(stLib.acLibName, HI_AWB_LIB_NAME);
+    s32Ret = HI_MPI_AWB_SensorUnRegCallBack(&stLib, MT9P006_ID);
+    if (s32Ret)
+    {
+        printf("sensor unregister callback function to ae lib failed!\n");
+        return s32Ret;
+    }
+    
+    return 0;
+}
 
 #ifdef __cplusplus
 #if __cplusplus
@@ -637,5 +602,4 @@ int sensor_mode_set(HI_U8 u8Mode)
 #endif
 #endif /* End of #ifdef __cplusplus */
 
-
-#endif // __APTINA_MT9P006_CMOS_H_
+#endif // __IMX104_CMOS_H_

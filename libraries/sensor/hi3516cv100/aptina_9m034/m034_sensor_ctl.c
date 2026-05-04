@@ -47,6 +47,7 @@ int sensor_write_register(int addr, int data)
     if (ret)
     {
         printf("GPIO-I2C write faild!\n");
+        close(fd);
         return -1;
     }
 
@@ -75,6 +76,7 @@ int sensor_write_register(int addr, int data)
     if (ret)
     {
         printf("hi_i2c write faild!\n");
+        close(fd);
         return -1;
     }
 

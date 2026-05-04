@@ -5,10 +5,9 @@
 #include <fcntl.h>
 #include <unistd.h>
 
-
 #include "hi_comm_isp.h"
 
-#if 1
+
 #ifdef HI_GPIO_I2C
 #include "gpioi2c_32.h"
 #include "gpio_i2c.h"
@@ -115,128 +114,10 @@ int sensor_write_register(int addr, int data)
 #endif
 	return 0;
 }
-/*
-
-int sony_sensor_write_packet(unsigned int data)
-{
-	int fd = -1;
-	int ret;
-	unsigned int value;
-
-	fd = open("/dev/ssp", 0);
-	if(fd < 0)
-	{
-		printf("Open /dev/ssp error!\n");
-		return -1;
-	}
-
-	value = data;
-
-	ret = ioctl(fd, SSP_WRITE_ALT, &value);
-
-	close(fd);
-	return 0;
-}
-
-int sony_sensor_read_packet(unsigned int data)
-{
-	unsigned int value;
-	int fd = -1;
-	int ret;
-
-	fd = open("/dev/ssp", 0);
-	if(fd < 0)
-	{
-		printf("Open /dev/ssp error!\n");
-		return -1;
-	}
-
-	value = data;
-
-	ret = ioctl(fd, SSP_READ_ALT, &value);
-
-	close(fd);
-	return (value&0xff);
-}
-*/
-#else
-int sensor_write_register(int addr, int data)
-{
-	unsigned int value = (unsigned int)(((addr&0xffff)<<8) | (data & 0xff));
-	//printf("write data = %#x\n", value);
-    return sony_sensor_write_packet(value);
-}
-
-int sensor_read_register(int addr)
-{
-	unsigned int data = (unsigned int)(((addr&0xffff)<<8));
-	//printf("read data = %#x\n", data);
-    return sony_sensor_read_packet(data);
-}
-#endif
 
 void sensor_prog(int* rom) 
 {
     return;
-}
-
-void sensor_init()
-{
-    sensor_write_register(0x200, 0x01);     /* Standby */
-    usleep(200000);
-
-    sensor_write_register(0x202, 0x01);     /* master mode stop */
-    sensor_write_register(0x205, 0x01);     /* 12 bit */
-    sensor_write_register(0x206, 0x00);     /* All-pix scan mode */
-    sensor_write_register(0x207, 0x10);     /* 1080p mode */
-    sensor_write_register(0x209, 0x02);     /* Frame rate (data rate) setting: 30fps */
-    sensor_write_register(0x20A, 0xF0);     /* Black level offset */
-    sensor_write_register(0x20B, 0x00);     /* Black level offset */
-    sensor_write_register(0x20B, 0x00);     /* Black level offset */
-    sensor_write_register(0x214, 0x0C);     /* AGC min gain 1.2dB; */
-    sensor_write_register(0x218, 0x65);     /* Vertical span[7:0] */
-    sensor_write_register(0x219, 0x04);     /* Vertical span[15:8] */
-    sensor_write_register(0x21A, 0x00);     /* Vertical span[15:8] */
-    sensor_write_register(0x21B, 0x30);     /* Horizontal span[7:0] */
-    sensor_write_register(0x21C, 0x11);     /* Horizontal span[15:8] */
-    sensor_write_register(0x220, 0xC0);     /* Shutter[7:0] */
-    sensor_write_register(0x221, 0x03);     /* Shutter[15:8] */
-    sensor_write_register(0x244, 0x01);     /* cmos parallel output, 12bit */
-    sensor_write_register(0x246, 0x01);     
-    sensor_write_register(0x247, 0x01);    
-    sensor_write_register(0x248, 0x01);    
-    sensor_write_register(0x249, 0x0A);     /* HSYNC,VSYNC output */
-    sensor_write_register(0x254, 0x63);     
-    sensor_write_register(0x25B, 0x00);     /* INCK setting0 */
-    sensor_write_register(0x25C, 0x20);     /* INCK setting1 */
-    sensor_write_register(0x25D, 0x06);     /* INCK setting2 */
-    sensor_write_register(0x25E, 0x30);     /* INCK setting3 */
-    sensor_write_register(0x25F, 0x04);     /* INCK setting4 */
-
-    sensor_write_register(0x30F, 0x0E);     /* */
-    sensor_write_register(0x316, 0x02);     /* */
-
-    sensor_write_register(0x436, 0x71);     /* */
-    sensor_write_register(0x439, 0xF1);     /* */
-    sensor_write_register(0x441, 0xF2);     /* */
-    sensor_write_register(0x442, 0x21);     /* */
-    sensor_write_register(0x443, 0x21);     /* */
-    sensor_write_register(0x448, 0xF2);     /* */
-    sensor_write_register(0x449, 0x21);     /* */
-    sensor_write_register(0x44A, 0x21);     /* */
-    sensor_write_register(0x452, 0x01);     /* */
-    sensor_write_register(0x454, 0xB1);     /* */
-    
-    /* waiting for image stabilization */
-    usleep(200000);
-    sensor_write_register(0x200, 0x00);     /* release standy */
-    usleep(200000);
-    sensor_write_register(0x202, 0x00);     /* Master mode operation start */
-    usleep(200000);
-    sensor_write_register(0x249, 0x0A);     /* HSYNC and VSYNC output */
-    usleep(200000);
-    
-
 }
 
 void sensor_linner_init()
@@ -304,5 +185,62 @@ void sensor_wdr_init()
     usleep(200000);
     
     return;
+}
+void sensor_init()
+{
+    sensor_write_register(0x200, 0x01);     /* Standby */
+    usleep(200000);
+
+    sensor_write_register(0x202, 0x01);     /* master mode stop */
+    sensor_write_register(0x205, 0x01);     /* 12 bit */
+    sensor_write_register(0x206, 0x00);     /* All-pix scan mode */
+    sensor_write_register(0x207, 0x10);     /* 1080p mode */
+    sensor_write_register(0x209, 0x02);     /* Frame rate (data rate) setting: 30fps */
+    sensor_write_register(0x20A, 0xF0);     /* Black level offset */
+    sensor_write_register(0x20B, 0x00);     /* Black level offset */
+    sensor_write_register(0x20B, 0x00);     /* Black level offset */
+    sensor_write_register(0x214, 0x0C);     /* AGC min gain 1.2dB; */
+    sensor_write_register(0x218, 0x65);     /* Vertical span[7:0] */
+    sensor_write_register(0x219, 0x04);     /* Vertical span[15:8] */
+    sensor_write_register(0x21A, 0x00);     /* Vertical span[15:8] */
+    sensor_write_register(0x21B, 0x30);     /* Horizontal span[7:0] */
+    sensor_write_register(0x21C, 0x11);     /* Horizontal span[15:8] */
+    sensor_write_register(0x220, 0xC0);     /* Shutter[7:0] */
+    sensor_write_register(0x221, 0x03);     /* Shutter[15:8] */
+    sensor_write_register(0x244, 0x01);     /* cmos parallel output, 12bit */
+    sensor_write_register(0x246, 0x01);     
+    sensor_write_register(0x247, 0x01);    
+    sensor_write_register(0x248, 0x01);    
+    sensor_write_register(0x249, 0x0A);     /* HSYNC,VSYNC output */
+    sensor_write_register(0x254, 0x63);     
+    sensor_write_register(0x25B, 0x00);     /* INCK setting0 */
+    sensor_write_register(0x25C, 0x20);     /* INCK setting1 */
+    sensor_write_register(0x25D, 0x06);     /* INCK setting2 */
+    sensor_write_register(0x25E, 0x30);     /* INCK setting3 */
+    sensor_write_register(0x25F, 0x04);     /* INCK setting4 */
+
+    sensor_write_register(0x30F, 0x0E);     /* */
+    sensor_write_register(0x316, 0x02);     /* */
+
+    sensor_write_register(0x436, 0x71);     /* */
+    sensor_write_register(0x439, 0xF1);     /* */
+    sensor_write_register(0x441, 0xF2);     /* */
+    sensor_write_register(0x442, 0x21);     /* */
+    sensor_write_register(0x443, 0x21);     /* */
+    sensor_write_register(0x448, 0xF2);     /* */
+    sensor_write_register(0x449, 0x21);     /* */
+    sensor_write_register(0x44A, 0x21);     /* */
+    sensor_write_register(0x452, 0x01);     /* */
+    sensor_write_register(0x454, 0xB1);     /* */
+    
+    /* waiting for image stabilization */
+    usleep(200000);
+    sensor_write_register(0x200, 0x00);     /* release standy */
+    usleep(200000);
+    sensor_write_register(0x202, 0x00);     /* Master mode operation start */
+    usleep(200000);
+    sensor_write_register(0x249, 0x0A);     /* HSYNC and VSYNC output */
+    usleep(200000);
+    sensor_linner_init();
 }
 

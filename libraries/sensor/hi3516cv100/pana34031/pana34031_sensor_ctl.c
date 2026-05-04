@@ -1,8 +1,3 @@
-/******************************************************************************
-  A driver program of panasonic mn34031 on HI3518A 
- ******************************************************************************
-    Modification:  2013-04  Created
-******************************************************************************/
 #include <stdio.h>
 #include <sys/types.h>
 #include <sys/stat.h>
@@ -491,6 +486,6 @@ void sensor_init()
      sensor_write_register(0x00D3,0x041B);
      sensor_write_register(0x0000,0x0113);
      sensor_write_register(0x0003,0x8260);
-	printf("-------sensor MN34031 initial ok!----\n");
+    printf("-------sensor MN34031 initial ok!----\n");
 }
 

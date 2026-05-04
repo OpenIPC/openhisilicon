@@ -1,7 +1,7 @@
 
 //9m034 720P 30fps linear
 static int sensor_rom_30_lin[] = {
-        // [Apical Linear Mode 720p 30fps AE=on EMBEDDED=on]
+        // [Linear Mode 720p 30fps AE=on EMBEDDED=on]
 //[Demo Initialization]
 //Load = Reset
 //[Reset]
@@ -404,7 +404,7 @@ static int sensor_rom_30_lin[] = {
 
 //9m034 720P 30fps wdr
 static int sensor_rom_30_wdr[] = {
-        // [Apical Linear Mode 720p 30fps AE=on EMBEDDED=on]
+        // [Linear Mode 720p 30fps AE=on EMBEDDED=on]
 //[Demo Initialization]
 //Load = Reset
 //[Reset]

@@ -18,10 +18,10 @@
 #include "hi_i2c.h"
 #endif
 
-const unsigned int sensor_i2c_addr	=	0x60;		/* I2C Address of SOI H22 */
-//const unsigned int sensor_i2c_addr	=	0x6C;		/* I2C Address of SOI H22 */
-const unsigned int sensor_addr_byte	=	1;
-const unsigned int sensor_data_byte	=	1;
+const unsigned int sensor_i2c_addr    =    0x60;        /* I2C Address of SOI H22 */
+//const unsigned int sensor_i2c_addr    =    0x6C;        /* I2C Address of SOI H22 */
+const unsigned int sensor_addr_byte    =    1;
+const unsigned int sensor_data_byte    =    1;
 
 
 int sensor_read_register(int addr)
@@ -44,6 +44,7 @@ int sensor_read_register(int addr)
     if (ret)
     {
         printf("GPIO-I2C read faild!\n");
+        close(fd);
         return -1;
     }
     
@@ -55,7 +56,7 @@ int sensor_read_register(int addr)
     int fd = -1;
     int ret;
     I2C_DATA_S i2c_data;
-	
+    
     fd = open("/dev/hi_i2c", 0);
     if(fd<0)
     {
@@ -73,13 +74,14 @@ int sensor_read_register(int addr)
     if (ret)
     {
         printf("hi_i2c write faild!\n");
+        close(fd);
         return -1;
     }
 
     close(fd);
 #endif
-	
-	return i2c_data.data;
+    
+    return i2c_data.data;
 }
 
 int sensor_write_register(int addr, int data)
@@ -103,6 +105,7 @@ int sensor_write_register(int addr, int data)
     if (ret)
     {
         printf("GPIO-I2C write faild!\n");
+        close(fd);
         return -1;
     }
 
@@ -111,7 +114,7 @@ int sensor_write_register(int addr, int data)
     int fd = -1;
     int ret;
     I2C_DATA_S i2c_data;
-	
+    
     fd = open("/dev/hi_i2c", 0);
     if(fd<0)
     {
@@ -130,12 +133,13 @@ int sensor_write_register(int addr, int data)
     if (ret)
     {
         printf("hi_i2c write faild!\n");
+        close(fd);
         return -1;
     }
 
     close(fd);
 #endif
-	return 0;
+    return 0;
 }
 
 int sensor_write_register_bit(int addr, int data, int mask)
@@ -158,6 +162,7 @@ int sensor_write_register_bit(int addr, int data, int mask)
     if (ret)
     {
         printf("GPIO-I2C read faild!\n");
+        close(fd);
         return -1;
     }
 
@@ -171,6 +176,7 @@ int sensor_write_register_bit(int addr, int data, int mask)
     if (ret)
     {
         printf("GPIO-I2C write faild!\n");
+        close(fd);
         return -1;
     }
 
@@ -180,7 +186,7 @@ int sensor_write_register_bit(int addr, int data, int mask)
     int ret;
     int value;
     I2C_DATA_S i2c_data;
-	
+    
     fd = open("/dev/hi_i2c", 0);
     if(fd<0)
     {
@@ -197,6 +203,7 @@ int sensor_write_register_bit(int addr, int data, int mask)
     if (ret)
     {
         printf("hi_i2c read faild!\n");
+        close(fd);
         return -1;
     }
 
@@ -210,12 +217,13 @@ int sensor_write_register_bit(int addr, int data, int mask)
     if (ret)
     {
         printf("hi_i2c write faild!\n");
+        close(fd);
         return -1;
     }
 
     close(fd);
 #endif
-	return 0;
+    return 0;
 }
 
 
@@ -242,57 +250,55 @@ void sensor_prog(int* rom)
         }
         else
         {
-			sensor_write_register(addr, data);
+            sensor_write_register(addr, data);
         }
     }
 }
 
 void sensor_init()
 {
+    sensor_write_register(0x0e, 0x1D);
+    sensor_write_register(0x0f, 0x0B);
+    sensor_write_register(0x10, 0x26);
+    sensor_write_register(0x11, 0x80);
+    sensor_write_register(0x1B, 0x4F);
+    sensor_write_register(0x1D, 0xFF);
 
-sensor_write_register(0x0e, 0x1D);
-sensor_write_register(0x0f, 0x0B);
-sensor_write_register(0x10, 0x26);
-sensor_write_register(0x11, 0x80);
-sensor_write_register(0x1B, 0x4F);
-sensor_write_register(0x1D, 0xFF);
+    sensor_write_register(0x1E, 0x9F);
+    sensor_write_register(0x20, 0x72);
+    sensor_write_register(0x21, 0x06);
+    sensor_write_register(0x22, 0xFF);
+    sensor_write_register(0x23, 0x02);
+    sensor_write_register(0x24, 0x00);
+    sensor_write_register(0x25, 0xE0);
+    sensor_write_register(0x26, 0x25);
+    sensor_write_register(0x27, 0xE9);
+    sensor_write_register(0x28, 0x0D);
+    sensor_write_register(0x29, 0x00);
+    sensor_write_register(0x2C, 0x00);
+    sensor_write_register(0x2D, 0x08);
+    sensor_write_register(0x2E, 0xC4);
+    sensor_write_register(0x2F, 0x20);
+    sensor_write_register(0x6C, 0x90);
+    sensor_write_register(0x2A, 0xD4);
+    sensor_write_register(0x30, 0x90);
+    sensor_write_register(0x31, 0x10);
+    sensor_write_register(0x32, 0x10);
+    sensor_write_register(0x33, 0x10);
+    sensor_write_register(0x34, 0x32);
+    sensor_write_register(0x14, 0x80);
+    sensor_write_register(0x18, 0xD5);
+    sensor_write_register(0x19, 0x10);
 
-sensor_write_register(0x1E, 0x9F);
-sensor_write_register(0x20, 0x72);
-sensor_write_register(0x21, 0x06);
-sensor_write_register(0x22, 0xFF);
-sensor_write_register(0x23, 0x02);
-sensor_write_register(0x24, 0x00);
-sensor_write_register(0x25, 0xE0);
-sensor_write_register(0x26, 0x25);
-sensor_write_register(0x27, 0xE9);
-sensor_write_register(0x28, 0x0D);
-sensor_write_register(0x29, 0x00);
-sensor_write_register(0x2C, 0x00);
-sensor_write_register(0x2D, 0x08);
-sensor_write_register(0x2E, 0xC4);
-sensor_write_register(0x2F, 0x20);
-sensor_write_register(0x6C, 0x90);
-sensor_write_register(0x2A, 0xD4);
-sensor_write_register(0x30, 0x90);
-sensor_write_register(0x31, 0x10);
-sensor_write_register(0x32, 0x10);
-sensor_write_register(0x33, 0x10);
-sensor_write_register(0x34, 0x32);
-sensor_write_register(0x14, 0x80);
-sensor_write_register(0x18, 0xD5);
-sensor_write_register(0x19, 0x10);
+    sensor_write_register(0x0d, 0x00);
+    sensor_write_register(0x1f, 0x00);
 
-sensor_write_register(0x0d, 0x00);
-sensor_write_register(0x1f, 0x00);
-
-sensor_write_register(0x13, 0x87);
-sensor_write_register(0x4A, 0x03);
-sensor_write_register(0x49, 0x06); 
-
-
-
-	return ;
+    sensor_write_register(0x13, 0x87);
+    sensor_write_register(0x4A, 0x03);
+    sensor_write_register(0x49, 0x06); 
+    
+    return ;
 }
+
 
 

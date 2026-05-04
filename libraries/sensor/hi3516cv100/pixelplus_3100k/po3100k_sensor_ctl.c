@@ -160,7 +160,7 @@ void sensor_prog(int* rom)
 
 void sensor_init()
 {
-    printf("-----------start init pixel plus 3100K------------\n");
+    printf("-----------start init pixel plus 3100K------------");
     sensor_write_register(0x03,0x00);   // --------  A
     sensor_write_register(0x2D,0x01);
     sensor_write_register(0x29,0x9D);

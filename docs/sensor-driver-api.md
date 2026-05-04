@@ -28,7 +28,8 @@ across platforms with only a `#include` path change.
 
 | Tier | Platforms | Headline shape |
 |---|---|---|
-| **T1 / V1** | `hi3516cv100` | `int sensor_register_callback(void)` — **one** MPI call, no AE/AWB lib |
+| **T1 / V1** | *(historical mpp/ flavour — not used in this repo, see §3.1)* | `int sensor_register_callback(void)` — **one** MPI call, no AE/AWB lib |
+| **T1+ / V1** | `hi3516cv100` | `int sensor_register_callback(void)` — **three** MPI calls (ISP/AE/AWB) but **no `IspDev`** arg in any of them; CV100 has only one ISP. From the mpp2 flavour SDK. |
 | **T2 / V2** | `hi3516cv200`, `hi3516av100`, `hi3516cv300` | `int sensor_register_callback(void)` — **three** MPI calls (ISP/AE/AWB), `IspDev` is a local `0`, internal `ALG_LIB_S stLib` |
 | **T3 / V3A** | `hi3519v101`, `hi3516av200`† | `static int sensor_register_callback(ISP_DEV IspDev, ALG_LIB_S *pstAeLib, ALG_LIB_S *pstAwbLib)` — caller passes lib handles, first tier to export `ISP_SNS_OBJ_S stSns<X>Obj` |
 | **T4 / V4-HI** | `hi3516cv500` | `static HI_S32 sensor_register_callback(VI_PIPE vi_pipe, ALG_LIB_S *pstAeLib, ALG_LIB_S *pstAwbLib)` — `VI_PIPE` not `ISP_DEV`, `ISP_SNS_ATTR_INFO_S` carries the sensor ID, ISP params split into `<sensor>_cmos_ex.h` |
@@ -36,21 +37,27 @@ across platforms with only a `#include` path change.
 
 Verified anchor points (one driver per tier):
 
-- T1 — `libraries/sensor/hi3516cv100/sony_imx236/imx236_cmos.c:951`
+- T1+ — `libraries/sensor/hi3516cv100/sony_imx236/imx236_cmos.c:902`
+- T1+ — `libraries/sensor/hi3516cv100/soi_jxh42/jxh42_cmos.c:507`
 - T2 — `libraries/sensor/hi3516cv200/aptina_9m034/m034_cmos.c:1335`
 - T2 — `libraries/sensor/hi3516cv300/sony_imx290/imx290_cmos.c:2030`
 - T2 — `libraries/sensor/hi3516av100/aptina_ar0230/ar0230_cmos.c:1329`
 - T3 — `libraries/sensor/hi3519v101/sony_imx226/imx226_cmos.c:1458` (`stSnsImx226Obj` at `:1533`)
+- T3 — `libraries/sensor/hi3519v101/sony_imx327/imx327_cmos.c:1874`
 - T4 — `libraries/sensor/hi3516cv500/sony_imx307/imx307_cmos.c:1238` (`stSnsImx307Obj` at `:1348`)
 - T5 — `libraries/sensor/hi3516ev200/galaxycore_gc2053/gc2053_cmos.c:1120` (`stSnsGc2053Obj` at `:1236`)
 - T5 — `libraries/sensor/gk7205v200/galaxycore_gc2053/gc2053_cmos.c:1120` (identical to EV200)
 
-† **`hi3516av200`** is a T3-shape platform observed in the wild (e.g. all 7
-sensors under OpenIPC's `sensors/hisilicon/` that target `hi3516av200_rev1`)
-but **not** currently buildable in this repo — the kernel-side
-`mipi_rx`/`sys_config`/OSAL variants for `hi3516av200` are absent. The
-*sensor source* format is identical to V101, so the .so would compile against
-a future `hi3516av200` kernel addition without source changes.
+Note: the legacy T1 (single-call, no AE/AWB) form lives only in the older mpp/ SDK flavour; this repo's `hi3516cv100/` was upgraded to mpp2 (T1+) so every sensor under it now uses the three-call shape — there are no T1 anchors in-repo to cite. See §3.1 for the mpp/mpp2 split.
+
+† **`hi3516av200`** is a sibling chip within the V3A generation; per the
+README's "Supported hardware" table, both `hi3519v101` and `hi3516av200`
+silicon are built via `CHIPARCH=hi3519v101` (same kernel-side machinery —
+`mipi_rx`, `sys_config`, OSAL — and same MPI surface). When OpenIPC's
+`sensors/hisilicon/` names a driver `<sensor>_hi3516av200_rev1`, that
+source belongs under `libraries/sensor/hi3519v101/` and the resulting
+`.so` runs on both chips. Seven of those drivers exist upstream; one
+(IMX327) has been ported into `libraries/sensor/hi3519v101/sony_imx327/`.
 
 ## 2. Identification flowchart
 
@@ -93,7 +100,7 @@ Secondary fingerprints, in case the registration function is missing or stripped
 | If you see... | It's probably... |
 |---|---|
 | `sensor_register_callback(pRegSnsRegCb, pAeSnsRegCb, pAwbSnsRegCb, pSnsRegsCfg)` (typedef-pointer params) | wrapped driver — see §7.1 to identify the underlying tier |
-| `#include "hi_comm_isp.h"` *and not* `mpi_ae.h` | T1 |
+| `#include "hi_comm_isp.h"` *and not* `mpi_ae.h` | T1 (historical, not in this repo) |
 | `mpi_isp.h` + `mpi_ae.h` + `mpi_awb.h` + `#define <X>_ID <num>` + `ISP_DEV IspDev = 0;` in `sensor_register_callback` | T2 |
 | `g_pastImx226[ISP_MAX_DEV_NUM]` (or any state array indexed by `ISP_MAX_DEV_NUM`) | T3 |
 | `g_pastImx307[ISP_MAX_PIPE_NUM]` + `ISP_SNS_ATTR_INFO_S stSnsAttrInfo` + `ISP_SNS_OBJ_S stSns<X>Obj` | T4 |
@@ -102,87 +109,63 @@ Secondary fingerprints, in case the registration function is missing or stripped
 
 ## 3. Per-tier details
 
-### 3.1 T1 — CV100
+### 3.1 T1 / T1+ — CV100
 
-Single-call ISP-only registration. Everything else (AE curves, exposure math, gain
-tables) lives inline as static structs in `*_cmos.c`. There is no `ALG_LIB_S`,
-no `ISP_SNS_OBJ_S`, and no AE/AWB MPI surface.
+CV100 has two userspace API surfaces in the wild — old (T1, mpp/) and new
+(T1+, mpp2/). Both run on the same kernel modules. **This repo's
+`hi3516cv100/` is the T1+ (mpp2) flavour**; the older T1 form lives only in
+historical SDK trees and isn't built here.
 
-Headers (`imx236_cmos.c:1–11`):
+#### T1 — historical mpp/ surface (not in this repo)
+
+Single-call ISP-only registration. No `ALG_LIB_S`, no `ISP_SNS_OBJ_S`, no
+AE/AWB MPI surface — exposure math and AE/AWB tables live inline as static
+structs in `*_cmos.c`.
+
+Header set:
 
 ```c
-#include <stdio.h>
-#include <unistd.h>
-#include <string.h>
-#include <assert.h>
 #include "hi_comm_sns.h"
 #include "hi_comm_isp.h"
 #include "hi_sns_ctrl.h"
 #include "mpi_isp.h"
 ```
 
-Registration (`imx236_cmos.c:951–962`):
+Registration:
 
 ```c
 int sensor_register_callback(void)
 {
     int ret;
     ret = HI_MPI_ISP_SensorRegCallBack(&stSensorExpFuncs);
-    if (ret) {
-        printf("sensor register callback function failed!\n");
-        return ret;
-    }
-    return 0;
+    /* ... */
 }
 ```
 
-Makefile (`hi3516cv100/sony_imx236/Makefile`):
+Where it lives: HiSilicon Hi3518 SDK V1.0.B.0's `mpp/component/isp/sensor/`
+tree. Not built in this repo (the OpenIPC firmware that consumes this repo
+runs on the T1+ MPI runtime, so building T1 sensors here would produce
+ABI-incompatible artifacts).
 
-```makefile
-LIB_NAME := libsns_imx236
-override CFLAGS += -fPIC \
-    -I$(CURDIR)/../../../../kernel/include/hi3516cv100
-```
+#### T1+ — mpp2 surface (this repo's hi3516cv100)
 
-**T1+ variant — newer CV100 SDK revisions with AE/AWB.** The `imx236` driver
-above is the earliest CV100 form, when there was no AE/AWB MPI surface at all.
-A *later* userspace SDK rev for the same chip adds the three-call ISP/AE/AWB
-pattern — but **without** an `IspDev` argument, since CV100 has only one ISP.
+Three-call ISP/AE/AWB registration — but **no `IspDev`** argument in any
+of them, because CV100 has only one ISP. Function signature stays
+`int sensor_register_callback(void)`; the body looks like T2 with `IspDev`
+removed.
 
-This is not just a sensor convention; the underlying MPI library prototype is
-genuinely different. From a real Hi3518 SDK:
-
-- **HiSilicon Hi3518 SDK V1.0.B.0** (the canonical source) ships **two parallel
-  MPP userspace trees side-by-side under one kernel**:
-  - `mpp/component/isp/sensor/` — T1 surface
-  - `mpp2/component/isp2/sensor/` — T1+ surface
-- The `ko/` directory is **identical** between the two trees (same `hi3518_isp.ko`,
-  `hi3518_base.ko`, `mmz.ko`, etc.) — T1 vs T1+ is purely a userspace MPP swap,
-  not a kernel ABI change.
-- `mpp2/include/` adds these headers absent from `mpp/include/`:
-  `hi_ae_comm.h`, `hi_af_comm.h`, `hi_awb_comm.h`, `hi_comm_3a.h`,
-  `hi_vreg.h`, `mpi_ae.h`, `mpi_af.h`, `mpi_awb.h`.
-- The `HI_MPI_ISP_SensorRegCallBack` prototype itself changes:
+Header set (in `kernel/include/hi3516cv100/`):
 
 ```c
-/* mpp/include/mpi_isp.h (T1):    one arg, opaque function-pointer struct */
-HI_S32 HI_MPI_ISP_SensorRegCallBack(SENSOR_EXP_FUNC_S *pstSensorExpFuncs);
-
-/* mpp2/include/mpi_isp.h (T1+):  two args, sensor ID added */
-HI_S32 HI_MPI_ISP_SensorRegCallBack(SENSOR_ID SensorId,
-                                    ISP_SENSOR_REGISTER_S *pstRegister);
-HI_S32 HI_MPI_ISP_SensorUnRegCallBack(SENSOR_ID SensorId);
-
-/* mpp2/include/mpi_ae.h (T1+):   3 args, no IspDev — same in mpi_awb.h */
-HI_S32 HI_MPI_AE_SensorRegCallBack(ALG_LIB_S *pstAeLib, SENSOR_ID SensorId,
-                                   AE_SENSOR_REGISTER_S *pstRegister);
-HI_S32 HI_MPI_AE_SensorUnRegCallBack(ALG_LIB_S *pstAeLib, SENSOR_ID SensorId);
+#include "hi_comm_sns.h"
+#include "hi_sns_ctrl.h"
+#include "mpi_isp.h"
+#include "mpi_ae.h"      /* T1+ adds these three */
+#include "mpi_awb.h"
+#include "mpi_af.h"
 ```
 
-The same sensor ships in **both** trees with a completely different
-`sensor_register_callback` body. Compare `sony_imx236/imx236_cmos.c` in the
-two trees — the T1 (`mpp/`) form is the single-call shape shown above; the
-T1+ (`mpp2/`) form looks like:
+Registration body (anchor: `libraries/sensor/hi3516cv100/sony_imx236/imx236_cmos.c:902`):
 
 ```c
 int sensor_register_callback(void)
@@ -210,16 +193,45 @@ int sensor_register_callback(void)
 }
 ```
 
-OpenIPC's `sensors/hisilicon/jxh42_i2c_hi3516cv100_rev1/jxh42_cmos.c:507`
-follows this same T1+ shape, confirming it as the form running in the wild.
+A second in-repo anchor showing the same shape:
+`libraries/sensor/hi3516cv100/soi_jxh42/jxh42_cmos.c:507`.
 
-Compare to T2: T1+ is structurally T2 with `IspDev` removed from every call —
-because CV100 only has one ISP, there's nothing to index. The flowchart's
-T1↔T2 split ("does the body call HI_MPI_AE_SensorRegCallBack?") will land T1+
-in the T2 branch; to disambiguate, check whether the first arg of
-`HI_MPI_ISP_SensorRegCallBack` is `IspDev` (T2) or the sensor ID directly (T1+).
-Equivalently, look at the headers: T1+ has `hi_comm_3a.h` / `hi_ae_comm.h`
-available; T2 has those plus `hi_comm_video.h` and uses `ISP_DEV` types.
+#### Why the surfaces are genuinely different
+
+The MPI library prototype itself changed between mpp and mpp2 — this isn't
+a sensor-side convention difference, it's an ABI break:
+
+```c
+/* mpp/include/mpi_isp.h (T1):    one arg, opaque function-pointer struct */
+HI_S32 HI_MPI_ISP_SensorRegCallBack(SENSOR_EXP_FUNC_S *pstSensorExpFuncs);
+
+/* kernel/include/hi3516cv100/mpi_isp.h (T1+, mpp2): two args, sensor ID added */
+HI_S32 HI_MPI_ISP_SensorRegCallBack(SENSOR_ID SensorId,
+                                    ISP_SENSOR_REGISTER_S *pstRegister);
+HI_S32 HI_MPI_ISP_SensorUnRegCallBack(SENSOR_ID SensorId);
+
+/* kernel/include/hi3516cv100/mpi_ae.h (T1+, mpp2): 3 args, no IspDev — same in mpi_awb.h */
+HI_S32 HI_MPI_AE_SensorRegCallBack(ALG_LIB_S *pstAeLib, SENSOR_ID SensorId,
+                                   AE_SENSOR_REGISTER_S *pstRegister);
+HI_S32 HI_MPI_AE_SensorUnRegCallBack(ALG_LIB_S *pstAeLib, SENSOR_ID SensorId);
+```
+
+`mpp2/include/` adds eight headers absent from `mpp/include/`:
+`hi_ae_comm.h`, `hi_af_comm.h`, `hi_awb_comm.h`, `hi_comm_3a.h`,
+`hi_vreg.h`, `mpi_ae.h`, `mpi_af.h`, `mpi_awb.h` — these now live
+under this repo's `kernel/include/hi3516cv100/` after the mpp2 upgrade.
+
+The `ko/` directory is **identical** between mpp and mpp2 — the T1↔T1+
+swap is purely userspace MPP, not a kernel ABI change.
+
+#### Telling T1+ from T2 in found-online source
+
+Both have function signature `int sensor_register_callback(void)` and three
+MPI calls. Disambiguate by checking the first arg of
+`HI_MPI_ISP_SensorRegCallBack`: T2 has `IspDev`, T1+ has the sensor ID
+directly. Equivalently: T2 includes `hi_comm_video.h` and uses `ISP_DEV`
+types; T1+ has the new `hi_comm_3a.h` / `hi_ae_comm.h` available but no
+`ISP_DEV` references.
 
 ### 3.2 T2 — CV200 / AV100 / CV300
 
@@ -1038,13 +1050,13 @@ in §1 and §3.
 
 | Platform | Tier | Reg sig | Type prefix | Pipe abstraction | Bus-info pattern | Makefile -I flavour | Output |
 |---|---|---|---|---|---|---|---|
-| `hi3516cv100` | T1 | `(void)`, 1 MPI call | `HI_*` | none | static globals | `kernel/include/<chiparch>` | `libsns_<x>.{so,a}` |
-| `hi3516cv100` *(T1+ rev)* | T1+ | `(void)`, 3 MPI calls **without `IspDev`** | `HI_*` | none | static globals | varies | `libsns_<x>.{so,a}` |
+| *(historical mpp/, not in repo)* | T1 | `(void)`, 1 MPI call | `HI_*` | none | static globals | varies | `libsns_<x>.{so,a}` |
+| `hi3516cv100` | T1+ | `(void)`, 3 MPI calls **without `IspDev`** | `HI_*` | none | static globals | `kernel/include/hi3516cv100` (mpp2 flavour) | `libsns_<x>.{so,a}` |
 | `hi3516cv200` | T2 | `(void)`, 3 MPI calls | `HI_*` | `ISP_DEV` (=0) | static globals | `kernel/include/<chiparch>` + `kernel/isp/arch/<chiparch>/include` | `libsns_<x>.{so,a}` |
 | `hi3516av100` | T2 | same as CV200 | `HI_*` | `ISP_DEV` (=0) | static globals | same shape, different platform | `libsns_<x>.{so,a}` |
 | `hi3516cv300` | T2 | same as CV200 | `HI_*` | `ISP_DEV` (=0) | static globals | same shape, different platform | `libsns_<x>.{so,a}` |
 | `hi3519v101` | T3 | `(ISP_DEV, AE*, AWB*)`, 3 MPI calls | `HI_*` | `ISP_DEV` (0–1) | `g_aun<X>BusInfo[ISP_MAX_DEV_NUM]` + `set_bus_info` | `kernel/include/<chiparch>` + `kernel/isp/arch/<chiparch>/include` | `libsns_<x>.{so,a}` |
-| `hi3516av200` *(†, src-compat only)* | T3 | same as V101 | `HI_*` | `ISP_DEV` | same as V101 | n/a (kernel-side absent in this repo) | `libsns_<x>.{so,a}` |
+| `hi3516av200` *(†, built via `CHIPARCH=hi3519v101`)* | T3 | same as V101 | `HI_*` | `ISP_DEV` | same as V101 | same as V101 | `libsns_<x>.{so,a}` |
 | `hi3516cv500` | T4 | `(VI_PIPE, AE*, AWB*)`, 3 MPI calls + `ISP_SNS_ATTR_INFO_S` | `HI_*` | `VI_PIPE` | `g_aun<X>BusInfo[ISP_MAX_PIPE_NUM]` + `set_bus_info` | `libraries/isp/include/hi3516cv500/3a` + `libraries/isp/include/hi3516cv500` + `kernel/include/hi3516cv500/adapt` | `libsns_<x>.{so,a}` |
 | `hi3516ev200` | T5 | same as CV500 | `GK_*` | `VI_PIPE` | same as CV500 | `-DSDK_CODE=$(SDK_CODE) -I$(CURDIR)/../../../../include` (unified) | `libsns_<x>.{so,a}` |
 | `gk7205v200` | T5 | same as CV500 | `GK_*` | `VI_PIPE` | same as CV500 | same as EV200 (sources are identical) | `libsns_<x>.{so,a}` |
