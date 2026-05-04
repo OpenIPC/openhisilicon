@@ -294,12 +294,152 @@ override CFLAGS += -fPIC \
     -I$(CURDIR)/../../../../kernel/isp/arch/hi3516cv200/include
 ```
 
-T2 sub-distinction — CV200 vs AV100 vs CV300 is *purely* a header-path /
-sensor-ID-namespace difference; the function shape, includes, and `ALG_LIB_S`
-boilerplate are identical. Confirmed by reading
+T2 sub-distinction — CV200 vs AV100 vs CV300 share the same **MPI registration
+ABI** (function signature, MPI symbol arity, `ALG_LIB_S` boilerplate are
+identical), confirmed by reading
 `hi3516av100/aptina_ar0230/ar0230_cmos.c:1329` and
-`hi3516cv300/sony_imx290/imx290_cmos.c:2030` — both follow the same pattern with
-their respective sensor IDs.
+`hi3516cv300/sony_imx290/imx290_cmos.c:2030`. Within that registration ABI,
+T2 is genuinely portable.
+
+#### Caveat — ISP tuning data is *not* portable within T2
+
+Sensor drivers don't only register MPI callbacks — they also populate ISP
+tuning structs (`ISP_CMOS_DEFAULT_S` and its sub-structs:
+`ISP_CMOS_DEMOSAIC_S`, `ISP_CMOS_GE_S`, `ISP_CMOS_DRC_S`,
+`AWB_SENSOR_DEFAULT_S`, etc.) that get memcpy'd into the host's libisp at
+`cmos_get_isp_default()` time. **Those structs were rewritten between V2
+and V3** — same names, completely different field sets. A T2 sensor source
+written against V3 (CV300) headers will not correctly populate V2 (CV200)
+ISP defaults even though it links and registers fine.
+
+A first-hand experiment ports `hi3516cv300/jx_f22/` to `hi3516cv200/`
+(JXH-22 sensor target: `hi3518ev200` running OpenIPC firmware). Three
+kinds of drift had to be handled, in increasing severity:
+
+**1. New types V3 added that V2 doesn't have at all.** Wrap with
+`#if defined(hi3516cv300)`:
+- The four V3-only ISP-feature struct types: `ISP_CMOS_FCR_S`
+  (Frame Color Reproduction), `ISP_CMOS_YUV_SHARPEN_S` (V3 has YUV
+  sharpening, V2 has only RGB), `ISP_CMOS_CA_S` (Chromatic Aberration
+  correction), `ISP_CMOS_BAYERNR_S` (V3 has Bayer NR, V2 has only UVNR),
+  plus their initializers and `cmos_get_isp_default()` `memcpy` calls.
+- AWB extension fields V3 added to `AWB_SENSOR_DEFAULT_S`:
+  `au32BlcOffset[]`, `u16Golden{R,B}gain`, `u16Sample{R,B}gain`, plus
+  the `g_au16Sample{R,B}gain[]` static globals that feed them and the
+  `sensor_set_init()` function that updates them.
+- LSC table types `ISP_LSC_CABLI_UNI_TABLE_S` /
+  `ISP_LSC_CABLI_TABLE_S` (V3-only).
+
+**2. Same struct names, completely different field sets.** Wrap each
+struct's *initializer* and the function bodies that consume it with
+`#if defined(hi3516cv300) / #else / #endif`, providing the V2 layout's
+fields in the `#else` branch. Affected structs:
+
+  | Struct | V2 fields | V3 fields |
+  |---|---|---|
+  | `ISP_CMOS_DEMOSAIC_S` | `u8VhLimit`, `u8VhOffset`, `u16VhSlope`, `bFcrEnable`, `au8FcrStrength[]`, `au8FcrThreshold[]`, `u16UuSlope`, `au16NpOffset[]` (Vh / false-color / AHD model) | `EdgeSmoothThr[]`, `EdgeSmoothSlope[]`, `AntiAliasThr[]`, `AntiAliasSlope[]`, `NrCoarseStr[]`, `NoiseSuppressStr[]`, `DetailEnhanceStr[]`, `SharpenLumaStr[]`, `ColorNoiseCtrlThr[]` (denoising model) |
+  | `ISP_CMOS_GE_S` | scalar `u16Threshold`, `u8Sensitivity`, `u16SensiThreshold`, no `au16NpOffset[]` | array `au16Threshold[]`, renamed `u8SensiSlope` / `u16SensiThr`, plus `au16NpOffset[]` |
+  | `ISP_CMOS_DRC_S` | `u16DarkGainLmtY/C`, `u16BrightGainLmt`, `au16ColorCorrectionLut[]` | dropped those, added `u8Compress`, `u8PDStrength`, `u8LocalMixingBrigtht/Dark`, `bOpType`, `u8ManualStrength`, `u8AutoStrength`; renamed LUT to `ColorCorrectionLut[33]` |
+
+Same identifier, **different concept** — V2 demosaic is about
+edge/false-color tuning, V3 demosaic is about denoising. There's no
+set of values that simultaneously feeds both correctly. The V2 init
+data has to be carried in the `#else` branch from a V2-era source
+(e.g. OpenIPC's `glutinium/hi35xx_sensor_jxf22`); it cannot be
+synthesised from V3 values.
+
+**3. Same function names, different bodies.** `cmos_get_ae_default`,
+`cmos_fps_set`, `cmos_slow_framerate_set`, `cmos_inttime_update`,
+`cmos_again_calc_table`, `cmos_gains_update`, `cmos_get_awb_default`,
+`cmos_get_isp_default`, `cmos_set_pixel_detect`, `cmos_set_wdr_mode`,
+`cmos_get_sns_regs_info`, `cmos_set_image_mode`, `sensor_global_init`,
+`sensor_init`, and `sensor_linear_1080p30_init` all need V3 and V2
+implementations under `#if/#else`. Differences include opposite
+byte-orders in `g_stSnsRegsInfo.astI2cData[]` (V3:
+`[3]=VMAX_low/[4]=VMAX_high`; V2: opposite), different I²C ioctl
+patterns (V3 uses `I2C_SLAVE_FORCE` with the slave address right-shifted
+by 1; V2 takes the 8-bit form directly and uses `I2C_16BIT_REG` /
+`I2C_16BIT_DATA` per-write), different mode-set dispatch logic, and
+different sensor register-init sequences (V2 and V3 program different
+PLL/output-pin values).
+
+**A subtle gotcha — symbol visibility.** The V2 source has
+`cmos_inttime_update` declared `static` (formatted oddly as `*/static`
+on the same line as a comment-end). When transcribing into a merged
+file, it's easy to drop the `static` keyword. The resulting non-static
+symbol gets exported by the dynamic loader and the host streamer's
+sensor function-pointer table — populated through
+`cmos_init_ae_exp_function` — gets shadowed at runtime by an
+unintended dlsym lookup on the bare symbol name. The streamer then
+exhibits venc timeouts because the i2c register byte-order written by
+the V3 logic doesn't match what V2's libisp expects to read back. Same
+function name, same lookup, wrong byte order. Compare
+`nm -D libsns_<x>.so` between your merged build and a known-good
+single-platform build: any extra `T` entry that's missing from the
+known-good build is suspect.
+
+**Result of a correctly-merged port.** The cv200 build of the
+fully-gated source produces a stripped 18 KB ARMv5 EABI5 soft-float
+`.so` whose md5 is **byte-identical** to the build of the standalone
+V2 source. Deploying it to the hi3518ev200 camera, restarting majestic,
+and watching for two CV200 surface gotchas (no `Timeout from venc
+channel 0` in the log; correct sensor-init banner from the V2 register
+sequence) confirms the port is functional. The cv300 build of the
+same source still compiles to a 49 KB binary identical in size to
+the original cv300-only build — V3 features are undisturbed.
+
+#### Practical takeaway
+
+For T2, "the source is portable across cv200 / av100 / cv300" is true at
+the **registration ABI** layer and false at the **ISP feature ABI** layer.
+The sub-tier boundary is V2 vs V3 (CV200 + AV100 ≈ V2; CV300 ≈ V3 — AV100
+is a Cortex-A7 die of the V2 SDK, hence still V2-flavoured). When porting
+within T2, audit your destination's `kernel/include/<chiparch>/hi_comm_sns.h`
+ISP_CMOS_*_S definitions before assuming source compatibility. If they
+differ structurally, start from a sensor source written against the
+**target's own SDK era**, not from an "equivalent" T2 source on a
+different generation.
+
+#### How the JXF22 dual-platform port is laid out in this repo
+
+The merged sensor source lives at
+`libraries/sensor/hi3516cv300/jx_f22/{jxf22_cmos.c,jxf22_sensor_ctl.c}`.
+`libraries/sensor/hi3516cv200/soi_jxf22/` carries only a Makefile that
+references the cv300 source via `vpath` and passes `-Dhi3516cv200`:
+
+```makefile
+SRC_DIR := $(CURDIR)/../../hi3516cv300/jx_f22
+override CFLAGS += -fPIC -Dhi3516cv200 \
+    -I$(CURDIR)/../../../../kernel/include/hi3516cv200 \
+    -I$(CURDIR)/../../../../kernel/isp/arch/hi3516cv200/include
+SRCS := jxf22_cmos.c jxf22_sensor_ctl.c
+vpath %.c $(SRC_DIR)
+```
+
+The cv300 Makefile passes `-Dhi3516cv300` and uses its own dir as
+the source location. The build system's `find … -name Makefile`
+(see `libraries/Makefile`) picks up both directories automatically;
+no enumeration to update.
+
+V2-era tuning data for the `#else` branch came from OpenIPC's
+[glutinium](https://github.com/OpenIPC/glutinium)
+`hi35xx_sensor_jxf22` package (built against `hisi-osdrv2`) — the
+canonical V2 source for this sensor. It supplies V2's
+`ISP_CMOS_DEMOSAIC_S` (Vh / false-color / AHD), V2's `ISP_CMOS_GE_S`
+(scalar `u16Threshold` / `u8Sensitivity`), `ISP_CMOS_RGBSHARPEN_S`,
+`ISP_CMOS_UVNR_S`, the V2 sensor i²c programming sequence, and the V2
+register byte-order in `g_stSnsRegsInfo.astI2cData[]`.
+
+#### Lesson, restated for emphasis
+
+Within T2, sharing a single sensor source between cv200 and cv300 is
+mechanical work but it's not small — most function bodies need
+`#if/#else` walls. **You also need a V2-era source for the `#else`
+branch**: there's no way to derive V2 ISP tuning from V3 tuning, since
+the underlying ISP feature set is different. Line count alone is
+misleading: a "smaller / older" upstream driver (like glutinium's V2
+sensor sources) is the V2-correct one — it didn't shrink, the V3
+version grew V3-only data.
 
 ### 3.3 T3 — V101
 

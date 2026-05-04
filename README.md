@@ -230,7 +230,7 @@ sensor driver found online came from — see
 | **Silicon Optronics (JX)** | JXH22 | x | | | | | | |
 | | JXH42 | x | x | | | | | |
 | | JXH63 | | | | | | | x |
-| | JXF22 | | | | x | | | |
+| | JXF22 | | x | | x | | | |
 | | JXF23 | | x | | | | | |
 | | JXF37 | | | | | | | x |
 | **GalaxyCore** | GC2053 | | | | | | x | x |
