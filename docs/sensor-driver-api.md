@@ -294,12 +294,75 @@ override CFLAGS += -fPIC \
     -I$(CURDIR)/../../../../kernel/isp/arch/hi3516cv200/include
 ```
 
-T2 sub-distinction — CV200 vs AV100 vs CV300 is *purely* a header-path /
-sensor-ID-namespace difference; the function shape, includes, and `ALG_LIB_S`
-boilerplate are identical. Confirmed by reading
+T2 sub-distinction — CV200 vs AV100 vs CV300 share the same **MPI registration
+ABI** (function signature, MPI symbol arity, `ALG_LIB_S` boilerplate are
+identical), confirmed by reading
 `hi3516av100/aptina_ar0230/ar0230_cmos.c:1329` and
-`hi3516cv300/sony_imx290/imx290_cmos.c:2030` — both follow the same pattern with
-their respective sensor IDs.
+`hi3516cv300/sony_imx290/imx290_cmos.c:2030`. Within that registration ABI,
+T2 is genuinely portable.
+
+#### Caveat — ISP tuning data is *not* portable within T2
+
+Sensor drivers don't only register MPI callbacks — they also populate ISP
+tuning structs (`ISP_CMOS_DEFAULT_S` and its sub-structs:
+`ISP_CMOS_DEMOSAIC_S`, `ISP_CMOS_GE_S`, `ISP_CMOS_DRC_S`,
+`AWB_SENSOR_DEFAULT_S`, etc.) that get memcpy'd into the host's libisp at
+`cmos_get_isp_default()` time. **Those structs were rewritten between V2
+and V3** — same names, completely different field sets. A T2 sensor source
+written against V3 (CV300) headers will not correctly populate V2 (CV200)
+ISP defaults even though it links and registers fine.
+
+A first-hand experiment ports `hi3516cv300/jx_f22/` to `hi3516cv200/`
+(JXH-22 sensor target: `hi3518ev200` running OpenIPC firmware) by adding
+`-D$(CHIPARCH)` to the Makefiles and gating V3-only code with
+`#if defined(hi3516cv300)`. Findings:
+
+- The MPI-side gate is small: 6 minor regions (about 30 lines of
+  conditionals) — `au32BlcOffset[]`, `u16Golden{R,B}gain`,
+  `u16Sample{R,B}gain` AWB fields, the `g_au16Sample{R,B}gain[]` static
+  globals that feed them, and the four V3-only static struct
+  initializers `ISP_CMOS_FCR_S g_stIspFcr`, `ISP_CMOS_YUV_SHARPEN_S
+  g_stIspYuvSharpen`, `ISP_CMOS_CA_S g_stIspCA`, `ISP_CMOS_BAYERNR_S
+  g_stIspBayerNr` (types that don't exist in V2 at all).
+
+- The ISP-tuning gate is much larger and ultimately unsalvageable: V2
+  and V3's `ISP_CMOS_DEMOSAIC_S` / `ISP_CMOS_GE_S` / `ISP_CMOS_DRC_S` are
+  wholesale rewrites, not field-additive evolutions. Comparing the
+  two header sets:
+
+  | Struct | V2 fields | V3 fields |
+  |---|---|---|
+  | `ISP_CMOS_DEMOSAIC_S` | `u8VhLimit`, `u8VhOffset`, `u16VhSlope`, `bFcrEnable`, `au8FcrStrength[]`, `au8FcrThreshold[]`, `u16UuSlope`, `au16NpOffset[]` (Vh / false-color / AHD model) | `EdgeSmoothThr[]`, `EdgeSmoothSlope[]`, `AntiAliasThr[]`, `AntiAliasSlope[]`, `NrCoarseStr[]`, `NoiseSuppressStr[]`, `DetailEnhanceStr[]`, `SharpenLumaStr[]`, `ColorNoiseCtrlThr[]` (denoising model) |
+  | `ISP_CMOS_GE_S` | scalar `u16Threshold`, `u8Sensitivity`, `u16SensiThreshold`, no `au16NpOffset[]` | array `au16Threshold[]`, renamed `u8SensiSlope` / `u16SensiThr`, plus `au16NpOffset[]` |
+  | `ISP_CMOS_DRC_S` | `u16DarkGainLmtY/C`, `u16BrightGainLmt`, `au16ColorCorrectionLut[]` | dropped those, added `u8Compress`, `u8PDStrength`, `u8LocalMixingBrigtht/Dark`, `bOpType`, `u8ManualStrength`, `u8AutoStrength`; renamed LUT to `ColorCorrectionLut[33]` |
+
+  Same identifier, **different concept** — V2 demosaic is about
+  edge/false-color tuning, V3 demosaic is about denoising. There's no
+  set of values that simultaneously feeds both correctly.
+
+- A cv200 build of the gated cv300 source produces a syntactically valid
+  `.so` (ARMv5 EABI5 soft-float, 36 KB stripped, all expected symbols
+  exported, all `HI_MPI_*` symbols left undefined for runtime
+  resolution). It loaded into the host streamer (`majestic`) on a real
+  hi3518ev200 camera, completed `sensor_register_callback` and
+  `sensor_linear_init`, brought the i2c bus up, populated VB
+  configuration, started the encoder. **Then the streamer exited at
+  IQ-profile load** — the V2 libisp couldn't recover from the
+  memset-zero `stDemosaic` / `stGe` / `stDrc` substructs (gated out
+  because their V3 layouts can't be cast to V2's). Process death, not
+  hang. Camera was restored to stock to recover.
+
+#### Practical takeaway
+
+For T2, "the source is portable across cv200 / av100 / cv300" is true at
+the **registration ABI** layer and false at the **ISP feature ABI** layer.
+The sub-tier boundary is V2 vs V3 (CV200 + AV100 ≈ V2; CV300 ≈ V3 — AV100
+is a Cortex-A7 die of the V2 SDK, hence still V2-flavoured). When porting
+within T2, audit your destination's `kernel/include/<chiparch>/hi_comm_sns.h`
+ISP_CMOS_*_S definitions before assuming source compatibility. If they
+differ structurally, start from a sensor source written against the
+target's own SDK era, not from an "equivalent" T2 source on a different
+generation.
 
 ### 3.3 T3 — V101
 
