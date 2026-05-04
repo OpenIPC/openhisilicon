@@ -1,9 +1,19 @@
 /******************************************************************************
-  A driver program of panasonic IMX138 on HI3518A 
- ******************************************************************************
-    Modification:  2013-05  Created
-******************************************************************************/
 
+  Copyright (C), 2001-2011, Hisilicon Tech. Co., Ltd.
+
+ ******************************************************************************
+  File Name     : sony138_sensor_ctl.c
+  Version       : Initial Draft
+  Author        : Hisilicon multimedia software group
+  Created       : 2011/09/09
+  Description   : Sony IMX138 sensor driver
+  History       :
+  1.Date        : 2011/09/09
+    Author      : MPP
+    Modification: Created file
+
+******************************************************************************/
 #include <stdio.h>
 #include <sys/types.h>
 #include <sys/stat.h>
@@ -58,14 +68,12 @@ int sony_sensor_read_packet(unsigned int data)
 int sensor_write_register(int addr, int data)
 {
 	unsigned int value = (unsigned int)(((addr&0xffff)<<8) | (data & 0xff));
-	//printf("write data = %#x\n", value);
     return sony_sensor_write_packet(value);
 }
 
 int sensor_read_register(int addr)
 {
 	unsigned int data = (unsigned int)(((addr&0xffff)<<8));
-	//printf("read data = %#x\n", data);
     return sony_sensor_read_packet(data);
 }
 
@@ -293,3 +301,4 @@ void sensor_init()
 
 	printf("-------Sony IMX138 Sensor Initial OK!-------\n");
 }
+

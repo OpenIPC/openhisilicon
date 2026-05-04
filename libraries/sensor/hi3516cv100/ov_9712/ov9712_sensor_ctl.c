@@ -12,7 +12,7 @@
 #include "hi_i2c.h"
 #endif
 
-const unsigned int sensor_i2c_addr	=	0x60;		/* I2C Address of OV9712 */
+const unsigned int sensor_i2c_addr	=	0x60;		/* I2C Address of OV9715 */
 const unsigned int sensor_addr_byte	=	1;
 const unsigned int sensor_data_byte	=	1;
 
@@ -23,7 +23,7 @@ int sensor_read_register(int addr)
     int fd = -1;
     int ret;
     int value;
-
+    
     fd = open("/dev/gpioi2c_ov", 0);
     if(fd<0)
     {
@@ -40,8 +40,8 @@ int sensor_read_register(int addr)
         close(fd);
         return -1;
     }
-
-    value &= 0xff;
+    
+    value &= 0xff;    
 
     close(fd);
     return value;
@@ -49,31 +49,31 @@ int sensor_read_register(int addr)
     int fd = -1;
     int ret;
     I2C_DATA_S i2c_data;
-
+	
     fd = open("/dev/hi_i2c", 0);
     if(fd<0)
     {
         printf("Open hi_i2c error!\n");
         return -1;
     }
-
+    
     i2c_data.dev_addr = sensor_i2c_addr;
     i2c_data.reg_addr = addr;
     i2c_data.addr_byte_num = sensor_addr_byte;
     i2c_data.data_byte_num = sensor_data_byte;
 
-    ret = ioctl(fd, CMD_I2C_READ, &i2c_data);
+    ret = ioctl(fd, CMD_I2C_WRITE, &i2c_data);
 
     if (ret)
     {
-        printf("hi_i2c read faild!\n");
+        printf("hi_i2c write faild!\n");
         close(fd);
         return -1;
     }
 
     close(fd);
 #endif
-
+	
 	return i2c_data.data;
 }
 
@@ -83,7 +83,7 @@ int sensor_write_register(int addr, int data)
     int fd = -1;
     int ret;
     int value;
-
+    
     fd = open("/dev/gpioi2c_ov", 0);
     if(fd<0)
     {
@@ -107,14 +107,14 @@ int sensor_write_register(int addr, int data)
     int fd = -1;
     int ret;
     I2C_DATA_S i2c_data;
-
+	
     fd = open("/dev/hi_i2c", 0);
     if(fd<0)
     {
         printf("Open hi_i2c error!\n");
         return -1;
     }
-
+    
     i2c_data.dev_addr = sensor_i2c_addr;
     i2c_data.reg_addr = addr;
     i2c_data.addr_byte_num = sensor_addr_byte;
@@ -141,7 +141,7 @@ int sensor_write_register_bit(int addr, int data, int mask)
     int fd = -1;
     int ret;
     int value;
-
+    
     fd = open("/dev/gpioi2c_ov", 0);
     if(fd<0)
     {
@@ -161,7 +161,7 @@ int sensor_write_register_bit(int addr, int data, int mask)
 
     value &= 0xff;
     value &= ~mask;
-    value |= data & mask;
+    value |= data & mask;    
 
     value = ((sensor_i2c_addr&0xff)<<24) | ((addr&0xff)<<16) | (value&0xff);
 
@@ -179,7 +179,7 @@ int sensor_write_register_bit(int addr, int data, int mask)
     int ret;
     int value;
     I2C_DATA_S i2c_data;
-
+	
     fd = open("/dev/hi_i2c", 0);
     if(fd<0)
     {
@@ -202,10 +202,10 @@ int sensor_write_register_bit(int addr, int data, int mask)
 
     value = i2c_data.data;
     value &= ~mask;
-    value |= data & mask;
-
+    value |= data & mask; 
+    
     i2c_data.data = value;
-
+    
     ret = ioctl(fd, CMD_I2C_WRITE, &i2c_data);
     if (ret)
     {
@@ -221,11 +221,11 @@ int sensor_write_register_bit(int addr, int data, int mask)
 
 
 static void delay_ms(int ms)
-{
+{ 
     usleep(ms*1000);
 }
 
-void sensor_prog(int* rom)
+void sensor_prog(int* rom) 
 {
     int i = 0;
     while (1)
@@ -250,7 +250,7 @@ void sensor_prog(int* rom)
 
 void sensor_init()
 {
-	//Reset
+	//Reset 
 	sensor_write_register(0x12, 0x80);
 	sensor_write_register(0x09, 0x10);
 

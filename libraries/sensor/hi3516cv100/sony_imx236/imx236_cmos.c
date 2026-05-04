@@ -2,13 +2,15 @@
 #define __IMX236_CMOS_H_
 
 #include <stdio.h>
-#include <unistd.h>		
 #include <string.h>
 #include <assert.h>
 #include "hi_comm_sns.h"
 #include "hi_comm_isp.h"
 #include "hi_sns_ctrl.h"
 #include "mpi_isp.h"
+#include "mpi_ae.h"
+#include "mpi_awb.h"
+#include "mpi_af.h"
 
 #ifdef __cplusplus
 #if __cplusplus
@@ -16,178 +18,95 @@ extern "C"{
 #endif
 #endif /* End of #ifdef __cplusplus */
 
-
-#define EXPOSURE_ADDR (0x220) 
+/* Note: format of address is special.
+ * chip_id + reg_adddr */
+#define EXPOSURE_ADDR (0x220) //2:chip_id, 20: reg addr.
 #define LONG_EXPOSURE_ADDR (0x223)
 #define PGC_ADDR (0x214)
 #define VMAX_ADDR (0x218)
 #define HMAX_ADDR (0x21B)
+
+#define IMX236_ID 236
+/*set Frame End Update Mode 2 with HI_MPI_ISP_SetAEAttr and set this value 1 to avoid flicker */
+/*when use Frame End Update Mode 2, the speed of i2c will affect whole system's performance   */
+/*increase I2C_DFT_RATE in Hii2c.c to 400000 to increase the speed of i2c                     */
 #define CMOS_IMX236_ISP_WRITE_SENSOR_ENABLE (1)
 /****************************************************************************
- * local variables															*
+ * local variables                                                            *
  ****************************************************************************/
 extern const unsigned int sensor_i2c_addr;
 extern const unsigned int sensor_addr_byte;
 extern const unsigned int sensor_data_byte;
 
-static cmos_inttime_t cmos_inttime;
-static cmos_gains_t cmos_gains;
 HI_U8 gu8SensorMode = 0;
-
-
-static cmos_isp_default_t st_coms_isp_default_lin =
-{
-    // color correction matrix
-    {
-        4850,
-        {
-            0x01f7, 0x80ef, 0x8008,
-            0x804b, 0x019d, 0x8052,
-            0x0015, 0x8133, 0x021d
-        },
-        3140,
-        {
-            0x0199, 0x8080, 0x8019,
-            0x808e, 0x01b3, 0x8025,
-            0x000f, 0x817c, 0x026c
-        },
-        2470,
-        {
-            0x0147, 0x8025, 0x8022,
-            0x8086, 0x018b, 0x8005,
-            0x801e, 0x8228, 0x0346
-        }
-    },
-	// black level for R, Gr, Gb, B channels
-    {0xf0,0xf0,0xf0,0xf0},
-
-    // calibration reference color temperature
-    4850,
-
-    //WB gain at 5000K, must keep consistent with calibration color temperature
-    
-	{0x190, 0x100, 0x100, 0x204},
-
-    // WB curve parameters, must keep consistent with reference color temperature.
-	//{63, 65, -127, 201983, 128, -151034},
-	{62, 68, -125, 201189, 128, -150451},
-	// hist_thresh
-    {0xd,0x28,0x60,0x80},
-
-    0x00,	// iridix_balck
-    0x0,	// 0:rggb; 2: gbrg
-
-    // gain
-    0xFB,	0x1,
-
-    // iridix space, intensity, slope_max, white level
-    0x02,	0x08,	0x80, 	0x8ff,
-
-    0x1, 	// balance_fe
-    0x80,	// ae compensation
-    0x20, 	// sinter threshold
-
-    0x1,        //0: use default profile table; 1: use calibrated profile lut, the setting for nr0 and nr1 must be correct.
-    0,
-    1528,
 #if CMOS_IMX236_ISP_WRITE_SENSOR_ENABLE
-    2
-#else
-    1
+ISP_SNS_REGS_INFO_S g_stSnsRegsInfo = {0};
+static HI_BOOL gsbRegInit = HI_FALSE;
 #endif
+static HI_U32 gu32FullLinesStd = 1125;
+static HI_U32 gu32FullLines = 1125;
+
+static AWB_CCM_S g_stAwbCcm =
+{
+    4850,
+    {
+        0x01f7, 0x80ef, 0x8008,
+        0x804b, 0x019d, 0x8052,
+        0x0015, 0x8133, 0x021d
+    },
+    3140,
+    {
+        0x0199, 0x8080, 0x8019,
+        0x808e, 0x01b3, 0x8025,
+        0x000f, 0x817c, 0x026c
+    },
+    2470,
+    {
+        0x0147, 0x8025, 0x8022,
+        0x8086, 0x018b, 0x8005,
+        0x801e, 0x8228, 0x0346
+    }
 };
 
-static cmos_isp_default_t st_coms_isp_default_wdr =
+static AWB_AGC_TABLE_S g_stAwbAgcTable =
 {
-    // color correction matrix
-    {
-        4850,
-        {
-            0x022d, 0x80fc, 0x8031,
-            0x803a, 0x01a9, 0x806f,
-            0x002e, 0x8130, 0x0201
-        },
-        3140,
-        {
-            0x01dc, 0x808e, 0x804e,
-            0x809f, 0x01f5, 0x8056,
-            0x0013, 0x8186, 0x0272
-        },
-        2470,
-        {
-            0x018d, 0x807d, 0x8010,
-            0x8072, 0x016f, 0x2,
-            0x8006, 0x8235, 0x033b
-        }
-    },
-
-	// black level for R, Gr, Gb, B channels
-    {0x0,0x0,0x0,0x0},
-
-    // calibration reference color temperature
-    4850,
-
-    //WB gain at 5000K, must keep consistent with calibration color temperature
-	{0x190, 0x100, 0x100, 0x206},
-	
-    // WB curve parameters, must keep consistent with reference color temperature.
-    {63, 65, -127, 201983, 128, -151034},
-	
-    // hist_thresh
-    {0x20,0x40,0x60,0x80},
-   
-    0x00,   // iridix_balck
-    0x0,    // 0:rggb; 2: gbrg
-
-    // gain
-    0x4,    0x1,
-
-    // iridix space, intensity, slope_max, white level
-    0x08,   0x01,   0x20,   0xfff,
-
-    0x0,    // balance_fe
-    0x80,   // ae compensation
-    0x9,    // sinter threshold
-    
-    0x0,     //noise profile=0, use the default noise profile lut, don't need to set nr0 and nr1
-    0x0,
-    0x0,
-#if CMOS_IMX236_ISP_WRITE_SENSOR_ENABLE
-    2
-#else
-    1
-#endif
-};
-
-static cmos_isp_agc_table_t st_isp_agc_table =
-{
-    //sharpen_alt_d
-    {0x88,0x85,0x80,0x7b,0x78,0x72,0x70,0x60},
-
-    //sharpen_alt_ud
-    {0xc8,0xc0,0xb8,0xb0,0xa8,0xa0,0x72,0x4b},
-
-    //snr_thresh
-    {0x06,0x8,0xb,0x16,0x22,0x28,0x32,0x54},
-
-    //demosaic_lum_thresh
-    {0x60,0x60,0x80,0x80,0x80,0x80,0x80,0x80},
-
-    //demosaic_np_offset
-    {0x0,0xa,0x12,0x1a,0x20,0x28,0x30,0x30},
-
-    //ge_strength
-    {0x55,0x55,0x55,0x55,0x55,0x55,0x37,0x37},
+    /* bvalid */
+    1,
 
     /* saturation */
-    {0x80,0x80,0x80,0x80,0x68,0x48,0x35,0x30}
+     {0x80,0x80,0x80,0x80,0x68,0x48,0x35,0x30}
 };
 
-
-static cmos_isp_noise_table_t st_isp_noise_table =
+static ISP_CMOS_AGC_TABLE_S g_stIspAgcTable =
 {
-  //nosie_profile_weight_lut
+    /* bvalid */
+    1,
 
+    /* sharpen_alt_d */
+    {0x88,0x85,0x80,0x7b,0x78,0x72,0x70,0x60},
+        
+    /* sharpen_alt_ud */
+    {0xc8,0xc0,0xb8,0xb0,0xa8,0xa0,0x72,0x4b},
+        
+    /* snr_thresh */
+    {0x06,0x8,0xb,0x16,0x22,0x28,0x32,0x54},
+        
+    /* demosaic_lum_thresh */
+    {0x60,0x60,0x80,0x80,0x80,0x80,0x80,0x80},
+        
+    /* demosaic_np_offset */
+    {0x0,0xa,0x12,0x1a,0x20,0x28,0x30,0x30},
+        
+    /* ge_strength */
+    {0x55,0x55,0x55,0x55,0x55,0x55,0x37,0x37},
+};
+
+static ISP_CMOS_NOISE_TABLE_S g_stIspNoiseTableLin =
+{
+    /* bvalid */
+    1,
+    
+    /* nosie_profile_weight_lut */
     {
         0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x04,0x0c,0x11,0x14,0x17,0x19,0x1b,0x1c,0x1e,0x1f,
         0x20,0x21,0x22,0x23,0x24,0x24,0x25,0x26,0x26,0x27,0x28,0x28,0x29,0x29,0x2a,0x2a,0x2a,
@@ -198,7 +117,8 @@ static cmos_isp_noise_table_t st_isp_noise_table =
         0x39,0x39,0x39,0x39,0x3a,0x3a,0x3a,0x3a,0x3a,0x3a,0x3a,0x3a,0x3a,0x3b,0x3b,0x3b,0x3b,
         0x3b,0x3b,0x3b,0x3b,0x3b,0x3c,0x3c,0x3c,0x3c
     },
-  
+
+    /* demosaic_weight_lut */
     {
         0x04,0x0c,0x11,0x14,0x17,0x19,0x1b,0x1c,0x1e,0x1f,
         0x20,0x21,0x22,0x23,0x24,0x24,0x25,0x26,0x26,0x27,0x28,0x28,0x29,0x29,0x2a,0x2a,0x2a,
@@ -208,33 +128,40 @@ static cmos_isp_noise_table_t st_isp_noise_table =
         0x37,0x37,0x37,0x37,0x37,0x38,0x38,0x38,0x38,0x38,0x38,0x38,0x39,0x39,0x39,0x39,0x39,
         0x39,0x39,0x39,0x39,0x3a,0x3a,0x3a,0x3a,0x3a,0x3a,0x3a,0x3a,0x3a,0x3b,0x3b,0x3b,0x3b,
         0x3b,0x3b,0x3b,0x3b,0x3b,0x3c,0x3c,0x3c,0x3c,0x3c,0x3c,0x3c,0x3c,0x3c,0x3c,0x3c
-    },
-};
-
-static cmos_isp_noise_table_t st_isp_noise_table_wdr =
-{
-    /*nosie_profile_weight_lut WDR*/
-    {
-        0,37,37,37,37,37,37,37,37,37,37,37,37,37,37,37,37,37,37,37,37,37,37,37,37,37,45,48,57,
-            63,63,63,63,63,63,63,63,63,63,63,63,63,63,63,63,63,63,63,63,63,63,63,63,63,63,63,63,
-            63,63,63,63,63,63,63,63,63,63,63,63,63,63,63,63,63,63,63,63,63,63,63,63,63,63,63,63,
-            63,63,63,63,63,63,63,63,63,63,63,64,64,64,64,64,64,64,64,64,64,64,64,64,64,64,64,64,
-            64,64,64,64,64,64,64,64,64,64,64,64,64,64,64
-    },
-
-  //demosaic_weight_lut
-    {
-        0,37,37,37,37,37,37,37,37,37,37,37,37,37,37,37,37,37,37,37,37,37,37,37,37,37,45,48,57,
-            63,63,63,63,63,63,63,63,63,63,63,63,63,63,63,63,63,63,63,63,63,63,63,63,63,63,63,63,
-            63,63,63,63,63,63,63,63,63,63,63,63,63,63,63,63,63,63,63,63,63,63,63,63,63,63,63,63,
-            63,63,63,63,63,63,63,63,63,63,63,64,64,64,64,64,64,64,64,64,64,64,64,64,64,64,64,64,
-            64,64,64,64,64,64,64,64,64,64,64,64,64,64,64
     }
 };
 
-static cmos_isp_demosaic_t st_isp_demosaic =
+static ISP_CMOS_NOISE_TABLE_S g_stIspNoiseTableWdr =
 {
-    /*vh_slope*/
+    /* bvalid */
+    1,
+    
+    /* nosie_profile_weight_lut */
+    {
+        0,37,37,37,37,37,37,37,37,37,37,37,37,37,37,37,37,37,37,37,37,37,37,37,37,37,45,48,57,
+        63,63,63,63,63,63,63,63,63,63,63,63,63,63,63,63,63,63,63,63,63,63,63,63,63,63,63,63,
+        63,63,63,63,63,63,63,63,63,63,63,63,63,63,63,63,63,63,63,63,63,63,63,63,63,63,63,63,
+        63,63,63,63,63,63,63,63,63,63,63,64,64,64,64,64,64,64,64,64,64,64,64,64,64,64,64,64,
+        64,64,64,64,64,64,64,64,64,64,64,64,64,64,64
+    },
+
+    /* demosaic_weight_lut */
+    {
+        0,37,37,37,37,37,37,37,37,37,37,37,37,37,37,37,37,37,37,37,37,37,37,37,37,37,45,48,57,
+        63,63,63,63,63,63,63,63,63,63,63,63,63,63,63,63,63,63,63,63,63,63,63,63,63,63,63,63,
+        63,63,63,63,63,63,63,63,63,63,63,63,63,63,63,63,63,63,63,63,63,63,63,63,63,63,63,63,
+        63,63,63,63,63,63,63,63,63,63,63,64,64,64,64,64,64,64,64,64,64,64,64,64,64,64,64,64,
+        64,64,64,64,64,64,64,64,64,64,64,64,64,64,64
+    }
+};
+
+
+static ISP_CMOS_DEMOSAIC_S g_stIspDemosaic =
+{
+    /* bvalid */
+    1,
+    
+     /*vh_slope*/
     0xd8,
 
     /*aa_slope*/
@@ -269,285 +196,7 @@ static cmos_isp_demosaic_t st_isp_demosaic =
 
     /*ac_thresh*/
     0x1b3,
-
 };
-
-extern void sensor_linner_init();
-extern void sensor_wdr_init();
-
-/*
- * This function initialises an instance of cmos_inttime_t.
- */
-static __inline cmos_inttime_const_ptr_t cmos_inttime_initialize()
-{
-    cmos_inttime.full_lines_std = 1125;
-    cmos_inttime.full_lines_std_30fps = 1125;
-    cmos_inttime.full_lines_std_25fps = 1350;    
-    
-    //cmos_inttime.full_lines = 1125;
-    //cmos_inttime.full_lines_limit = 65535;
-    cmos_inttime.max_lines_target = 1123;
-    cmos_inttime.min_lines_target = 2;
-    cmos_inttime.exposure_shift = 0;
-    //cmos_inttime.vblanking_lines = 1125;
-
-   //cmos_inttime.exposure_ashort = 0;
-
-    cmos_inttime.lines_per_500ms = 16875; // 500ms / 29.63us = 16874
-    cmos_inttime.flicker_freq = 0;//60*256;//50*256;
-
-    switch(gu8SensorMode)
-    {
-        default:
-        case 0: //linear mode
-
-        break;
-        case 1: //WDR mode for short exposure, Exposure ratio = 16X
-            cmos_inttime.max_lines_target = 70;
-            cmos_inttime.min_lines_target = 8;
-        break;
-    }
-    return &cmos_inttime;
-}
-
-/*
- * This function applies the new integration time to the ISP registers.
- */
-static __inline void cmos_inttime_update(cmos_inttime_ptr_t p_inttime) 
-{
-
-    HI_U16 exp_time,current;
-    ISP_I2C_DATA_S stI2cData;
-    static HI_U32 _last_exposure_time = 0xFFFFFFFF;
-    
-    if(_last_exposure_time == p_inttime->exposure_ashort)
-    {
-        return;
-    }else
-    {
-        _last_exposure_time = p_inttime->exposure_ashort;
-    }
-    
-    switch(gu8SensorMode)
-    {
-        default:
-        case 0: //linear mode
-            exp_time = p_inttime->full_lines - p_inttime->exposure_ashort;  
-            current = sensor_read_register(EXPOSURE_ADDR+2);
-#if CMOS_IMX236_ISP_WRITE_SENSOR_ENABLE
-            
-            stI2cData.bDelayCfg = HI_FALSE;
-            stI2cData.u8DevAddr = sensor_i2c_addr;
-            stI2cData.u32AddrByteNum = sensor_addr_byte;
-            stI2cData.u32DataByteNum = sensor_data_byte;
-            
-            stI2cData.u32RegAddr = 0x3020;
-            stI2cData.u32Data = (exp_time & 0xFF);
-            HI_MPI_ISP_I2cWrite(&stI2cData);  
-
-            stI2cData.u32RegAddr = 0x3020+1;
-            stI2cData.u32Data = ((exp_time & 0xFF00) >> 8);
-            HI_MPI_ISP_I2cWrite(&stI2cData);
-
-            
-            stI2cData.u32RegAddr = 0x3020+2;
-            stI2cData.u32Data = ((((exp_time & 0x10000) >> 16)+(current&0xFE)) );
-            HI_MPI_ISP_I2cWrite(&stI2cData);
-            
-#else   
-            sensor_write_register(EXPOSURE_ADDR, exp_time & 0xFF);
-            sensor_write_register(EXPOSURE_ADDR + 1, (exp_time & 0xFF00) >> 8);
-            current = sensor_read_register(EXPOSURE_ADDR+2);
-            sensor_write_register(EXPOSURE_ADDR+2, (((exp_time & 0x10000) >> 16)+(current&0xFE)) );
-#endif
-
-        break;
-        
-        case 1: //WDR mode
-            //short exposure
-            if (p_inttime->exposure_ashort < p_inttime->min_lines_target)
-            {
-                p_inttime->exposure_ashort = p_inttime->min_lines_target;
-            }
-            if (p_inttime->exposure_ashort > p_inttime->max_lines_target)
-            {
-                p_inttime->exposure_ashort = p_inttime->max_lines_target;
-            }
-            
-            exp_time = p_inttime->full_lines - p_inttime->exposure_ashort;
-            current = sensor_read_register(EXPOSURE_ADDR+2);
-#if CMOS_IMX236_ISP_WRITE_SENSOR_ENABLE
-
-            stI2cData.bDelayCfg = HI_FALSE;
-            stI2cData.u8DevAddr = sensor_i2c_addr;
-            stI2cData.u32AddrByteNum = sensor_addr_byte;
-            stI2cData.u32DataByteNum = sensor_data_byte;
-
-            stI2cData.u32RegAddr = 0x3020;
-            stI2cData.u32Data = exp_time & 0xFF;
-            HI_MPI_ISP_I2cWrite(&stI2cData);  
-
-            stI2cData.u32RegAddr = 0x3020+1;
-            stI2cData.u32Data = ((exp_time & 0xFF00) >> 8);
-            HI_MPI_ISP_I2cWrite(&stI2cData);  
-
-            
-            stI2cData.u32RegAddr = 0x3020+2;
-            stI2cData.u32Data = (((exp_time & 0x10000) >> 16)+(current&0xFE));
-            HI_MPI_ISP_I2cWrite(&stI2cData);  
-
-            //long exposure
-            exp_time = p_inttime->full_lines - (p_inttime->exposure_ashort << 4);
-            stI2cData.u32RegAddr = 0x3023;
-            stI2cData.u32Data = (exp_time & 0xFF);
-            HI_MPI_ISP_I2cWrite(&stI2cData);
-
-            stI2cData.u32RegAddr = 0x3023+1;
-            stI2cData.u32Data = ( (exp_time & 0xFF00) >> 8);
-            HI_MPI_ISP_I2cWrite(&stI2cData);
-
-            current = sensor_read_register(LONG_EXPOSURE_ADDR+2);
-            stI2cData.u32RegAddr = 0x3023+2;
-            stI2cData.u32Data = (((exp_time & 0x10000) >> 16)+(current&0xFE));
-            HI_MPI_ISP_I2cWrite(&stI2cData);
-#else
-            sensor_write_register(EXPOSURE_ADDR, exp_time & 0xFF);
-            sensor_write_register(EXPOSURE_ADDR+1, (exp_time & 0xFF00) >> 8);
-            current = sensor_read_register(EXPOSURE_ADDR+2);
-            sensor_write_register(EXPOSURE_ADDR+2, (((exp_time & 0x10000) >> 16)+(current&0xFE)) );
-
-            //long exposure
-            exp_time = p_inttime->full_lines - (p_inttime->exposure_ashort << 4);
-            
-            sensor_write_register(LONG_EXPOSURE_ADDR, exp_time & 0xFF);
-            sensor_write_register(LONG_EXPOSURE_ADDR+1, (exp_time & 0xFF00) >> 8);
-            //current = sensor_read_register(LONG_EXPOSURE_ADDR+2);
-            sensor_write_register(LONG_EXPOSURE_ADDR+2, (((exp_time & 0x10000) >> 16)+(current&0xFE)) );
-#endif
-        break;
-    }
-
-}
-
-/*
- * This function applies the new vert blanking porch to the ISP registers.
- */
-static __inline void cmos_vblanking_update(cmos_inttime_const_ptr_t p_inttime)
-{
-    HI_U16 vmax = p_inttime->full_lines;
-    static HI_U16 last_vblanking_lines = 0xFFFF;
-    
-    if(vmax != last_vblanking_lines)
-    {
-        sensor_write_register(VMAX_ADDR, (vmax&0x00ff));
-        sensor_write_register(VMAX_ADDR+1, ((vmax&0xff00) >> 8));
-        last_vblanking_lines = vmax;
-    }else
-    {
-
-    }
-    return;
-}
-
-static __inline HI_U16 vblanking_calculate(
-		cmos_inttime_ptr_t p_inttime)
-{
-    if (p_inttime->exposure_ashort >= p_inttime->full_lines - 2)
-    {
-        p_inttime->exposure_ashort = p_inttime->full_lines - 2;
-    }
-    else if(p_inttime->exposure_ashort < 1)
-    {
-        p_inttime->exposure_ashort = 1;
-    }
-
-    p_inttime->vblanking_lines = p_inttime->full_lines - p_inttime->full_lines_std;
-    return p_inttime->exposure_ashort;
-}
-
-
-/* Set fps base */
-static __inline void cmos_fps_set(
-		cmos_inttime_ptr_t p_inttime,
-		const HI_U8 fps
-		)
-{
-    if (0 == gu8SensorMode) /*linear mode*/
-    {
-        switch(fps)
-        {
-            case 30:
-                // Change the frame rate via changing the vertical blanking
-                p_inttime->full_lines_std = p_inttime->full_lines_std_30fps;
-                //p_inttime->max_lines = 1123;
-                sensor_write_register(VMAX_ADDR, 0x65);
-                sensor_write_register(VMAX_ADDR+1, 0x04);
-                p_inttime->lines_per_500ms = p_inttime->full_lines_std_30fps * 30 / 2;
-            break;
-            
-            case 25:
-                // Change the frame rate via changing the vertical blanking
-                p_inttime->full_lines_std = p_inttime->full_lines_std_25fps;
-                //p_inttime->max_lines = 1348;
-                sensor_write_register(VMAX_ADDR, 0x46);
-                sensor_write_register(VMAX_ADDR+1, 0x05);
-                p_inttime->lines_per_500ms = p_inttime->full_lines_std_25fps * 25 / 2;
-            break;
-            default:
-                break;
-    	}
-    }
-    else if (1 == gu8SensorMode)   /* Built-in WDR */
-    {
-        switch(fps)
-        {
-            case 30:
-                sensor_write_register(HMAX_ADDR, 0x30);
-                sensor_write_register(HMAX_ADDR+1, 0x11);
-            break;
-            case 25:
-                sensor_write_register(HMAX_ADDR, 0xA0);
-                sensor_write_register(HMAX_ADDR+1, 0x14);
-            break;
-            default:
-                break;
-    	}
-    }
-}
-
-/*
- * This function initialises an instance of cmos_gains_t.
- */
-static __inline cmos_gains_ptr_t cmos_gains_initialize()
-{
-    cmos_gains.again_shift = 10;
-    cmos_gains.dgain_shift = 0;
-
-    cmos_gains.isp_dgain_shift = 8;
-    cmos_gains.isp_dgain = 1 << cmos_gains.isp_dgain_shift;
-    cmos_gains.isp_dgain_delay_cfg = HI_FALSE;
-
-    switch(gu8SensorMode)
-    {
-        default:
-        case 0: //linear mode
-            cmos_gains.max_again = 257217;
-            cmos_gains.max_dgain = 1;
-            cmos_gains.max_again_target = 257217;
-            cmos_gains.max_dgain_target = 1;
-            cmos_gains.max_isp_dgain_target = 4 << cmos_gains.isp_dgain_shift;
-        break;
-        case 1: //WDR mode
-            cmos_gains.max_again = 4076;
-            cmos_gains.max_dgain = 1;
-            cmos_gains.max_again_target = 4076;
-            cmos_gains.max_dgain_target = 1;
-            cmos_gains.max_isp_dgain_target = 32 << cmos_gains.isp_dgain_shift;
-        break;
-    }
-
-	return &cmos_gains;
-}
 
 
 static HI_U32 gain_table[481]=
@@ -577,177 +226,166 @@ static HI_U32 gain_table[481]=
     162293, 164172, 166073, 167996, 169941, 171909, 173900, 175913, 177950, 180011, 182095, 184204, 186337, 188495, 190677, 192885, 195119, 197378, 199664, 201976, 
     204314, 206680, 209073, 211494, 213943, 216421, 218927, 221462, 224026, 226620, 229244, 231899, 234584, 237301, 240048, 242828, 245640, 248484, 251362, 254272, 
     257217
+
 };
 
+extern void sensor_linner_init();
+extern void sensor_wdr_init();
 
-/*
- * This function applies the new gains to the ISP registers.
- */
-static __inline void cmos_gains_update(cmos_gains_const_ptr_t p_gains)
-{    
-    HI_U32 u32Tmp = p_gains->again_db + p_gains->dgain_db;
-
-    u32Tmp = u32Tmp > 0x1E0 ? 0x1E0 : u32Tmp;
-
-    static HI_U32 _last_gain = 0xFFFFFFFF;
-    if(_last_gain == u32Tmp)
-    {
-        return;
-    }else
-    {
-        _last_gain = u32Tmp;
-    }
-
-#if CMOS_IMX236_ISP_WRITE_SENSOR_ENABLE
-    
-    ISP_I2C_DATA_S stI2cData;
-    stI2cData.bDelayCfg = HI_FALSE;
-    stI2cData.u8DevAddr = sensor_i2c_addr;
-    stI2cData.u32AddrByteNum = sensor_addr_byte;
-    stI2cData.u32DataByteNum = sensor_data_byte;
-
-    stI2cData.u32RegAddr = 0x3014;
-    stI2cData.u32Data = (u32Tmp & 0xff);
-    HI_MPI_ISP_I2cWrite(&stI2cData);  
-
-    stI2cData.u32RegAddr = 0x3014+1;
-    stI2cData.u32Data = ((u32Tmp & 0x100) >> 8);
-    HI_MPI_ISP_I2cWrite(&stI2cData);  
-#else
-    sensor_write_register(PGC_ADDR, u32Tmp & 0xff);
-    sensor_write_register(PGC_ADDR + 1, (u32Tmp & 0x100) >> 8);
-#endif
-}
-
-static __inline HI_U32 analog_gain_from_exposure_calculate(
-        cmos_gains_ptr_t p_gains,
-        HI_U32 exposure,
-        HI_U32 exposure_max,
-        HI_U32 exposure_shift)
+static ISP_CMOS_GAMMAFE_S g_stGammafe = 
 {
-    HI_U32 again = 1024;
-    HI_U32 step = 0;
-    HI_S32 shift = 0;
-    HI_S32 i = 0;
-    HI_U32 u32MaxStep;
+    /* bvalid */
+    1,
 
-    while (exposure > (1 << 20))
     {
-        exposure     >>= 1;
-        exposure_max >>= 1;
-        ++shift;
+       0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,  28,
+      70,  95, 114, 131, 146, 159, 172, 183, 195, 205, 215, 224, 233, 242, 250, 258,
+     266, 273, 281, 288, 295, 302, 309, 315, 322, 328, 334, 340, 346, 352, 358, 364,
+     369, 375, 380, 386, 391, 396, 401, 406, 411, 416, 421, 426, 431, 436, 440, 445,
+     450, 454, 459, 463, 467, 472, 476, 480, 485, 489, 493, 497, 502, 506, 510, 514,
+     518, 522, 525, 529, 533, 537, 541, 545, 548, 552, 556, 559, 563, 567, 571, 574,
+     578, 581, 585, 588, 592, 595, 599, 602, 605, 609, 612, 615, 619, 622, 625, 629,
+     632, 635, 638, 642, 645, 648, 651, 654, 657, 661, 664, 667, 670, 673, 676, 679,
+     682, 729, 772, 814, 853, 891, 927, 962, 995,1028,1060,1090,1120,1149,1177,1205,
+    1232,1258,1284,1309,1334,1359,1383,1406,1429,1452,1475,1497,1519,1540,1561,1582,
+    1603,1623,1643,1663,1683,1702,1721,1740,1759,1778,1796,1814,1832,1850,1868,1885,
+    1903,1920,1937,1954,1971,1987,2004,2020,2036,2100,2162,2222,2280,2337,2393,2447,
+    2500,2552,2603,2653,2702,2751,2798,2844,2890,2936,2980,3024,3067,3110,3151,3193,
+    3234,3274,3314,3354,3393,3431,3469,3507,3544,3581,3618,3654,3690,3725,3760,3795,
+    3830,3864,3898,3931,3965,3998,4030,4063,4095,4095,4095,4095,4095,4095,4095,4095,
+    4095,4095,4095,4095,4095,4095,4095,4095,4095,4095,4095,4095,4095,4095,4095,4095,4095
     }
-    exposure_max = (exposure_max == 0)? 1: exposure_max;
+};
 
-    switch(gu8SensorMode)
+HI_U32 cmos_get_isp_default(ISP_CMOS_DEFAULT_S *pstDef)
+{
+    if (HI_NULL == pstDef)
+    {
+        printf("null pointer when get isp default value!\n");
+        return -1;
+    }
+
+    memset(pstDef, 0, sizeof(ISP_CMOS_DEFAULT_S));
+    
+    switch (gu8SensorMode)
     {
         default:
         case 0:
-            u32MaxStep = 481;
+            pstDef->stComm.u8Rggb           = 0x0;      //2: gbrg  
+            pstDef->stComm.u8BalanceFe      = 0x1;
+
+            pstDef->stDenoise.u8SinterThresh= 0x20;
+            pstDef->stDenoise.u8NoiseProfile= 0x1;      //0: use default profile table; 1: use calibrated profile lut, the setting for nr0 and nr1 must be correct.
+            pstDef->stDenoise.u16Nr0        = 0x0;
+            pstDef->stDenoise.u16Nr1        = 455;
+
+            pstDef->stDrc.u8DrcBlack        = 0x00;
+            pstDef->stDrc.u8DrcVs           = 0x04;     // variance space
+            pstDef->stDrc.u8DrcVi           = 0x08;     // variance intensity
+            pstDef->stDrc.u8DrcSm           = 0xa0;     // slope max
+            pstDef->stDrc.u16DrcWl          = 0x8ff;    // white level
+
+            memcpy(&pstDef->stNoiseTbl, &g_stIspNoiseTableLin, sizeof(ISP_CMOS_NOISE_TABLE_S));            
         break;
         case 1:
-            u32MaxStep = 121;
+            pstDef->stComm.u8Rggb           = 0x0;      //2: gbrg  
+            pstDef->stComm.u8BalanceFe      = 0x0;
+
+            pstDef->stDenoise.u8SinterThresh= 0x9;
+            pstDef->stDenoise.u8NoiseProfile= 0x0;      //0: use default profile table; 1: use calibrated profile lut, the setting for nr0 and nr1 must be correct.
+            pstDef->stDenoise.u16Nr0        = 0x0;
+            pstDef->stDenoise.u16Nr1        = 0x0;
+
+            pstDef->stDrc.u8DrcBlack        = 0x00;
+            pstDef->stDrc.u8DrcVs           = 0x08;     // variance space
+            pstDef->stDrc.u8DrcVi           = 0x01;     // variance intensity
+            pstDef->stDrc.u8DrcSm           = 0x3C;     // slope max
+            pstDef->stDrc.u16DrcWl          = 0xFFF;    // white level
+
+            memcpy(&pstDef->stNoiseTbl, &g_stIspNoiseTableWdr, sizeof(ISP_CMOS_NOISE_TABLE_S));
+
+            memcpy(&pstDef->stGammafe, &g_stGammafe, sizeof(ISP_CMOS_GAMMAFE_S));
         break;
     }
-    
-    if(exposure > exposure_max)
 
-    {
-        again = (exposure << 10) / exposure_max;
-        again = again < 1024? 1024: again;
-        again = again > p_gains->max_again_target? p_gains->max_again_target: again;
+    memcpy(&pstDef->stAgcTbl, &g_stIspAgcTable, sizeof(ISP_CMOS_AGC_TABLE_S));
+    memcpy(&pstDef->stDemosaic, &g_stIspDemosaic, sizeof(ISP_CMOS_DEMOSAIC_S));
+
+    return 0;
+}
+
+HI_U32 cmos_get_isp_black_level(ISP_CMOS_BLACK_LEVEL_S *pstBlackLevel)
+{
+    HI_S32  i;
     
-        if (again >= gain_table[u32MaxStep - 1])
-        {
-             again = gain_table[u32MaxStep - 1];
-             step = u32MaxStep - 1;
-        }
-        else
-        {
-            for(i = 1; i < u32MaxStep; i++)
+    if (HI_NULL == pstBlackLevel)
+    {
+        printf("null pointer when get isp black level value!\n");
+        return -1;
+    }
+
+    /* Don't need to update black level when iso change */
+    pstBlackLevel->bUpdate = HI_FALSE;
+
+    switch (gu8SensorMode)
+    {
+        default :
+        case 0 :
+            for (i=0; i<4; i++)
             {
-                if(again < gain_table[i])
-                {
-                    again = gain_table[i-1];
-                    step = i-1 ;
-                    break;
-                }
+                pstBlackLevel->au16BlackLevel[i] = 0xf0;
             }
-        }
-        
-        exposure = (exposure << 10) / again;
+            break;
+        case 1 :
+            for (i=0; i<4; i++)
+            {
+                pstBlackLevel->au16BlackLevel[i] = 0x0;
+            }
+            break;
     }
 
-    p_gains->again = again;
-    p_gains->again_db = step;
-    
-    return exposure << shift;
+    return 0;    
 }
 
-static __inline HI_U32 isp_digital_gain_from_exposure_calculate(
-        cmos_gains_ptr_t p_gains,
-        HI_U32 exposure,
-        HI_U32 exposure_max,
-        HI_U32 exposure_shift)
+HI_VOID cmos_set_pixel_detect(HI_BOOL bEnable)
 {
-    HI_U32 isp_dgain = (1 << p_gains->isp_dgain_shift);
-    HI_S32 shift = 0;
-
-    while (exposure > (1 << 22))
+    if (bEnable) /* setup for ISP pixel calibration mode */
     {
-        exposure >>= 1;
-        exposure_max >>= 1;
-        ++shift;
-    }
-    exposure_max = (exposure_max == 0)? 1: exposure_max;
+        /* Sensor must be programmed for slow frame rate (5 fps and below)*/
+        /* change frame rate to 5 fps by setting 1 frame length = 750 * 30 / 5 */
+        sensor_write_register(VMAX_ADDR, 0x5E);
+        sensor_write_register(VMAX_ADDR + 1, 0x1A);
 
-    if(exposure > exposure_max)
+        /* max Exposure time */
+        sensor_write_register(EXPOSURE_ADDR, 0x00);
+        sensor_write_register(EXPOSURE_ADDR + 1, 0x00);
+
+        /* Analog and Digital gains both must be programmed for their minimum values */
+        sensor_write_register(PGC_ADDR, 0x00);
+        sensor_write_register(PGC_ADDR + 1, 0x00); 
+    }
+    else /* setup for ISP 'normal mode' */
     {
-        isp_dgain = ((exposure << p_gains->isp_dgain_shift) + (exposure_max >> 1)) / exposure_max;
-        exposure = exposure_max;
-        isp_dgain = (isp_dgain > p_gains->max_isp_dgain_target) ? (p_gains->max_isp_dgain_target) : isp_dgain;        
+        sensor_write_register(VMAX_ADDR, 0x65);
+        sensor_write_register(VMAX_ADDR + 1, 0x04);      
     }
-    
-    p_gains->isp_dgain = isp_dgain;
 
-    return exposure << shift;
+    return;
 }
 
-
-static __inline HI_U32 digital_gain_from_exposure_calculate(
-        cmos_gains_ptr_t p_gains,
-        HI_U32 exposure,
-        HI_U32 exposure_max,
-        HI_U32 exposure_shift)
-{
-    int shft = 0;
-    
-    while (exposure > (1<<20)) /* analog use (1<<22) for analog exposure is bigger. */
-    {
-        exposure >>= 1;
-        exposure_max >>= 1;
-        ++shft;
-    }
-
-    p_gains->dgain = 1<<p_gains->dgain_shift;
-    p_gains->dgain_db = 0;
-  
-    return exposure << shft;
-}
-
-void cmos_set_wdr_mode(HI_U8 u8Mode)
+HI_VOID cmos_set_wdr_mode(HI_U8 u8Mode)
 {
     switch(u8Mode)
     {
-        //LINE MODE
         case 0:
             gu8SensorMode = 0;
             sensor_linner_init();
+            printf("imx236 linear mode\n");
         break;
-        //WDR MODE
         case 1:
             gu8SensorMode = 1;
             sensor_wdr_init();
+            printf("imx236 wdr mode\n");
         break;
 
         default:
@@ -755,231 +393,588 @@ void cmos_set_wdr_mode(HI_U8 u8Mode)
             return;
         break;
     }
-    
+#if CMOS_IMX236_ISP_WRITE_SENSOR_ENABLE
+    gsbRegInit = HI_FALSE;
+#endif
     return;
 }
 
-void setup_sensor(int isp_mode)
+static HI_S32 cmos_get_ae_default(AE_SENSOR_DEFAULT_S *pstAeSnsDft)
 {
-    if(0 == isp_mode) /* setup for ISP 'normal mode' */
+    if (HI_NULL == pstAeSnsDft)
     {
+        printf("null pointer when get ae default value!\n");
+        return -1;
+    }
+
+    gu32FullLinesStd = 1125;
+    
+    pstAeSnsDft->u32LinesPer500ms = 1125*30/2;
+    pstAeSnsDft->u32FullLinesStd = gu32FullLinesStd;
+    pstAeSnsDft->u32FlickerFreq = 0;//60*256;//50*256;
+
+    pstAeSnsDft->stIntTimeAccu.enAccuType = AE_ACCURACY_LINEAR;
+    pstAeSnsDft->stIntTimeAccu.f32Accuracy = 1;
+    pstAeSnsDft->u32MaxIntTime = 1123;
+    pstAeSnsDft->u32MinIntTime = 2;
+
+    pstAeSnsDft->stAgainAccu.enAccuType = AE_ACCURACY_TABLE;
+    pstAeSnsDft->stAgainAccu.f32Accuracy = 0.1;
+
+    pstAeSnsDft->stDgainAccu.enAccuType = AE_ACCURACY_TABLE;
+    pstAeSnsDft->stDgainAccu.f32Accuracy = 0.1;
+
+    pstAeSnsDft->u32ISPDgainShift = 8;
+    pstAeSnsDft->u32MinISPDgainTarget = 1 << pstAeSnsDft->u32ISPDgainShift;
+
+    switch(gu8SensorMode)
+    {
+        default:
+        case 0: //linear mode
+            pstAeSnsDft->au8HistThresh[0] = 0xd;
+            pstAeSnsDft->au8HistThresh[1] = 0x28;
+            pstAeSnsDft->au8HistThresh[2] = 0x60;
+            pstAeSnsDft->au8HistThresh[3] = 0x80;
+            
+            pstAeSnsDft->u8AeCompensation = 0x50;
+            
+            pstAeSnsDft->u32MaxIntTimeTarget = 65535;
+            pstAeSnsDft->u32MinIntTimeTarget = 2;
+            
+            pstAeSnsDft->u32MaxAgain = 257217;  /*10bit precision */
+            pstAeSnsDft->u32MinAgain = 1024;
+            pstAeSnsDft->u32MaxAgainTarget = 257217;
+            pstAeSnsDft->u32MinAgainTarget = 1024;
+            
+            pstAeSnsDft->u32MaxDgain = 1024;  /* 24db / 0.1db = 240 */
+            pstAeSnsDft->u32MinDgain = 1024;
+            pstAeSnsDft->u32MaxDgainTarget = 1024;
+            pstAeSnsDft->u32MinDgainTarget = 1024;
+            
+            pstAeSnsDft->u32MaxISPDgainTarget = 4 << pstAeSnsDft->u32ISPDgainShift;
+        break;
+        case 1: //WDR mode
+            pstAeSnsDft->au8HistThresh[0] = 0x20;
+            pstAeSnsDft->au8HistThresh[1] = 0x40;
+            pstAeSnsDft->au8HistThresh[2] = 0x60;
+            pstAeSnsDft->au8HistThresh[3] = 0x80;
+            
+            pstAeSnsDft->u8AeCompensation = 0x50;
+
+        
+            pstAeSnsDft->u32MaxIntTimeTarget = 70;  /* for short exposure, Exposure ratio = 16X */
+            pstAeSnsDft->u32MinIntTimeTarget = 8;
+
+            pstAeSnsDft->u32MaxAgain = 1024;  /* 4.5db fixed */
+            pstAeSnsDft->u32MinAgain = 1024;
+            pstAeSnsDft->u32MaxAgainTarget = 1024;
+            pstAeSnsDft->u32MinAgainTarget = 1024;
+            
+            pstAeSnsDft->u32MaxDgain = 4076;  /* 10bit shift */
+            pstAeSnsDft->u32MinDgain = 1024;
+            pstAeSnsDft->u32MaxDgainTarget = 4076;
+            pstAeSnsDft->u32MinDgainTarget = 1024;
+            
+            pstAeSnsDft->u32MaxISPDgainTarget = 32 << pstAeSnsDft->u32ISPDgainShift;
+        break;
+    }
+
+    return 0;
+}
+
+static HI_S32 cmos_get_sensor_max_resolution(ISP_CMOS_SENSOR_MAX_RESOLUTION *pstSensorMaxResolution)
+{
+    if (HI_NULL == pstSensorMaxResolution)
+    {
+        printf("null pointer when get sensor max resolution \n");
+        return -1;
+    }
+
+    memset(pstSensorMaxResolution, 0, sizeof(ISP_CMOS_SENSOR_MAX_RESOLUTION));
+
+    pstSensorMaxResolution->u32MaxWidth  = 1920;
+    pstSensorMaxResolution->u32MaxHeight = 1080;
+
+    return 0;
+}
+
+
+/* the function of sensor set fps */
+static HI_VOID cmos_fps_set(HI_U8 u8Fps, AE_SENSOR_DEFAULT_S *pstAeSnsDft)
+{
+    if(0 == gu8SensorMode)
+    {
+        sensor_write_register(HMAX_ADDR,  0x30);
+        sensor_write_register(HMAX_ADDR+1, 0x11);
+        switch(u8Fps)
+        {
+            case 30:
+                // Change the frame rate via changing the vertical blanking
+                gu32FullLinesStd = 1125;
+                pstAeSnsDft->u32MaxIntTime = 1123;
+                pstAeSnsDft->u32LinesPer500ms = 1125 * 30 / 2;
+                sensor_write_register(VMAX_ADDR, 0x65);
+                sensor_write_register(VMAX_ADDR+1, 0x4);
+            break;
+            
+            case 25:
+                // Change the frame rate via changing the vertical blanking
+                gu32FullLinesStd = 1350;
+                pstAeSnsDft->u32MaxIntTime = 1348;
+                pstAeSnsDft->u32LinesPer500ms = 1350 * 25 / 2;
+                sensor_write_register(VMAX_ADDR, 0x46);
+                sensor_write_register(VMAX_ADDR+1, 0x05);
+            break;
+            
+            default:
+            break;
+        }
+    }
+    else if (1 == gu8SensorMode)   /* Built-in WDR */
+    {
+        gu32FullLinesStd = 1125;
+        pstAeSnsDft->u32LinesPer500ms = 1125 * 30 / 2;
+        pstAeSnsDft->u32MaxIntTime = 70;
         sensor_write_register(VMAX_ADDR, 0x65);
-        sensor_write_register(VMAX_ADDR + 1, 0x04);       
+        sensor_write_register(VMAX_ADDR+1, 0x4);
+        switch(u8Fps)
+        {
+            case 30:
+                sensor_write_register(HMAX_ADDR, 0x30);
+                sensor_write_register(HMAX_ADDR+1, 0x11);
+            break;
+            case 25:
+                sensor_write_register(HMAX_ADDR, 0xA0);
+                sensor_write_register(HMAX_ADDR+1, 0x14);
+            break;
+            default:
+                break;
+    	}
     }
-    else if(1 == isp_mode) /* setup for ISP pixel calibration mode */
-    {
-        /* Sensor must be programmed for slow frame rate (5 fps and below) */
-        /* change frame rate to 5 fps by setting 1 frame length = 1125 * (30/5) */
-        sensor_write_register(VMAX_ADDR, 0x5E);
-        sensor_write_register(VMAX_ADDR + 1, 0x1A);
 
-        /* Analog and Digital gains both must be programmed for their minimum values */
-        sensor_write_register(PGC_ADDR, 0x00);
-        sensor_write_register(PGC_ADDR + 1, 0x00);
+
+    pstAeSnsDft->u32FullLinesStd = gu32FullLinesStd;
+    gu32FullLines = gu32FullLinesStd;
+
+    return;
+}
+
+static HI_VOID cmos_slow_framerate_set(HI_U16 u16FullLines,
+    AE_SENSOR_DEFAULT_S *pstAeSnsDft)
+{
+    HI_U16 u16Vmax = u16FullLines;
+    HI_U16 u16Current;
+    u16Current = sensor_read_register(VMAX_ADDR+2);
+    
+    sensor_write_register(VMAX_ADDR, (u16Vmax&0x00ff));
+    sensor_write_register(VMAX_ADDR+1, ((u16Vmax&0xff00) >> 8));
+    //sensor_write_register(VMAX_ADDR+2,(((u16Vmax & 0x10000) >> 16)+(u16Current&0xFE)));
+
+    pstAeSnsDft->u32MaxIntTime = u16Vmax - 2;
+    gu32FullLines = u16Vmax;
+
+    return;
+}
+
+static HI_VOID cmos_init_regs_info(HI_VOID)
+{
+#if CMOS_IMX236_ISP_WRITE_SENSOR_ENABLE
+    HI_S32 i;
+
+    if (HI_FALSE == gsbRegInit)
+    {
+        g_stSnsRegsInfo.enSnsType = ISP_SNS_I2C_TYPE;
+        for (i=0; i<8; i++)
+        {
+            g_stSnsRegsInfo.astI2cData[i].u8DevAddr = sensor_i2c_addr;
+            g_stSnsRegsInfo.astI2cData[i].u32AddrByteNum = sensor_addr_byte;
+            g_stSnsRegsInfo.astI2cData[i].u32DataByteNum = sensor_data_byte;
+        }
+        g_stSnsRegsInfo.astI2cData[0].bDelayCfg = HI_FALSE;
+        g_stSnsRegsInfo.astI2cData[0].u32RegAddr = 0x3020;
+        g_stSnsRegsInfo.astI2cData[1].bDelayCfg = HI_FALSE;
+        g_stSnsRegsInfo.astI2cData[1].u32RegAddr = 0x3021;
+        g_stSnsRegsInfo.astI2cData[2].bDelayCfg = HI_FALSE;
+        g_stSnsRegsInfo.astI2cData[2].u32RegAddr = 0x3022;
+        switch(gu8SensorMode)
+        {
+            default:
+            case 0: //linear mode
+            g_stSnsRegsInfo.u32RegNum = 5;
+            g_stSnsRegsInfo.astI2cData[3].bDelayCfg = HI_TRUE;
+            g_stSnsRegsInfo.astI2cData[3].u32RegAddr = 0x3014;
+            g_stSnsRegsInfo.astI2cData[4].bDelayCfg = HI_TRUE;
+            g_stSnsRegsInfo.astI2cData[4].u32RegAddr = 0x3015;
+            break;
+            case 1: //WDR mode
+            g_stSnsRegsInfo.u32RegNum = 8;
+            g_stSnsRegsInfo.astI2cData[3].bDelayCfg = HI_FALSE;
+            g_stSnsRegsInfo.astI2cData[3].u32RegAddr = 0x3023;
+            g_stSnsRegsInfo.astI2cData[4].bDelayCfg = HI_FALSE;
+            g_stSnsRegsInfo.astI2cData[4].u32RegAddr = 0x3024;
+            g_stSnsRegsInfo.astI2cData[5].bDelayCfg = HI_FALSE;
+            g_stSnsRegsInfo.astI2cData[5].u32RegAddr = 0x3025;
+            
+            g_stSnsRegsInfo.astI2cData[6].bDelayCfg = HI_TRUE;
+            g_stSnsRegsInfo.astI2cData[6].u32RegAddr = 0x3014;
+            g_stSnsRegsInfo.astI2cData[7].bDelayCfg = HI_TRUE;
+            g_stSnsRegsInfo.astI2cData[7].u32RegAddr = 0x3015;
+            break;
+        }
+        g_stSnsRegsInfo.bDelayCfgIspDgain = HI_TRUE;
+        gsbRegInit = HI_TRUE;
+    }
+#endif
+    return;
+}
+
+
+/* while isp notify ae to update sensor regs, ae call these funcs. */
+static HI_VOID cmos_inttime_update(HI_U32 u32IntTime)
+{
+    HI_U16 u16ExpTime,u16Current;
+
+    switch(gu8SensorMode)
+    {
+        default:
+        case 0: //linear mode
+            //Integration time = (VMAX - (SHS1)) + tOFFSET
+            u16ExpTime = gu32FullLines - u32IntTime;
+            u16Current = sensor_read_register(EXPOSURE_ADDR+2);
+
+            #if CMOS_IMX236_ISP_WRITE_SENSOR_ENABLE
+            cmos_init_regs_info();
+            g_stSnsRegsInfo.astI2cData[0].u32Data = u16ExpTime & 0xFF;
+            g_stSnsRegsInfo.astI2cData[1].u32Data = (u16ExpTime & 0xFF00) >> 8;
+            g_stSnsRegsInfo.astI2cData[2].u32Data = (((u16ExpTime & 0x10000) >> 16)+(u16Current&0xFE));
+            #else            
+            sensor_write_register(EXPOSURE_ADDR, u16ExpTime & 0xFF);
+            sensor_write_register(EXPOSURE_ADDR+1, (u16ExpTime & 0xFF00) >> 8);
+            sensor_write_register(EXPOSURE_ADDR+2, (((u16ExpTime & 0x10000) >> 16)+(u16Current&0xFE)) );
+            #endif
+        break;
+        case 1: //WDR mode
+            #if CMOS_IMX236_ISP_WRITE_SENSOR_ENABLE
+            //short exposure
+            u16ExpTime = gu32FullLines - u32IntTime;
+            u16Current = sensor_read_register(EXPOSURE_ADDR+2);
+            
+            cmos_init_regs_info();
+            g_stSnsRegsInfo.astI2cData[0].u32Data = u16ExpTime & 0xFF;
+            g_stSnsRegsInfo.astI2cData[1].u32Data = (u16ExpTime & 0xFF00) >> 8;
+            g_stSnsRegsInfo.astI2cData[2].u32Data = (((u16ExpTime & 0x10000) >> 16)+(u16Current&0xFE));
+            
+            //long exposure
+            u16ExpTime = gu32FullLines - (u32IntTime << 4);
+            u16Current = sensor_read_register(LONG_EXPOSURE_ADDR+2);
+
+            g_stSnsRegsInfo.astI2cData[3].u32Data = u16ExpTime & 0xFF;
+            g_stSnsRegsInfo.astI2cData[4].u32Data = (u16ExpTime & 0xFF00) >> 8;
+            g_stSnsRegsInfo.astI2cData[5].u32Data = (((u16ExpTime & 0x10000) >> 16)+(u16Current&0xFE));
+            #else
+            //short exposure
+            u16ExpTime = gu32FullLines - u32IntTime;
+            u16Current = sensor_read_register(EXPOSURE_ADDR+2);
+            
+            sensor_write_register(EXPOSURE_ADDR, u16ExpTime & 0xFF);
+            sensor_write_register(EXPOSURE_ADDR+1, (u16ExpTime & 0xFF00) >> 8);
+            sensor_write_register(EXPOSURE_ADDR+2, (((u16ExpTime & 0x10000) >> 16)+(u16Current&0xFE)) );
+
+            //long exposure
+            u16ExpTime = gu32FullLines - (u32IntTime << 4);
+            u16Current = sensor_read_register(LONG_EXPOSURE_ADDR+2);
+            
+            sensor_write_register(LONG_EXPOSURE_ADDR, u16ExpTime & 0xFF);
+            sensor_write_register(LONG_EXPOSURE_ADDR+1, (u16ExpTime & 0xFF00) >> 8);
+            sensor_write_register(LONG_EXPOSURE_ADDR+2, (((u16ExpTime & 0x10000) >> 16)+(u16Current&0xFE)) );
+            #endif
+        break;
     }
 
     return;
 }
 
-static __inline HI_U32 cmos_get_ISO(cmos_gains_ptr_t p_gains)
+static HI_VOID cmos_again_calc_table(HI_U32 u32InTimes,AE_SENSOR_GAININFO_S *pstAeSnsGainInfo)
 {
-    HI_U32  _again = p_gains->again == 0 ? 1 : p_gains->again;
-    HI_U32 _dgain = p_gains->dgain == 0 ? 1 : p_gains->dgain;
-    HI_U32 _isp_dgain = p_gains->isp_dgain == 0 ? 1 : p_gains->isp_dgain;
+    int i;
 
-    p_gains->iso =  (((HI_U64)_again * _dgain * _isp_dgain * 100) 
-        >> (p_gains->again_shift + p_gains->dgain_shift + p_gains->isp_dgain_shift));
-
-    return p_gains->iso;
-}
-
-/* Note: The unit of return value is 1db.  */
-static HI_U8 cmos_get_analog_gain(cmos_gains_ptr_t cmos_gains)
-{
-    return (cmos_gains->again_db *  3 / 10); 
-}
-
-/* Note: The unit of return value is 1db.  */
-static HI_U8 cmos_get_digital_gain(cmos_gains_ptr_t cmos_gains)
-{
-    return  (cmos_gains->dgain_db *  3 / 10); 
-}
-
-static HI_U32 cmos_get_isp_default(cmos_isp_default_ptr_t p_coms_isp_default)
-{
-    if (NULL == p_coms_isp_default)
+    if(HI_NULL == pstAeSnsGainInfo)
     {
-        printf("null pointer when get isp default value!\n");
-        return -1;
+        printf("null pointer when get ae sensor gain info  value!\n");
+        return;
     }
+ 
+    pstAeSnsGainInfo->u32GainDb = 0;
+    pstAeSnsGainInfo->u32SnsTimes = 1024;
+   
+    if (u32InTimes >= gain_table[480])
+    {
+         pstAeSnsGainInfo->u32SnsTimes = gain_table[480];
+         pstAeSnsGainInfo->u32GainDb = 480;
+         return ;
+    }
+    
+    for(i = 1; i < 481; i++)
+    {
+        if(u32InTimes < gain_table[i])
+        {
+            pstAeSnsGainInfo->u32SnsTimes = gain_table[i - 1];
+            pstAeSnsGainInfo->u32GainDb = i - 1;
+            break;
+        }
 
+    }
+          
+    return;
+
+}
+
+static HI_VOID cmos_dgain_calc_table(HI_U32 u32InTimes,AE_SENSOR_GAININFO_S *pstAeSnsGainInfo)
+{
+    int i;
+
+    if(HI_NULL == pstAeSnsGainInfo)
+    {
+        printf("null pointer when get ae sensor gain info  value!\n");
+        return;
+    }
+ 
+    pstAeSnsGainInfo->u32GainDb = 0;
+    pstAeSnsGainInfo->u32SnsTimes = 1024;
+   
+    if (u32InTimes >= gain_table[480])
+    {
+         pstAeSnsGainInfo->u32SnsTimes = gain_table[480];
+         pstAeSnsGainInfo->u32GainDb = 480;
+         return ;
+    }
+    
+    for(i = 1; i < 481; i++)
+    {
+        if(u32InTimes < gain_table[i])
+        {
+            pstAeSnsGainInfo->u32SnsTimes = gain_table[i - 1];
+            pstAeSnsGainInfo->u32GainDb = i - 1;
+            break;
+        }
+
+    }
+          
+    return;
+
+}
+
+
+static HI_VOID cmos_gains_update(HI_U32 u32Again, HI_U32 u32Dgain)
+{
+    HI_U32 u32Tmp = u32Again + u32Dgain;
     switch(gu8SensorMode)
     {
         default:
-        case 0:
-            memcpy(p_coms_isp_default, &st_coms_isp_default_lin, sizeof(cmos_isp_default_t));
+        case 0: /* linear mode */
+            if( u32Tmp > 0x1E0)
+            {
+                u32Tmp = 0x1E0;
+            }
+            #if CMOS_IMX236_ISP_WRITE_SENSOR_ENABLE
+            cmos_init_regs_info();
+
+            g_stSnsRegsInfo.astI2cData[3].u32Data = (u32Tmp & 0xff);
+            g_stSnsRegsInfo.astI2cData[4].u32Data = ((u32Tmp & 0x100)>>8);
+
+            HI_MPI_ISP_SnsRegsCfg(&g_stSnsRegsInfo);
+            #else
+            sensor_write_register(PGC_ADDR, u32Tmp & 0xff);
+            sensor_write_register(PGC_ADDR + 1, (u32Tmp & 0x100) >> 8);
+            #endif
         break;
-        case 1:
-            memcpy(p_coms_isp_default, &st_coms_isp_default_wdr, sizeof(cmos_isp_default_t));
+        case 1: //WDR mode      
+            #if CMOS_IMX236_ISP_WRITE_SENSOR_ENABLE
+            cmos_init_regs_info();
+            if(u32Dgain <= 120)
+            {
+                g_stSnsRegsInfo.astI2cData[6].u32Data = (u32Dgain & 0xff);
+            }
+            else
+            {
+                g_stSnsRegsInfo.astI2cData[6].u32Data = 0x78;
+            }
+            HI_MPI_ISP_SnsRegsCfg(&g_stSnsRegsInfo);
+            #else
+            if(u32Dgain <= 120)
+            {
+                sensor_write_register(PGC_ADDR, u32Dgain);
+            }
+            else
+            {
+                sensor_write_register(PGC_ADDR, 0x78);
+            }
+            #endif
         break;
     }
+
+    return;
+}
+
+static HI_S32 cmos_get_awb_default(AWB_SENSOR_DEFAULT_S *pstAwbSnsDft)
+{
+    if (HI_NULL == pstAwbSnsDft)
+    {
+        printf("null pointer when get awb default value!\n");
+        return -1;
+    }
+
+    memset(pstAwbSnsDft, 0, sizeof(AWB_SENSOR_DEFAULT_S));
+
+    pstAwbSnsDft->u16WbRefTemp = 4850;
+
+    pstAwbSnsDft->au16GainOffset[0] = 0x190;
+    pstAwbSnsDft->au16GainOffset[1] = 0x100;
+    pstAwbSnsDft->au16GainOffset[2] = 0x100;
+    pstAwbSnsDft->au16GainOffset[3] = 0x204;
+
+    pstAwbSnsDft->as32WbPara[0] = 62;
+    pstAwbSnsDft->as32WbPara[1] = 68;
+    pstAwbSnsDft->as32WbPara[2] = -125;
+    pstAwbSnsDft->as32WbPara[3] = 201189;
+    pstAwbSnsDft->as32WbPara[4] = 128;
+    pstAwbSnsDft->as32WbPara[5] = -150451;
+
+    memcpy(&pstAwbSnsDft->stCcm, &g_stAwbCcm, sizeof(AWB_CCM_S));
+    memcpy(&pstAwbSnsDft->stAgcTbl, &g_stAwbAgcTable, sizeof(AWB_AGC_TABLE_S));
     
     return 0;
 }
 
-
-HI_U32 cmos_get_isp_speical_alg(void)
+HI_VOID sensor_global_init()
 {
-    return isp_special_alg_awb;
-}
 
-static HI_U32 cmos_get_isp_demosaic(cmos_isp_demosaic_ptr_t p_cmos_isp_demosaic)
-{
-   if (NULL == p_cmos_isp_demosaic)
-    {
-        printf("null pointer when get isp demosaic value!\n");
-        return -1;
-    }
-   memcpy(p_cmos_isp_demosaic, &st_isp_demosaic,sizeof(cmos_isp_demosaic_t));
-   return 0;
-
-}
-
-
-static HI_U32 cmos_get_isp_agc_table(cmos_isp_agc_table_ptr_t p_cmos_isp_agc_table)
-{
-    if (NULL == p_cmos_isp_agc_table)
-    {
-        printf("null pointer when get isp agc table value!\n");
-        return -1;
-    }
-    memcpy(p_cmos_isp_agc_table, &st_isp_agc_table, sizeof(cmos_isp_agc_table_t));
-    return 0;
-}
-
-
-static HI_U32 cmos_get_isp_noise_table(cmos_isp_noise_table_ptr_t p_cmos_isp_noise_table)
-{
-	if (NULL == p_cmos_isp_noise_table)
-	{
-	    printf("null pointer when get isp noise table value!\n");
-	    return -1;
-	}
-
-    switch(gu8SensorMode)
-    {
-        default:
-        case 0:
-            memcpy(p_cmos_isp_noise_table, &st_isp_noise_table, sizeof(cmos_isp_noise_table_t));
-        break;
-        case 1:
-            memcpy(p_cmos_isp_noise_table, &st_isp_noise_table_wdr, sizeof(cmos_isp_noise_table_t));
-        break;
-    }
-    return 0;
-}
-
-HI_U32 cmos_get_sensor_mode(void)
-{
-    switch(gu8SensorMode)
-    {
-        default:
-        case 0:
-            return isp_special_alg_imx104_lin;
-
-        break;
-        case 1:
-            return isp_special_alg_imx104_wdr;
-
-        break;
-    }
-}
-
-static HI_S32 cmos_get_sensor_max_resolution(cmos_sensor_max_resolution_ptr_t p_cmos_sensor_max_resolution)
-{
-     if(NULL == p_cmos_sensor_max_resolution)
-     {
-       printf("null pointer when get sensor max resolution value!\n");
-       return -1;
-     }
-
-     p_cmos_sensor_max_resolution->u32MaxWidth  = 1920;
-     p_cmos_sensor_max_resolution->u32MaxHeight = 1080;
-
-    return 0;
+   gu8SensorMode = 0;
+   
+#if CMOS_IMX236_ISP_WRITE_SENSOR_ENABLE
+	gsbRegInit = HI_FALSE;
+#endif
 }
 
 
 /****************************************************************************
  * callback structure                                                       *
  ****************************************************************************/
-
-SENSOR_EXP_FUNC_S stSensorExpFuncs =
+HI_S32 cmos_init_sensor_exp_function(ISP_SENSOR_EXP_FUNC_S *pstSensorExpFunc)
 {
-    .pfn_cmos_inttime_initialize = cmos_inttime_initialize,
-    .pfn_cmos_inttime_update = cmos_inttime_update,
+    memset(pstSensorExpFunc, 0, sizeof(ISP_SENSOR_EXP_FUNC_S));
 
-    .pfn_cmos_gains_initialize = cmos_gains_initialize,
-    .pfn_cmos_gains_update = cmos_gains_update,
-    .pfn_cmos_gains_update2 = NULL,
-    .pfn_analog_gain_from_exposure_calculate = analog_gain_from_exposure_calculate,
-    .pfn_digital_gain_from_exposure_calculate = digital_gain_from_exposure_calculate,
-    .pfn_isp_digital_gain_from_exposure_calculate = isp_digital_gain_from_exposure_calculate,
+    pstSensorExpFunc->pfn_cmos_sensor_init = sensor_init;
+    pstSensorExpFunc->pfn_cmos_sensor_global_init = sensor_global_init;
+    pstSensorExpFunc->pfn_cmos_get_isp_default = cmos_get_isp_default;
+    pstSensorExpFunc->pfn_cmos_get_isp_black_level = cmos_get_isp_black_level;
+    pstSensorExpFunc->pfn_cmos_set_pixel_detect = cmos_set_pixel_detect;
+    pstSensorExpFunc->pfn_cmos_set_wdr_mode = cmos_set_wdr_mode;
+    pstSensorExpFunc->pfn_cmos_get_sensor_max_resolution = cmos_get_sensor_max_resolution;
 
-    .pfn_cmos_fps_set = cmos_fps_set,
-    .pfn_vblanking_calculate = vblanking_calculate,
-    .pfn_cmos_vblanking_front_update = cmos_vblanking_update,
+    return 0;
+}
 
-    .pfn_setup_sensor = setup_sensor,
+HI_S32 cmos_init_ae_exp_function(AE_SENSOR_EXP_FUNC_S *pstExpFuncs)
+{
+    memset(pstExpFuncs, 0, sizeof(AE_SENSOR_EXP_FUNC_S));
 
-    .pfn_cmos_get_analog_gain = cmos_get_analog_gain,
-    .pfn_cmos_get_digital_gain = cmos_get_digital_gain,
-    .pfn_cmos_get_digital_fine_gain = NULL,
-    .pfn_cmos_get_iso = cmos_get_ISO,
+    pstExpFuncs->pfn_cmos_get_ae_default    = cmos_get_ae_default;
+    pstExpFuncs->pfn_cmos_fps_set           = cmos_fps_set;
+    pstExpFuncs->pfn_cmos_slow_framerate_set= cmos_slow_framerate_set;    
+    pstExpFuncs->pfn_cmos_inttime_update    = cmos_inttime_update;
+    pstExpFuncs->pfn_cmos_gains_update      = cmos_gains_update;
+    pstExpFuncs->pfn_cmos_again_calc_table  = cmos_again_calc_table;
+    pstExpFuncs->pfn_cmos_dgain_calc_table  = cmos_dgain_calc_table;
 
-    .pfn_cmos_get_isp_default = cmos_get_isp_default,
-    .pfn_cmos_get_isp_special_alg = cmos_get_sensor_mode,
-    .pfn_cmos_get_isp_agc_table = cmos_get_isp_agc_table,
-    .pfn_cmos_get_isp_noise_table = cmos_get_isp_noise_table,
-    .pfn_cmos_get_isp_demosaic = cmos_get_isp_demosaic,
-    .pfn_cmos_get_isp_shading_table = NULL,
-    .pfn_cmos_get_isp_gamma_table = NULL,    
-	.pfn_cmos_get_sensor_max_resolution = cmos_get_sensor_max_resolution,
-	.pfn_cmos_set_sensor_image_mode = NULL,
-};
+    return 0;
+}
+
+HI_S32 cmos_init_awb_exp_function(AWB_SENSOR_EXP_FUNC_S *pstExpFuncs)
+{
+    memset(pstExpFuncs, 0, sizeof(AWB_SENSOR_EXP_FUNC_S));
+
+    pstExpFuncs->pfn_cmos_get_awb_default = cmos_get_awb_default;
+
+    return 0;
+}
 
 int sensor_register_callback(void)
 {
-    int ret;
-    ret = HI_MPI_ISP_SensorRegCallBack(&stSensorExpFuncs);
-    if (ret)
+    HI_S32 s32Ret;
+    ALG_LIB_S stLib;
+    ISP_SENSOR_REGISTER_S stIspRegister;
+    AE_SENSOR_REGISTER_S  stAeRegister;
+    AWB_SENSOR_REGISTER_S stAwbRegister;
+
+    cmos_init_sensor_exp_function(&stIspRegister.stSnsExp);
+    s32Ret = HI_MPI_ISP_SensorRegCallBack(IMX236_ID, &stIspRegister);
+    if (s32Ret)
     {
         printf("sensor register callback function failed!\n");
-        return ret;
+        return s32Ret;
+    }
+    
+    stLib.s32Id = 0;
+    strcpy(stLib.acLibName, HI_AE_LIB_NAME);
+    cmos_init_ae_exp_function(&stAeRegister.stSnsExp);
+    s32Ret = HI_MPI_AE_SensorRegCallBack(&stLib, IMX236_ID, &stAeRegister);
+    if (s32Ret)
+    {
+        printf("sensor register callback function to ae lib failed!\n");
+        return s32Ret;
     }
 
+    stLib.s32Id = 0;
+    strcpy(stLib.acLibName, HI_AWB_LIB_NAME);
+    cmos_init_awb_exp_function(&stAwbRegister.stSnsExp);
+    s32Ret = HI_MPI_AWB_SensorRegCallBack(&stLib, IMX236_ID, &stAwbRegister);
+    if (s32Ret)
+    {
+        printf("sensor register callback function to ae lib failed!\n");
+        return s32Ret;
+    }
+    
     return 0;
 }
-
-//chang sensor mode
-int sensor_mode_set(HI_U8 u8Mode)
+int sensor_unregister_callback(void)
 {
-    cmos_set_wdr_mode(u8Mode);
+    HI_S32 s32Ret;
+    ALG_LIB_S stLib;
+
+    s32Ret = HI_MPI_ISP_SensorUnRegCallBack(IMX236_ID);
+    if (s32Ret)
+    {
+        printf("sensor unregister callback function failed!\n");
+        return s32Ret;
+    }
+    
+    stLib.s32Id = 0;
+    strcpy(stLib.acLibName, HI_AE_LIB_NAME);
+    s32Ret = HI_MPI_AE_SensorUnRegCallBack(&stLib, IMX236_ID);
+    if (s32Ret)
+    {
+        printf("sensor unregister callback function to ae lib failed!\n");
+        return s32Ret;
+    }
+
+    stLib.s32Id = 0;
+    strcpy(stLib.acLibName, HI_AWB_LIB_NAME);
+    s32Ret = HI_MPI_AWB_SensorUnRegCallBack(&stLib, IMX236_ID);
+    if (s32Ret)
+    {
+        printf("sensor unregister callback function to ae lib failed!\n");
+        return s32Ret;
+    }
+    
+    gu8SensorMode = 0;
     return 0;
-
 }
-
-int  sensor_mode_get()
-{
-    return (int)gu8SensorMode;
-}
-
 
 #ifdef __cplusplus
 #if __cplusplus
 }
 #endif
 #endif /* End of #ifdef __cplusplus */
-
 
 #endif // __IMX236_CMOS_H_

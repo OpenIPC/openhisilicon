@@ -651,7 +651,7 @@ void sensor_init()
 	//sensor_write_register(0x229, 0xC0);
 
 	// waiting for image stabilization
-	usleep(200000);
+
 
 	printf("-------Sony IMX122 Sensor Initial OK!-------\n");
 }
@@ -1764,3 +1764,5 @@ void sensor_init_720p_60fps()
 
 	printf("-------Sony IMX122 Sensor Initial OK!-------\n");
 }
+
+    

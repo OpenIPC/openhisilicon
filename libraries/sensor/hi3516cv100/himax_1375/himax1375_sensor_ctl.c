@@ -1,3 +1,4 @@
+
 #include <stdio.h>
 #include <sys/types.h>
 #include <sys/stat.h>
@@ -12,10 +13,9 @@
 #include "hi_i2c.h"
 #endif
 
-const unsigned int sensor_i2c_addr	=	0x48;		/* I2C Address of himax1375 */
-const unsigned int sensor_addr_byte	=	2;
-const unsigned int sensor_data_byte	=	1;
-
+const unsigned int sensor_i2c_addr  = 0x48;        /* I2C Address of himax1375 */
+const unsigned int sensor_addr_byte = 2;
+const unsigned int sensor_data_byte = 1;
 
 int sensor_read_register(int addr)
 {
@@ -37,6 +37,7 @@ int sensor_read_register(int addr)
     if (ret)
     {
         printf("GPIO-I2C read faild!\n");
+        close(fd);
         return -1;
     }
 
@@ -66,13 +67,14 @@ int sensor_read_register(int addr)
     if (ret)
     {
         printf("hi_i2c read faild!\n");
+        close(fd);
         return -1;
     }
 
     close(fd);
 #endif
 
-	return i2c_data.data;
+    return i2c_data.data;
 }
 
 int sensor_write_register(int addr, int data)
@@ -96,6 +98,7 @@ int sensor_write_register(int addr, int data)
     if (ret)
     {
         printf("GPIO-I2C write faild!\n");
+        close(fd);
         return -1;
     }
 
@@ -123,12 +126,13 @@ int sensor_write_register(int addr, int data)
     if (ret)
     {
         printf("hi_i2c write faild!\n");
+        close(fd);
         return -1;
     }
 
     close(fd);
 #endif
-	return 0;
+    return 0;
 }
 
 int sensor_write_register_bit(int addr, int data, int mask)
@@ -151,6 +155,7 @@ int sensor_write_register_bit(int addr, int data, int mask)
     if (ret)
     {
         printf("GPIO-I2C read faild!\n");
+        close(fd);
         return -1;
     }
 
@@ -164,6 +169,7 @@ int sensor_write_register_bit(int addr, int data, int mask)
     if (ret)
     {
         printf("GPIO-I2C write faild!\n");
+        close(fd);
         return -1;
     }
 
@@ -190,6 +196,7 @@ int sensor_write_register_bit(int addr, int data, int mask)
     if (ret)
     {
         printf("hi_i2c read faild!\n");
+        close(fd);
         return -1;
     }
 
@@ -203,12 +210,13 @@ int sensor_write_register_bit(int addr, int data, int mask)
     if (ret)
     {
         printf("hi_i2c write faild!\n");
+        close(fd);
         return -1;
     }
 
     close(fd);
 #endif
-	return 0;
+    return 0;
 }
 
 
@@ -235,13 +243,13 @@ void sensor_prog(int* rom)
         }
         else
         {
-			sensor_write_register(addr, data);
+            sensor_write_register(addr, data);
         }
     }
 }
 
 void sensor_init()
-{	
+{    
     //HM1375 Raw 1280x720
     sensor_write_register(0x0022,0x00); //Software reset 
     sensor_write_register(0x000C,0x04);  
@@ -779,7 +787,6 @@ void sensor_init()
     sensor_write_register(0x002C,0x00);
     sensor_write_register(0x0005,0x01);
     
-	return ;
+    return ;
 }
-
 

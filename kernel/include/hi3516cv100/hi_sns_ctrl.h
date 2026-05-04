@@ -18,6 +18,7 @@
 #ifndef __HI_SNS_CTRL_H__
 #define __HI_SNS_CTRL_H__
 
+#include "hi_type.h"
 
 #ifdef __cplusplus
 #if __cplusplus
@@ -31,7 +32,8 @@ int  sensor_write_register(int addr, int data);
 int  sensor_read_register(int addr);
 int  sensor_write_register_bit(int addr, int data, int mask);
 int  sensor_register_callback(void); 
-int  sensor_mode_set(HI_U8 u8Mode);
+int sensor_unregister_callback(void);
+
 
 #ifdef __cplusplus
 #if __cplusplus

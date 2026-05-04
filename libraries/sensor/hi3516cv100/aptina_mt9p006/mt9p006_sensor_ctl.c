@@ -12,7 +12,7 @@
 #include "hi_i2c.h"
 #endif
 
-const unsigned int  sensor_i2c_addr  	=	0x90;		/* I2C Address of MT9P006 */
+const unsigned int  sensor_i2c_addr	=	0x90;		/* I2C Address of MT9P006 */
 const unsigned int  sensor_addr_byte	=	1;
 const unsigned int  sensor_data_byte	=	2;
 
@@ -305,4 +305,6 @@ void sensor_init()
  
     printf("Aptina MT9P006 sensor 1080P30fps init success!\n");
 }
+
+
 
