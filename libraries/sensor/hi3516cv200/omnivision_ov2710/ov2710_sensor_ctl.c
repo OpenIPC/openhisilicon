@@ -318,7 +318,16 @@ void sensor_linear_1080p30_init()
     {
         int parallel = ov2710_is_parallel_mode();
         if (parallel) {
-            /* DVP/parallel output (cv100 V1 reference register values) */
+            /* DVP/parallel output (cv100 V1 reference register values).
+             * Override the common 0x3017=0x00, 0x3018=0x00 written above —
+             * those leave every DVP pad as input (high-Z), correct for MIPI
+             * but lethal for DVP. Per OV2710 datasheet table 7-1 sheet 3:
+             *   0x3017 PAD OUTPUT ENABLE01: bit6=VSYNC OEN, bit5=HREF OEN,
+             *                               bit4=PCLK OEN, bit[3:0]=D[9:6] OEN
+             *   0x3018 PAD OUTPUT ENABLE02: bit[7:2]=D[5:0] OEN
+             * 0x7F enables VSYNC/HREF/PCLK/D[9:6]; 0xFC enables D[5:0]. */
+            sensor_write_register(0x3017, 0x7f);
+            sensor_write_register(0x3018, 0xfc);
             sensor_write_register(0x3011, 0x28);
             sensor_write_register(0x300f, 0x88);
 
