@@ -217,7 +217,10 @@ sensor driver found online came from — see
 | | OS04B10 | | | | | | x | |
 | | OS05A | | | | | x | x | x |
 | | OS08A | | | | | x | x | |
-| **SmartSens** | SC2235 | | | | x | | | x |
+| **SmartSens** | SC1135 | | x | | | | | |
+| | SC2035 | | x | | | | | |
+| | SC2135 | | x | | | | | |
+| | SC2235 | | | | x | | | x |
 | | SC4210 | | | | | | x | |
 | | SC4236 | | | x | | | | x |
 | **Panasonic** | MN34031 | x | | | | | | |
@@ -225,9 +228,10 @@ sensor driver found online came from — see
 | | MN34220 | | | x | | | x | |
 | | MN34222 | | x | | | | | |
 | **Silicon Optronics (JX)** | JXH22 | x | | | | | | |
-| | JXH42 | x | | | | | | |
+| | JXH42 | x | x | | | | | |
 | | JXH63 | | | | | | | x |
 | | JXF22 | | | | x | | | |
+| | JXF23 | | x | | | | | |
 | | JXF37 | | | | | | | x |
 | **GalaxyCore** | GC2053 | | | | | | x | x |
 
