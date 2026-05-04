@@ -1,6 +1,6 @@
 LIB_NAME := libsns_sc2235
 
-override CFLAGS += -fPIC \
+override CFLAGS += -fPIC -Dhi3516cv300 \
 	-I$(CURDIR)/../../../../kernel/include/hi3516cv300 \
 	-I$(CURDIR)/../../../../kernel/isp/arch/hi3516cv300/include
 

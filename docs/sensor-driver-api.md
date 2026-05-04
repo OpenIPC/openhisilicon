@@ -400,12 +400,16 @@ differ structurally, start from a sensor source written against the
 **target's own SDK era**, not from an "equivalent" T2 source on a
 different generation.
 
-#### How the JXF22 dual-platform port is laid out in this repo
+#### How the dual-platform ports are laid out in this repo
 
-The merged sensor source lives at
+Two sensors currently use this V2/V3 dual-source layout — **JXF22**
+and **SC2235**. Both follow the same pattern: the canonical merged
+source lives in the `cv300` directory, the `cv200` directory carries
+only a Makefile that references the cv300 source via `vpath`.
+
+For JXF22 specifically, the merged source lives at
 `libraries/sensor/hi3516cv300/jx_f22/{jxf22_cmos.c,jxf22_sensor_ctl.c}`.
-`libraries/sensor/hi3516cv200/soi_jxf22/` carries only a Makefile that
-references the cv300 source via `vpath` and passes `-Dhi3516cv200`:
+`libraries/sensor/hi3516cv200/soi_jxf22/` carries only a Makefile:
 
 ```makefile
 SRC_DIR := $(CURDIR)/../../hi3516cv300/jx_f22
@@ -429,6 +433,16 @@ canonical V2 source for this sensor. It supplies V2's
 (scalar `u16Threshold` / `u8Sensitivity`), `ISP_CMOS_RGBSHARPEN_S`,
 `ISP_CMOS_UVNR_S`, the V2 sensor i²c programming sequence, and the V2
 register byte-order in `g_stSnsRegsInfo.astI2cData[]`.
+
+The SC2235 port mirrors the JXF22 layout — merged source at
+`libraries/sensor/hi3516cv300/smartsens_sc2235/`, vpath-only Makefile
+at `libraries/sensor/hi3516cv200/smartsens_sc2235/`. Same kind of V3
+extras (FCR / YUV sharpen / CA / Bayer NR / LSC) gated with
+`#if defined(hi3516cv300)`; V2 form (RGB sharpen, UVNR, V2-shape DRC
+/ DEMOSAIC / GE) in the `#else` branch sourced from glutinium's
+`hi35xx_sensor_sc2235`. Different sensor (different I²C address —
+0x60 vs 0x80, different register-init sequence, 16-bit register
+addresses vs 8-bit) but same merge pattern.
 
 #### Lesson, restated for emphasis
 
