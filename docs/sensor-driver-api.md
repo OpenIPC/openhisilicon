@@ -361,8 +361,33 @@ is a Cortex-A7 die of the V2 SDK, hence still V2-flavoured). When porting
 within T2, audit your destination's `kernel/include/<chiparch>/hi_comm_sns.h`
 ISP_CMOS_*_S definitions before assuming source compatibility. If they
 differ structurally, start from a sensor source written against the
-target's own SDK era, not from an "equivalent" T2 source on a different
-generation.
+**target's own SDK era**, not from an "equivalent" T2 source on a
+different generation.
+
+#### What worked in practice — JXF22 V2 port
+
+After the cv300 source failed at IQ-profile load, the working approach
+was to **use V2-era source instead of V3-era source**. JXF22 has a V2
+driver in OpenIPC's [glutinium](https://github.com/OpenIPC/glutinium)
+package collection (`hi35xx_sensor_jxf22`, built against `hisi-osdrv2`).
+That source populates V2's `ISP_CMOS_DEMOSAIC_S` (Vh / false-color / AHD
+fields), V2's `ISP_CMOS_GE_S` (scalar `u16Threshold` / `u8Sensitivity` /
+`u16SensiThreshold`, no `au16NpOffset[]`), `ISP_CMOS_RGBSHARPEN_S` (V2
+has RGB-domain sharpening), and `ISP_CMOS_UVNR_S` (V2 has UV noise
+reduction). It uses none of the V3-only types.
+
+It dropped into `libraries/sensor/hi3516cv200/soi_jxf22/` with no source
+changes and a standard cv200 Makefile, built to an 18 KB ARMv5
+soft-float `.so`, deployed to the same hi3518ev200 camera, and
+**streamed clean RTSP on port 554** — IQ profile loaded fine, encoder
+came up, no crash.
+
+Lesson, restated for emphasis: when your repo already evolved a sensor
+forward (e.g. cv300 picked up V3 ISP features over time), the right
+source for a V2 sibling is **earlier upstream**, not the in-repo V3
+version. Line count alone is misleading: a "smaller / older" upstream
+driver is often the V2-correct one — it didn't shrink, the V3 version
+grew V3-only data.
 
 ### 3.3 T3 — V101
 
