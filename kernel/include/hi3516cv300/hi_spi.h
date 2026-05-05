@@ -9,6 +9,7 @@ typedef unsigned char       __u8;
 #ifdef __HuaweiLite__
 #include <spi.h>
 #else
+#include <linux/ioctl.h>
 #include <linux/spi/spidev.h>
 #endif
 
