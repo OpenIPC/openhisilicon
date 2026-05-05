@@ -76,7 +76,14 @@ __setup("map_mmz=", parse_kern_cmdline);
 #else
 char g_setup_zones[MMZ_SETUP_CMDLINE_LEN] = {'\0'};
 char g_mmap_zones[MMZ_SETUP_CMDLINE_LEN] = {'\0'};
-char g_setup_allocator[MMZ_ALLOCATOR_NAME_LEN] = "hisi"; /* default setting */
+/*
+ * Default to "cma": cma_allocator.c is the only allocator with an actual
+ * implementation in this tree. The legacy "hisi" raw-mmz allocator was
+ * dropped when CMA-only paths were upstreamed. Selecting "hisi" here would
+ * leave g_the_allocator function pointers NULL → NULL deref in
+ * hil_mmb_alloc when downstream blob modules try to allocate.
+ */
+char g_setup_allocator[MMZ_ALLOCATOR_NAME_LEN] = "cma";
 module_param_string(mmz, g_setup_zones, MMZ_SETUP_CMDLINE_LEN, 0600);
 module_param_string(map_mmz, g_mmap_zones, MMZ_SETUP_CMDLINE_LEN, 0600);
 module_param_string(mmz_allocator, g_setup_allocator, MMZ_ALLOCATOR_NAME_LEN, 0600);
@@ -1205,19 +1212,26 @@ int __init media_mem_init(void)
         return -EINVAL;
     }
 
-    if (strcmp(g_setup_allocator, "cma") == 0) {
-#ifdef CONFIG_CMA
-        ret = cma_allocator_setopt(&g_the_allocator);
+#ifndef CONFIG_CMA
+    pr_err("CMA is not enabled in kernel; this OSAL build requires CONFIG_CMA=y\n");
+    return -EINVAL;
 #else
-        pr_err("cma is not enabled in kernel, please check!\n");
-        return -EINVAL;
-#endif
-    } else {
-        printk("The module param \"setup_allocator\" should be \"cma\" or \"hisi\", which is \"%s\"\n",
+    /*
+     * Only the CMA allocator path is implemented in this tree (the legacy
+     * raw "hisi" allocator was dropped during 5.x+ porting). Treat any
+     * non-"cma" value — including the legacy "hisi" default that
+     * load_hisilicon scripts still pass — as a request for CMA, with a
+     * one-time warning. Falling through to -EINVAL here would leave
+     * g_the_allocator function pointers NULL and crash hil_mmb_alloc
+     * later (NULL deref in downstream blob modules).
+     */
+    if (strcmp(g_setup_allocator, "cma") != 0) {
+        pr_warn("MMZ: requested allocator \"%s\" not implemented; using \"cma\"\n",
                 g_setup_allocator);
-        mmz_exit_check();
-        return -EINVAL;
+        compat_strlcpy(g_setup_allocator, "cma", sizeof(g_setup_allocator));
     }
+    ret = cma_allocator_setopt(&g_the_allocator);
+#endif
 
     ret = g_the_allocator.init(g_setup_zones);
     if (ret != 0) {
