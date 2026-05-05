@@ -2,7 +2,8 @@ LIB_NAME := libsns_imx117
 
 override CFLAGS += -fPIC \
 	-I$(CURDIR)/../../../../kernel/include/hi3516av100 \
-	-I$(CURDIR)/../../../../kernel/isp/arch/hi3516av100/include
+	-I$(CURDIR)/../../../../kernel/isp/arch/hi3516av100/include \
+	-I$(CURDIR)/../../../../kernel/pwm/hi3516av100
 
 SRCS := $(wildcard *.c)
 OBJS := $(SRCS:%.c=%.o)

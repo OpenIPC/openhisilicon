@@ -1,6 +1,8 @@
 #ifndef __HI_SPI_H__
 #define __HI_SPI_H__
 
+#include <sys/ioctl.h>
+
 typedef unsigned long long  __u64;
 typedef unsigned int        __u32;
 typedef unsigned short      __u16;
