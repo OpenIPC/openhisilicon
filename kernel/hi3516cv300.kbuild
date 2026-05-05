@@ -162,3 +162,6 @@ obj-m += $(PREFIX)sensor_spi.o
 $(PREFIX)rtc-objs := rtc/hi3516cv300/hi_rtc.o
 ccflags-y += -I$(src)/rtc/hi3516cv300
 obj-m += $(PREFIX)rtc.o
+
+# --- HWRNG module (source driver) ---
+include $(src)/hisi-hwrng/Kbuild

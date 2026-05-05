@@ -186,3 +186,6 @@ obj-m += $(PREFIX)pwm.o
 $(PREFIX)piris-objs := piris/hi3519v101/piris.o
 ccflags-y += -I$(src)/piris/hi3519v101
 obj-m += $(PREFIX)piris.o
+
+# --- HWRNG module (source driver) ---
+include $(src)/hisi-hwrng/Kbuild
