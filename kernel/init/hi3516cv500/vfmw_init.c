@@ -7,6 +7,7 @@
 #include "hi_type.h"
 #include "hi_osal.h"
 #include "hi_defines.h"
+#include "../../compat/kernel_compat.h"
 
 int vfmw_module_init(void);
 void vfmw_module_exit(void);
@@ -44,11 +45,11 @@ static int hi35xx_vfmw_probe(struct platform_device *pdev)
     return 0;
 }
 
-static int hi35xx_vfmw_remove(struct platform_device *pdev)
+static compat_platform_remove_ret hi35xx_vfmw_remove(struct platform_device *pdev)
 {
     vfmw_module_exit();
 
-    return 0;
+    compat_platform_remove_return;
 }
 
 
@@ -69,4 +70,4 @@ static struct platform_driver hi35xx_vfmw_driver = {
 
 osal_module_platform_driver(hi35xx_vfmw_driver);
 
-MODULE_LICENSE("Proprietary");
+MODULE_LICENSE("GPL");

@@ -1,12 +1,20 @@
 #include <linux/module.h>
+#include "../../../../compat/kernel_compat.h"
 #include <linux/kernel.h>
+#include "../../../../compat/kernel_compat.h"
 #include <linux/printk.h>
+#include "../../../../compat/kernel_compat.h"
 #include <linux/version.h>
+#include "../../../../compat/kernel_compat.h"
 #include <linux/of_platform.h>
+#include "../../../../compat/kernel_compat.h"
 
 #include "hi_type.h"
+#include "../../../../compat/kernel_compat.h"
 #include "hi_common.h"
+#include "../../../../compat/kernel_compat.h"
 #include "hi_osal.h"
+#include "../../../../compat/kernel_compat.h"
 
 extern int isp_module_init(void);
 extern void isp_module_exit(void);
@@ -29,11 +37,11 @@ static int hi35xx_isp_probe(struct platform_device *pdev)
     return 0;
 }
 
-static int hi35xx_isp_remove(struct platform_device *pdev)
+static compat_platform_remove_ret hi35xx_isp_remove(struct platform_device *pdev)
 {
     isp_module_exit();
     
-    return 0;
+    compat_platform_remove_return;
 }
 
 static const struct of_device_id hi35xx_isp_match[] =

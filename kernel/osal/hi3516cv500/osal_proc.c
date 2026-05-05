@@ -17,6 +17,8 @@
 
 #include "hi_osal.h"
 
+#include "../../compat/kernel_compat.h"
+
 #define OSAL_PROC_DEBUG 0
 
 static struct osal_list_head g_list;
@@ -49,7 +51,7 @@ static ssize_t osal_procwrite(struct file *file, const char __user *buf, size_t 
 static ssize_t osal_procwrite(struct file *file, const char __user *buf,
                               size_t count, loff_t *ppos)
 {
-    osal_proc_entry_t *item = PDE_DATA(file_inode(file));
+    osal_proc_entry_t *item = compat_pde_data(file_inode(file));
 
     if ((item != NULL) && (item->write != NULL)) {
         return item->write(item, buf, count, (long long *)ppos);
@@ -64,7 +66,7 @@ static int osal_procopen(struct inode *inode, struct file *file)
 #if LINUX_VERSION_CODE < KERNEL_VERSION(3, 18, 0)
     osal_proc_entry_t *sentry = PDE(inode)->data;
 #else
-    osal_proc_entry_t *sentry = PDE_DATA(inode);
+    osal_proc_entry_t *sentry = compat_pde_data(inode);
 #endif
     if ((sentry != NULL) && (sentry->open != NULL)) {
         sentry->open(sentry);
@@ -72,6 +74,15 @@ static int osal_procopen(struct inode *inode, struct file *file)
     return single_open(file, osal_seq_show, sentry);
 }
 
+#ifdef COMPAT_USE_PROC_OPS
+static struct proc_ops g_osal_proc_ops = {
+    .proc_open = osal_procopen,
+    .proc_read = seq_read,
+    .proc_write = osal_procwrite,
+    .proc_lseek = seq_lseek,
+    .proc_release = single_release
+};
+#else
 static struct file_operations g_osal_proc_ops = {
     .owner = THIS_MODULE,
     .open = osal_procopen,
@@ -80,6 +91,7 @@ static struct file_operations g_osal_proc_ops = {
     .llseek = seq_lseek,
     .release = single_release
 };
+#endif
 
 osal_proc_entry_t *osal_create_proc(const char *name, osal_proc_entry_t *parent)
 {

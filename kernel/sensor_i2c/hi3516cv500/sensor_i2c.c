@@ -12,6 +12,8 @@
 #include <linux/io.h>
 #include <linux/i2c.h>
 
+#include "../../../compat/kernel_compat.h"
+
 #ifdef __HuaweiLite__
 #include <i2c.h>
 #include "fcntl.h"
@@ -72,7 +74,7 @@ static int hi_sensor_i2c_write(unsigned char i2c_dev, unsigned char dev_addr, un
     }
 
     while (1) {
-        ret = hi_i2c_master_send(&client, (const char *)tmp_buf, idx);
+        ret = i2c_master_send(&client, (const char *)tmp_buf, idx);
         if (ret == idx) {
             break;
         } else if ((ret == -EAGAIN)) {
@@ -81,7 +83,7 @@ static int hi_sensor_i2c_write(unsigned char i2c_dev, unsigned char dev_addr, un
                 return HI_FAILURE;
             }
         } else {
-            osal_printk("[%s %d] hi_i2c_master_send error, ret=%d. \n", __func__, __LINE__, ret);
+            osal_printk("[%s %d] i2c_master_send error, ret=%d. \n", __func__, __LINE__, ret);
             return ret;
         }
     }
@@ -127,7 +129,7 @@ static int hi_sensor_i2c_write(unsigned char i2c_dev, unsigned char dev_addr, un
     }
 
     while (1) {
-        ret = hi_i2c_master_send(&client, (const char *)tmp_buf, idx);
+        ret = i2c_master_send(&client, (const char *)tmp_buf, idx);
         if (ret == idx) {
             break;
         } else if ((ret == -EAGAIN) && (in_atomic() || irqs_disabled())) {
@@ -136,7 +138,7 @@ static int hi_sensor_i2c_write(unsigned char i2c_dev, unsigned char dev_addr, un
                 return HI_FAILURE;
             }
         } else {
-            osal_printk("[%s %d] hi_i2c_master_send error, ret=%d. \n", __func__, __LINE__, ret);
+            osal_printk("[%s %d] i2c_master_send error, ret=%d. \n", __func__, __LINE__, ret);
             return ret;
         }
     }
@@ -209,7 +211,7 @@ static int __init hi_dev_init(void)
     for (i = 0; i < I2C_MAX_NUM; i++) {
         i2c_adap = i2c_get_adapter(i);
         if (i2c_adap != HI_NULL) {
-            g_sensor_client[i] = i2c_new_device(i2c_adap, &g_hi_info);
+            g_sensor_client[i] = i2c_new_client_device(i2c_adap, &g_hi_info);
 
             i2c_put_adapter(i2c_adap);
         } else {

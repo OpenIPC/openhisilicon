@@ -12,6 +12,7 @@
 
 #include "hi_common.h"
 #include "hi_osal.h"
+#include "../../compat/kernel_compat.h"
 
 extern hi_u8 g_ive_power_save_en;
 extern hi_u16 g_ive_node_num;
@@ -50,12 +51,12 @@ static int hi35xx_ive_probe(struct platform_device *pf_dev)
     return ive_std_mod_init();
 }
 
-static int hi35xx_ive_remove(struct platform_device *pf_dev)
+static compat_platform_remove_ret hi35xx_ive_remove(struct platform_device *pf_dev)
 {
     ive_std_mod_exit();
     g_ive_regs = HI_NULL;
 
-    return 0;
+    compat_platform_remove_return;
 }
 
 static const struct of_device_id g_hi35xx_ive_match[] = {
@@ -75,4 +76,4 @@ static struct platform_driver g_hi35xx_ive_driver = {
 
 osal_module_platform_driver(g_hi35xx_ive_driver);
 
-MODULE_LICENSE("Proprietary");
+MODULE_LICENSE("GPL");

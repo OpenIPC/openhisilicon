@@ -20,6 +20,8 @@
 #include <linux/kmod.h>
 #include "base.h"
 
+#include "../../../compat/kernel_compat.h"
+
 static void himedia_bus_release(struct device *dev)
 {
     return;
@@ -45,16 +47,32 @@ static struct device_attribute g_himedia_dev_attrs[] = {
     __ATTR_NULL,
 };
 
+static struct attribute *g_himedia_dev_attrs_list_attrs[] = {
+    &g_himedia_dev_attrs[0].attr,
+    NULL,
+};
+ATTRIBUTE_GROUPS(g_himedia_dev_attrs_list);
+
 /* bus match & uevent */
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(7, 0, 0)
+static int himedia_match(struct device *dev, const struct device_driver *drv)
+#else
 static int himedia_match(struct device *dev, struct device_driver *drv)
+#endif
 {
     struct himedia_device *pdev = to_himedia_device(dev);
     return (strncmp(pdev->devfs_name, drv->name, sizeof(pdev->devfs_name)) == 0);
 }
 
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(7, 0, 0)
+static int himedia_uevent(const struct device *dev, struct kobj_uevent_env *env)
+{
+    struct himedia_device *pdev = to_himedia_device((struct device *)dev);
+#else
 static int himedia_uevent(struct device *dev, struct kobj_uevent_env *env)
 {
     struct himedia_device *pdev = to_himedia_device(dev);
+#endif
     add_uevent_var(env, "MODALIAS=himedia:%s", pdev->devfs_name);
     return 0;
 }
@@ -249,6 +267,15 @@ static struct dev_pm_ops g_himedia_bus_pm_ops = {
     .restore_noirq = himedia_pm_restore_noirq,
 };
 
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(3, 12, 0)
+struct bus_type g_himedia_bus_type = {
+    .name = "himedia",
+    .dev_groups = g_himedia_dev_attrs_list_groups,
+    .match = himedia_match,
+    .uevent = himedia_uevent,
+    .pm = &g_himedia_bus_pm_ops,
+};
+#else
 struct bus_type g_himedia_bus_type = {
     .name = "himedia",
     .dev_attrs = g_himedia_dev_attrs,
@@ -256,6 +283,7 @@ struct bus_type g_himedia_bus_type = {
     .uevent = himedia_uevent,
     .pm = &g_himedia_bus_pm_ops,
 };
+#endif
 
 int himedia_bus_init(void)
 {

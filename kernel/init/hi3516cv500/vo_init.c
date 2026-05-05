@@ -12,6 +12,7 @@
 #include "hi_type.h"
 #include "hi_osal.h"
 #include "vou_exp.h"
+#include "../../compat/kernel_compat.h"
 
 extern VOU_EXPORT_SYMBOL_S g_vou_exp_symbol;
 
@@ -52,11 +53,11 @@ static int hi35xx_vo_probe(struct platform_device *pdev)
     return 0;
 }
 
-static int hi35xx_vo_remove(struct platform_device *pdev)
+static compat_platform_remove_ret hi35xx_vo_remove(struct platform_device *pdev)
 {
     vou_mod_exit();
     g_vo_reg = NULL;
-    return 0;
+    compat_platform_remove_return;
 }
 
 
@@ -77,4 +78,4 @@ static struct platform_driver g_hi35xx_vo_driver = {
 
 osal_module_platform_driver(g_hi35xx_vo_driver);
 
-MODULE_LICENSE("Proprietary");
+MODULE_LICENSE("GPL");

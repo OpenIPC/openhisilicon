@@ -30,13 +30,19 @@
 #include <asm/uaccess.h>
 #include "isp_ext.h"
 
+#include "../../compat/kernel_compat.h"
+
 typedef struct {
     hi_u32 bus_num;
     hi_u32 u32csn;
     hi_char c_sensor[C_SENOSOR_NUM];
 } spi_module_params;
 
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(7, 0, 0)
+extern const struct bus_type spi_bus_type;
+#else
 extern struct bus_type spi_bus_type;
+#endif
 
 #ifdef __HuaweiLite__
 extern int spi_dev_set(int host_no, int cs_no, struct spi_ioc_transfer *transfer);   /* hi_spidev_set */

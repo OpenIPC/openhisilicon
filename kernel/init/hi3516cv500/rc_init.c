@@ -3,6 +3,7 @@
 #include <linux/printk.h>
 #include "hi_type.h"
 #include "hi_defines.h"
+#include "../../compat/kernel_compat.h"
 
 
 extern int rc_module_init(void);
@@ -22,5 +23,5 @@ static void __exit rc_mod_exit(void)
 module_init(rc_mod_init);
 module_exit(rc_mod_exit);
 
-MODULE_LICENSE("Proprietary");
+MODULE_LICENSE("GPL");
 

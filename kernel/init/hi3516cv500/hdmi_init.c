@@ -5,6 +5,7 @@
  * Create: 2012/06/26
  */
 #include "hdmi_init.h"
+#include "../../compat/kernel_compat.h"
 
 #define HDMI_DEV_NAME_LENGTH 16
 
@@ -24,11 +25,11 @@ static int hi35xx_hdmi_probe(struct platform_device *pdev)
     return hdmi_drv_mod_init();
 }
 
-static int hi35xx_hdmi_remove(struct platform_device *pdev)
+static compat_platform_remove_ret hi35xx_hdmi_remove(struct platform_device *pdev)
 {
     hdmi_drv_mod_exit();
     hdmi_set_reg(NULL);
-    return HI_SUCCESS;
+    compat_platform_remove_return;
 }
 
 static const struct of_device_id g_hi35xx_hdmi_match[] = {
@@ -49,5 +50,5 @@ static struct platform_driver g_hi35xx_hdmi_driver = {
 
 osal_module_platform_driver(g_hi35xx_hdmi_driver);
 
-MODULE_LICENSE("Proprietary");
+MODULE_LICENSE("GPL");
 

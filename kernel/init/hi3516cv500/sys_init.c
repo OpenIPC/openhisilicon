@@ -3,6 +3,7 @@
 #include <linux/printk.h>
 #include <linux/version.h>
 #include <linux/of_platform.h>
+#include "../../compat/kernel_compat.h"
 
 #include "hi_type.h"
 #include "hi_osal.h"
@@ -62,7 +63,7 @@ static int hi35xx_sys_probe(struct platform_device *pdev)
     return 0;
 }
 
-static int hi35xx_sys_remove(struct platform_device *pdev)
+static compat_platform_remove_ret hi35xx_sys_remove(struct platform_device *pdev)
 {
     sys_do_mod_exit();
 
@@ -71,7 +72,7 @@ static int hi35xx_sys_remove(struct platform_device *pdev)
     g_reg_ddr0_base_va = NULL;
     g_reg_misc_base_va = NULL;
 
-    return 0;
+    compat_platform_remove_return;
 }
 
 static const struct of_device_id hi35xx_sys_match[] = {
@@ -91,4 +92,4 @@ static struct platform_driver hi35xx_sys_driver = {
 
 osal_module_platform_driver(hi35xx_sys_driver);
 
-MODULE_LICENSE("Proprietary");
+MODULE_LICENSE("GPL");

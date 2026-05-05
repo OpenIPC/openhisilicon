@@ -15,7 +15,13 @@
 #include <asm/cacheflush.h>
 
 #include <asm/memory.h>
+#include <linux/version.h>
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(5, 16, 0)
+#include <linux/cma.h>
+#endif
+#if LINUX_VERSION_CODE < KERNEL_VERSION(5, 16, 0)
 #include <linux/dma-contiguous.h>
+#endif
 #include <linux/dma-mapping.h>
 #include <asm/memory.h>
 #include <asm/tlbflush.h>
@@ -24,6 +30,8 @@
 
 #include "allocator.h"
 #include "mmz_arm.h"
+
+#include "../../../compat/kernel_compat.h"
 
 #define __use_vmalloc_space 1
 
@@ -103,7 +111,7 @@ static hil_mmb_t *__mmb_alloc(const char *name,
         continue;
     }
 
-    page = dma_alloc_from_contiguous(mmz->cma_dev, count, order);
+    page = compat_dma_alloc_from_contiguous(mmz->cma_dev, count, order);
     if (page == NULL) {
         return NULL;
     }
@@ -131,7 +139,7 @@ static hil_mmb_t *__mmb_alloc(const char *name,
     mmb->length = size;
 
     if (name != NULL) {
-        strlcpy(mmb->name, name, HIL_MMB_NAME_LEN);
+        compat_strlcpy(mmb->name, name, HIL_MMB_NAME_LEN);
     } else {
         strncpy(mmb->name, "<null>", HIL_MMB_NAME_LEN - 1);
     }
@@ -203,7 +211,7 @@ static hil_mmb_t *__mmb_alloc_v2(const char *name,
     }
 
     cma_order = get_order(size);
-    page = dma_alloc_from_contiguous(mmz->cma_dev, count, cma_order);
+    page = compat_dma_alloc_from_contiguous(mmz->cma_dev, count, cma_order);
     if (page == NULL) {
         return NULL;
     }
@@ -232,7 +240,7 @@ static hil_mmb_t *__mmb_alloc_v2(const char *name,
     mmb->order = order;
 
     if (name != NULL) {
-        strlcpy(mmb->name, name, HIL_MMB_NAME_LEN);
+        compat_strlcpy(mmb->name, name, HIL_MMB_NAME_LEN);
     } else {
         strncpy(mmb->name, "<null>", HIL_MMB_NAME_LEN - 1);
     }
@@ -494,7 +502,6 @@ static int __allocator_init(char *s)
     while ((line = strsep(&s, ":")) != NULL) {
         int i;
         char *argv[6]; /* 6: cmdline include six arguments */
-        extern struct cma_zone *hisi_get_cma_zone(const char *name);
         /*
          * FIX ME: We got 4 args in "line", formated as
          * "argv[0],argv[1],argv[2],argv[3],argv[4]".
@@ -506,7 +513,25 @@ static int __allocator_init(char *s)
                 break;
             }
 
-        cma_zone = hisi_get_cma_zone(argv[0]);
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(5, 16, 0)
+        /* Mainline kernels: use default CMA area, no vendor zone lookup */
+        cma_zone = NULL;
+        {
+            struct cma *default_cma = dev_get_cma_area(NULL);
+            if (default_cma) {
+                static struct cma_zone default_zone;
+                default_zone.gfp = 0;
+                default_zone.phys_start = cma_get_base(default_cma);
+                default_zone.nbytes = cma_get_size(default_cma);
+                cma_zone = &default_zone;
+            }
+        }
+#else
+        {
+            extern struct cma_zone *hisi_get_cma_zone(const char *name);
+            cma_zone = hisi_get_cma_zone(argv[0]);
+        }
+#endif
         if (cma_zone == NULL) {
             printk(KERN_ERR "can't get cma zone info:%s\n", argv[0]);
             continue;
@@ -518,7 +543,7 @@ static int __allocator_init(char *s)
                 continue;
             }
 
-            strlcpy(zone->name, argv[0], HIL_MMZ_NAME_LEN);
+            compat_strlcpy(zone->name, argv[0], HIL_MMZ_NAME_LEN);
 
             printk("cmz zone gfp 0x%lx, phys 0x%lx, nbytes 0x%lx\n",
                    cma_zone->gfp,
@@ -538,7 +563,7 @@ static int __allocator_init(char *s)
                 continue;
             }
 
-            strlcpy(zone->name, argv[0], HIL_MMZ_NAME_LEN);
+            compat_strlcpy(zone->name, argv[0], HIL_MMZ_NAME_LEN);
 
             zone->gfp = cma_zone->gfp;
             zone->phys_start = cma_zone->phys_start;

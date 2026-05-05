@@ -1,6 +1,7 @@
 #include <linux/module.h>
 
 #include "mod_ext.h"
+#include "../../compat/kernel_compat.h"
 
 extern int HI_LOG(hi_s32 level, hi_mod_id mod_id, const char *fmt, ...);
 EXPORT_SYMBOL(HI_LOG);
@@ -58,6 +59,7 @@ static struct ctl_table comm_eproc_table[] = {
     {}
 };
 
+#ifndef COMPAT_NO_SYSCTL_TABLE
 static struct ctl_table comm_dir_table[] = {
     {
         .procname       = "debug",
@@ -75,12 +77,17 @@ static struct ctl_table comm_parent_tbl[] = {
     },
     {}
 };
+#endif
 
 static struct ctl_table_header *comm_eproc_tbl_head;
 
 int __init comm_init_proc_ctrl(void)
 {
+#ifdef COMPAT_NO_SYSCTL_TABLE
+    comm_eproc_tbl_head = compat_register_sysctl("dev/debug", comm_eproc_table);
+#else
     comm_eproc_tbl_head = register_sysctl_table(comm_parent_tbl);
+#endif
     if (!comm_eproc_tbl_head)
         return -ENOMEM;
     return 0;
@@ -118,5 +125,5 @@ static void __exit base_mod_exit(void)
 module_init(base_mod_init);
 module_exit(base_mod_exit);
 
-MODULE_LICENSE("Proprietary");
+MODULE_LICENSE("GPL");
 

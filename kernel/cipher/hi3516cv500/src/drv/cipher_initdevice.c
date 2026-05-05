@@ -11,6 +11,7 @@
 #ifndef __HuaweiLite__
 #ifdef IRQ_DTS_SUPPORT
 #include <linux/of_platform.h>
+#include "../../../../../../compat/kernel_compat.h"
 
 static int hi35xx_cipher_probe(struct platform_device *pdev)
 {
@@ -67,11 +68,11 @@ static int hi35xx_cipher_probe(struct platform_device *pdev)
     return 0;
 }
 
-static int hi35xx_cipher_remove(struct platform_device *pdev)
+static compat_platform_remove_ret hi35xx_cipher_remove(struct platform_device *pdev)
 {
     cipher_drv_mod_exit();
 
-    return 0;
+    compat_platform_remove_return;
 }
 
 static const struct of_device_id g_hi35xx_cipher_match[] = {

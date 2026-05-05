@@ -315,7 +315,7 @@ static int __init sensor_spi_dev_init(void)
     }
 
     for (bus_num = 0; bus_num < SPI_MAX_NUM; bus_num++) {
-        master = spi_busnum_to_master(bus_num);
+        master = spi_busnum_to_controller(bus_num);
         for (csn = 0; csn < g_spi_csn[bus_num]; csn++) {
             if (!master) {
                 dev_err(NULL, "spi_busnum_to_master() error!\n");

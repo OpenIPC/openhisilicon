@@ -7,6 +7,7 @@
 #include "hi_common.h"
 #include "hi_osal.h"
 #include "hi_defines.h"
+#include "../../compat/kernel_compat.h"
 
 extern int vpss_module_init(void);
 extern void vpss_module_exit(void);
@@ -38,13 +39,13 @@ static int hi35xx_vpss_probe(struct platform_device *pdev)
     return 0;
 }
 
-static int hi35xx_vpss_remove(struct platform_device *pdev)
+static compat_platform_remove_ret hi35xx_vpss_remove(struct platform_device *pdev)
 {
     vpss_module_exit();
 
     g_vpss_reg[0] = HI_NULL;
 
-    return 0;
+    compat_platform_remove_return;
 }
 
 
@@ -65,4 +66,4 @@ static struct platform_driver hi35xx_vpss_driver = {
 
 osal_module_platform_driver(hi35xx_vpss_driver);
 
-MODULE_LICENSE("Proprietary");
+MODULE_LICENSE("GPL");

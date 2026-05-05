@@ -5,6 +5,7 @@
 
 #include "hi_common.h"
 #include "hi_osal.h"
+#include "../../compat/kernel_compat.h"
 
 #define DIS_DEV_NAME_LENGTH 10
 
@@ -23,5 +24,5 @@ module_init(dis_mod_init);
 module_exit(dis_mod_exit);
 
 
-MODULE_LICENSE("Proprietary");
+MODULE_LICENSE("GPL");
 

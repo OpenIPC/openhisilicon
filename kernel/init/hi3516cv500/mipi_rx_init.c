@@ -10,6 +10,7 @@
 #include <linux/printk.h>
 #include <linux/version.h>
 #include <linux/of_platform.h>
+#include "../../compat/kernel_compat.h"
 
 extern unsigned int g_mipi_rx_irq_num;
 extern void *g_mipi_rx_regs_va;
@@ -36,12 +37,12 @@ static int hi35xx_mipi_rx_probe(struct platform_device *pdev)
     return mipi_rx_mod_init();
 }
 
-static int hi35xx_mipi_rx_remove(struct platform_device *pdev)
+static compat_platform_remove_ret hi35xx_mipi_rx_remove(struct platform_device *pdev)
 {
     mipi_rx_mod_exit();
     g_mipi_rx_regs_va = NULL;
 
-    return 0;
+    compat_platform_remove_return;
 }
 
 static const struct of_device_id g_hi35xx_mipi_rx_match[] = {

@@ -50,7 +50,6 @@ ccflags-y += -I$(src)/$(CV500_OSAL_DIR)/mmz
 CV500_OSAL_MMZ_SRCS := \
 	$(CV500_OSAL_DIR)/mmz/media_mem.c \
 	$(CV500_OSAL_DIR)/mmz/mmz_userdev.c \
-	$(CV500_OSAL_DIR)/mmz/hisi_allocator.c \
 	$(CV500_OSAL_DIR)/mmz/cma_allocator.c
 
 CV500_OSAL_HIMEDIA_SRCS := \
@@ -196,9 +195,11 @@ ccflags-y += -I$(src)/ir/hi3516cv500
 obj-m += $(PREFIX)ir.o
 
 # --- hi_user module (source driver) ---
-$(PREFIX)hi_user-objs := hiuser/hi3516cv500/hi_user.o
-ccflags-y += -I$(src)/hiuser/hi3516cv500
-obj-m += $(PREFIX)hi_user.o
+# Disabled: sched_setscheduler not exported for modules on 6.x+.
+# hi_user is not in the CV500 opensdk install list.
+#$(PREFIX)hi_user-objs := hiuser/hi3516cv500/hi_user.o
+#ccflags-y += -I$(src)/hiuser/hi3516cv500
+#obj-m += $(PREFIX)hi_user.o
 
 # --- Cipher module (source driver) ---
 CV500_CIPHER = cipher/hi3516cv500/src

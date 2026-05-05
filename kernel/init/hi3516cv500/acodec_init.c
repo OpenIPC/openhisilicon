@@ -3,6 +3,7 @@
 #include <linux/printk.h>
 
 #include "hi_type.h"
+#include "../../compat/kernel_compat.h"
 
 extern int acodec_init(void);
 extern void acodec_exit(void);
@@ -20,5 +21,5 @@ static __exit void acodec_mod_exit(void){
 module_init(acodec_mod_init);
 module_exit(acodec_mod_exit);
 
-MODULE_LICENSE("Proprietary");
+MODULE_LICENSE("GPL");
 

@@ -11,6 +11,7 @@
 #include <asm/io.h>
 #include <asm/uaccess.h>
 #include <linux/version.h>
+#include "../../compat/kernel_compat.h"
 
 #if LINUX_VERSION_CODE < KERNEL_VERSION(4, 0, 0)
 
@@ -69,6 +70,6 @@ EXPORT_SYMBOL(osal_copy_to_user);
 
 int osal_access_ok(int type, const void *addr, unsigned long size)
 {
-    return access_ok(type, addr, size);
+    return compat_access_ok(type, addr, size);
 }
 EXPORT_SYMBOL(osal_access_ok);

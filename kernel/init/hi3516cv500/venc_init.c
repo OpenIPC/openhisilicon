@@ -3,6 +3,7 @@
 #include <linux/of_platform.h>
 #include "hi_type.h"
 #include "hi_osal.h"
+#include "../../compat/kernel_compat.h"
 
 extern int venc_module_init(void);
 extern void venc_module_exit(void);
@@ -18,10 +19,10 @@ static int hi35xx_venc_probe(struct platform_device *pdev)
 }
 
 
-static int hi35xx_venc_remove(struct platform_device *pdev)
+static compat_platform_remove_ret hi35xx_venc_remove(struct platform_device *pdev)
 {
     venc_module_exit();
-    return 0;
+    compat_platform_remove_return;
 }
 
 static const struct of_device_id hi35xx_venc_match[] = {
@@ -42,7 +43,7 @@ static struct platform_driver hi35xx_venc_driver = {
 osal_module_platform_driver(hi35xx_venc_driver);
 
 
-MODULE_LICENSE("Proprietary");
+MODULE_LICENSE("GPL");
 
 
 

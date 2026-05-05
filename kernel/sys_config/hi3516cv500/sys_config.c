@@ -14,6 +14,7 @@
 #include <linux/types.h>
 #include <asm/io.h>
 #include "hi_osal.h"
+#include "../../compat/kernel_compat.h"
 
 #define VO_BT1120_EN      0
 #define VO_BT656_EN       0
@@ -1126,10 +1127,10 @@ static int sys_config_probe(struct platform_device* pdev)
     return hi_sysconfig_init(g_cmos_yuv_flag, g_online_flag, g_chip_list, g_sensor_list);
 }
 
-static int sys_config_remove(struct platform_device* pdev)
+static compat_platform_remove_ret sys_config_remove(struct platform_device* pdev)
 {
     hi_sysconfig_exit();
-    return 0;
+    compat_platform_remove_return;
 }
 
 static const struct of_device_id g_sys_config_match[] = {

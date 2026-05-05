@@ -6,6 +6,7 @@
 
 #include "hi_common.h"
 #include "hi_osal.h"
+#include "../../compat/kernel_compat.h"
 
 extern unsigned int gdc_en[GDC_IP_NUM];
 extern HI_U32 max_gdc_job;
@@ -62,7 +63,7 @@ static int hi35xx_gdc_probe(struct platform_device* pdev)
     return 0;
 }
 
-static int hi35xx_gdc_remove(struct platform_device* pdev)
+static compat_platform_remove_ret hi35xx_gdc_remove(struct platform_device* pdev)
 {
     HI_U32 i;
 
@@ -73,7 +74,7 @@ static int hi35xx_gdc_remove(struct platform_device* pdev)
         g_gdc_reg[0] = HI_NULL;
     }
 
-    return 0;
+    compat_platform_remove_return;
 }
 
 
@@ -96,7 +97,7 @@ static struct platform_driver hi35xx_gdc_driver =
 
 osal_module_platform_driver(hi35xx_gdc_driver);
 
-MODULE_LICENSE("Proprietary");
+MODULE_LICENSE("GPL");
 
 
 
