@@ -1,4 +1,4 @@
-LIB_NAME := libsns_smart_sc4236
+LIB_NAME := libsns_sc4236
 
 override CFLAGS += -fPIC \
 	-I$(CURDIR)/../../../../kernel/include/hi3516av100 \

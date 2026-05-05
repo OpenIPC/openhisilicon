@@ -1,4 +1,4 @@
-LIB_NAME := libsns_aptina_ar0237
+LIB_NAME := libsns_ar0237
 
 override CFLAGS += -fPIC \
 	-I$(CURDIR)/../../../../kernel/include/hi3516av100 \
