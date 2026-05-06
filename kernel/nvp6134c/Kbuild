@@ -1,0 +1,5 @@
+obj-m := nvp6134_ex.o
+nvp6134_ex-objs := nvp6134_drv.o coax.o eq.o eq_recovery.o eq_common.o \
+                   acp.o acp_firmup.o video.o motion.o audio.o
+ccflags-y += -DHI_GPIO_I2C -DSUPPORT_HI3520D
+ccflags-y += -I$(src)
