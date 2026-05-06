@@ -424,22 +424,32 @@ jobs:
             firmware: hi3516cv100
             mem: 64M
             append: "console=ttyAMA0,115200 mem=64M root=/dev/ram0 rootfstype=squashfs"
+          # cv200/av100/cv300/3519v101: cap kernel mem= at 32M so it ends at
+          # 0x82000000, where the qemu-hisilicon machine emulator appends the
+          # MMZ region in cmdline (mmz=...,0x82000000,N). Previously these
+          # rows passed mem=<full QEMU RAM>, and the kernel range overlapped
+          # MMZ. The legacy MMZ allocator silently tolerated the overlap
+          # until OpenIPC/openhisilicon#73 made it return -ENODEV when every
+          # configured zone is rejected; with that strict check + post-#2059
+          # firmware where load_hisilicon no longer exits before insmod, the
+          # overlap surfaces as "insmod: can't insert 'mmz.ko': No such
+          # device". 32M kernel = production OS/MMZ split for V1/V2/V2A/V3A.
           - machine: hi3516cv200
             firmware: hi3516cv200
             mem: 64M
-            append: "console=ttyAMA0,115200 mem=64M root=/dev/ram0 rootfstype=squashfs"
+            append: "console=ttyAMA0,115200 mem=32M root=/dev/ram0 rootfstype=squashfs"
           - machine: hi3516av100
             firmware: hi3516av100
             mem: 256M
-            append: "console=ttyAMA0,115200 mem=256M root=/dev/ram0 rootfstype=squashfs"
+            append: "console=ttyAMA0,115200 mem=32M root=/dev/ram0 rootfstype=squashfs"
           - machine: hi3516cv300
             firmware: hi3516cv300
             mem: 128M
-            append: "console=ttyAMA0,115200 mem=128M root=/dev/ram0 rootfstype=squashfs"
+            append: "console=ttyAMA0,115200 mem=32M root=/dev/ram0 rootfstype=squashfs"
           - machine: hi3519v101
             firmware: hi3519v101
             mem: 64M
-            append: "console=ttyAMA0,115200 mem=64M root=/dev/ram0 rootfstype=squashfs"
+            append: "console=ttyAMA0,115200 mem=32M root=/dev/ram0 rootfstype=squashfs"
           - machine: hi3516cv500
             firmware: hi3516cv500
             mem: 128M
