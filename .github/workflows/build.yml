@@ -502,12 +502,18 @@ jobs:
           ls uImage.${{ matrix.firmware }}
 
       # Inject a tiny S99 init script that emits a serial-console marker
-      # naming each loaded open_* module. Repacks the squashfs so the QEMU
-      # boot exercises the real init flow and we can grep deterministic
-      # markers out of qemu-output.txt afterwards. The probe is the only
-      # thing that gives a *positive* signal that load_hisilicon actually
-      # populated the kernel — without it, all assertions are negative
+      # with the count of HiSilicon modules currently loaded. Repacks the
+      # squashfs so the QEMU boot exercises the real init flow and we can
+      # grep deterministic markers out of qemu-output.txt afterwards. The
+      # probe gives a *positive* signal that load_hisilicon actually
+      # populated the kernel — without it all assertions are negative
       # ("absence of known error strings") and silent failures slip past.
+      #
+      # Counts every loaded module except the always-present FS modules.
+      # That covers both V3+ source-built open_* names and V1/V2/V2A
+      # vendor-named blobs (hi3518_*, mmz, acodec, hi_*) since cv100/cv200
+      # firmware loads modules under the vendor names exposed by
+      # objcopy --redefine-sym wrappers.
       - name: Inject lsmod probe into rootfs
         run: |
           sudo apt-get install -y --no-install-recommends squashfs-tools
@@ -518,13 +524,15 @@ jobs:
           # CI probe — emits markers for openhisilicon's qemu-boot job to grep.
           # Runs after S95majestic so load_hisilicon has had its chance.
           [ "$1" = start ] || exit 0
-          # Give majestic a moment to settle but bail early if S70vendor
-          # already failed (no point waiting if no modules will ever load).
+          # Wait briefly for HiSilicon modules to settle. Threshold of 5
+          # is conservative — every supported platform loads at least
+          # OSAL/MMZ + base + sys + sys_config + a couple of drivers.
+          count_hisi() { lsmod | tail -n +2 | grep -cvE '^(vfat|fat)\b'; }
           for _ in 1 2 3 4 5; do
-              [ "$(lsmod | awk '/^open_/' | wc -l)" -gt 0 ] && break
+              [ "$(count_hisi)" -ge 5 ] && break
               sleep 1
           done
-          echo "===CI:OPEN_MOD_COUNT===$(lsmod | awk '/^open_/' | wc -l)==="
+          echo "===CI:HISI_MOD_COUNT===$(count_hisi)==="
           echo "===CI:LSMOD_BEGIN==="
           lsmod
           echo "===CI:LSMOD_END==="
@@ -583,21 +591,24 @@ jobs:
           fi
 
           # Positive assertion: the S99lsmodprobe init script we injected
-          # earlier prints OPEN_MOD_COUNT to the serial console. Require at
-          # least 5 open_* modules — every supported platform loads osal/mmz
-          # plus base/sys/sys_config plus its own family-specific drivers,
-          # so anything below 5 means load_hisilicon silently failed.
-          mod_count_line=$(grep -oE '^===CI:OPEN_MOD_COUNT===[0-9]+===' qemu-output.txt | tail -1)
+          # earlier prints HISI_MOD_COUNT to the serial console. Require at
+          # least 5 HiSilicon modules — every supported platform loads
+          # osal/mmz + base + sys + sys_config + its own family-specific
+          # drivers, so anything below 5 means load_hisilicon silently
+          # failed. -a/--text on grep so the binary serial output (TTY
+          # control chars) doesn't make grep skip matches; pattern is
+          # unanchored so a leading \r from the TTY doesn't break it.
+          mod_count_line=$(grep -oaE 'CI:HISI_MOD_COUNT===[0-9]+===' qemu-output.txt | tail -1)
           mod_count=$(echo "$mod_count_line" | grep -oE '[0-9]+' || echo "")
           if [ -z "$mod_count" ]; then
-              fail_with "S99lsmodprobe never ran (no CI:OPEN_MOD_COUNT marker) — boot didn't reach late init"
+              fail_with "S99lsmodprobe never ran (no CI:HISI_MOD_COUNT marker) — boot didn't reach late init"
           fi
           if [ "$mod_count" -lt 5 ]; then
               echo "--- captured lsmod ---"
-              awk '/^===CI:LSMOD_BEGIN===$/,/^===CI:LSMOD_END===$/' qemu-output.txt
-              fail_with "only $mod_count open_* modules loaded (expected ≥5) — vendor module-load regression"
+              awk '/CI:LSMOD_BEGIN/,/CI:LSMOD_END/' qemu-output.txt
+              fail_with "only $mod_count HiSilicon modules loaded (expected ≥5) — vendor module-load regression"
           fi
-          echo "PROBE: ${{ matrix.machine }} loaded $mod_count open_* modules"
+          echo "PROBE: ${{ matrix.machine }} loaded $mod_count HiSilicon modules"
 
           if grep -qE "Starting crond: OK" qemu-output.txt; then
               echo "PASS: ${{ matrix.machine }} kernel booted to userspace, no module-load regressions"
