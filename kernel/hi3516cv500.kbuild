@@ -262,3 +262,6 @@ $(PREFIX)isp-objs := \
 ifndef DISABLE_ISP
     obj-m += $(PREFIX)isp.o
 endif
+
+# --- HWRNG module (source driver) ---
+include $(src)/hisi-hwrng/Kbuild
