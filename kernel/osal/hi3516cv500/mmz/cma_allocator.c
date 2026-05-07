@@ -513,10 +513,31 @@ static int __allocator_init(char *s)
                 break;
             }
 
-#if LINUX_VERSION_CODE >= KERNEL_VERSION(5, 16, 0)
-        /* Mainline kernels: use default CMA area, no vendor zone lookup */
         cma_zone = NULL;
+#if LINUX_VERSION_CODE < KERNEL_VERSION(5, 16, 0)
+        /* Vendor 4.9-style kernels expose hisi_get_cma_zone(name) which
+         * looks up a CMA region registered via the cmdline mmz= early_param
+         * in arch/arm/mach-hibvt's hi_cma.c. When U-Boot bootargs include
+         * mmz=, this is the preferred lookup (it preserves the per-zone
+         * name/gfp/alloc_type intent from the cmdline). */
         {
+            extern struct cma_zone *hisi_get_cma_zone(const char *name);
+            cma_zone = hisi_get_cma_zone(argv[0]);
+        }
+#endif
+        if (cma_zone == NULL) {
+            /* Fallback: use the kernel's default CMA pool (set by
+             * CONFIG_CMA_SIZE_MBYTES or the 'cma=' cmdline). This makes
+             * V3.5 cv500 boards work out-of-the-box with the legacy 4.9
+             * lite firmware — existing OpenIPC installs that never had
+             * mmz= in U-Boot bootargs still get a usable MMZ pool from
+             * the kernel default CMA, instead of failing with
+             * "can't get cma zone info:anonymous" + the subsequent
+             * -ENODEV from media_mem_init that PR #73 propagates.
+             *
+             * Available on every kernel that has CONFIG_CMA=y. The
+             * 5.16+ mainline path always lands here (no vendor
+             * hisi_get_cma_zone shim). */
             struct cma *default_cma = dev_get_cma_area(NULL);
             if (default_cma) {
                 static struct cma_zone default_zone;
@@ -526,14 +547,10 @@ static int __allocator_init(char *s)
                 cma_zone = &default_zone;
             }
         }
-#else
-        {
-            extern struct cma_zone *hisi_get_cma_zone(const char *name);
-            cma_zone = hisi_get_cma_zone(argv[0]);
-        }
-#endif
         if (cma_zone == NULL) {
-            printk(KERN_ERR "can't get cma zone info:%s\n", argv[0]);
+            printk(KERN_ERR "MMZ: no cma zone for '%s' and no default CMA pool either; "
+                   "set CONFIG_CMA_SIZE_MBYTES or pass mmz=/cma= in bootargs\n",
+                   argv[0]);
             continue;
         }
 
