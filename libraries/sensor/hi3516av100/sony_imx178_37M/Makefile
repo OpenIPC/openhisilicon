@@ -1,4 +1,4 @@
-LIB_NAME := libsns_sony_imx178_37M
+LIB_NAME := libsns_imx178_37M
 
 override CFLAGS += -fPIC \
 	-I$(CURDIR)/../../../../kernel/include/hi3516av100 \

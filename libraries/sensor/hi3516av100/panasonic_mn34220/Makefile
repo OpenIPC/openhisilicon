@@ -1,4 +1,4 @@
-LIB_NAME := libsns_panasonic_mn34220
+LIB_NAME := libsns_mn34220
 
 override CFLAGS += -fPIC \
 	-I$(CURDIR)/../../../../kernel/include/hi3516av100 \

@@ -1,4 +1,4 @@
-LIB_NAME := libsns_omnivision_ov5658
+LIB_NAME := libsns_ov5658
 
 override CFLAGS += -fPIC \
 	-I$(CURDIR)/../../../../kernel/include/hi3516av100 \
