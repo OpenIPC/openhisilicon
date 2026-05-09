@@ -50,7 +50,7 @@ include $(src)/sensor_spi/Kbuild
 include $(src)/mipi_rx/Kbuild
 #+user
 
-ifeq ($(CHIPARCH),hi3516ev200)
+ifneq ($(filter $(CHIPARCH),hi3516ev200 gk7205v200),)
     include $(src)/acodec/Kbuild
     include $(src)/adec/Kbuild
     include $(src)/aenc/Kbuild
