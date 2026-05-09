@@ -32,6 +32,13 @@ ifeq ($(CHIPARCH),hi3519v101)
 endif
 
 all:
+	@failed=""; \
 	for dir in $(SUBDIRS); do \
-		make -C $$dir CHIPARCH=$(CHIPARCH) all || true; \
-	done
+		$(MAKE) -C $$dir CHIPARCH=$(CHIPARCH) all || failed="$$failed $$dir"; \
+	done; \
+	if [ -n "$$failed" ]; then \
+		echo; \
+		echo "Build failed for:" >&2; \
+		for d in $$failed; do echo "  $$d" >&2; done; \
+		exit 1; \
+	fi
