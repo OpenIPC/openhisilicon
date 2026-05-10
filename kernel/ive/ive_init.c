@@ -5,6 +5,7 @@
 
 #include "common.h"
 #include "osal.h"
+#include "../../compat/compat.h"
 
 extern u8 g_ive_power_save_en;
 extern u16 g_ive_node_num;
@@ -52,7 +53,7 @@ static compat_platform_remove_ret hi35xx_ive_remove(struct platform_device *pf_d
 }
 
 static const struct of_device_id hi35xx_ive_match[] = {
-	{ .compatible = "hisilicon,hisi-ive" },
+	{ .compatible = PLATFORM_NAME "," HISI_PRX "ive" },
 	{},
 };
 MODULE_DEVICE_TABLE(of, hi35xx_ive_match);

@@ -5,6 +5,7 @@
 
 #include "type.h"
 #include "osal.h"
+#include "../../compat/compat.h"
 
 extern int AIAO_ModInit(void);
 extern void AIAO_ModExit(void);
@@ -78,7 +79,7 @@ static compat_platform_remove_ret hi35xx_aiao_remove(struct platform_device *pde
 }
 
 static const struct of_device_id hi35xx_aiao_match[] = {
-	{ .compatible = "hisilicon,hisi-aiao" },
+	{ .compatible = PLATFORM_NAME "," HISI_PRX "aiao" },
 	{},
 };
 MODULE_DEVICE_TABLE(of, hi35xx_aiao_match);

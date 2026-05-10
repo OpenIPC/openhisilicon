@@ -6,6 +6,7 @@
 
 #include "common.h"
 #include "osal.h"
+#include "../../compat/compat.h"
 
 #define VGS_DEV_NAME_LENGTH 10
 
@@ -67,7 +68,7 @@ static compat_platform_remove_ret hi35xx_vgs_remove(struct platform_device *pdev
 }
 
 static const struct of_device_id hi35xx_vgs_match[] = {
-	{ .compatible = "hisilicon,hisi-vgs" },
+	{ .compatible = PLATFORM_NAME "," HISI_PRX "vgs" },
 	{},
 };
 MODULE_DEVICE_TABLE(of, hi35xx_vgs_match);

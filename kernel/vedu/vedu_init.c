@@ -15,6 +15,7 @@
 #include "type.h"
 #include "defines.h"
 #include "osal.h"
+#include "../../compat/compat.h"
 
 #define VEDU_DEV_NAME_LENGTH 10
 
@@ -117,7 +118,7 @@ static compat_platform_remove_ret hi35xx_vpu_remove(struct platform_device *pdev
 }
 
 static const struct of_device_id hi35xx_vpu_match[] = {
-	{ .compatible = "hisilicon,hisi-vedu" },
+	{ .compatible = PLATFORM_NAME "," HISI_PRX "vedu" },
 	{},
 };
 MODULE_DEVICE_TABLE(of, hi35xx_vpu_match);

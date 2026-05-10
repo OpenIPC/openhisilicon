@@ -7,6 +7,7 @@
 #include "common.h"
 #include "osal.h"
 #include "defines.h"
+#include "../../compat/compat.h"
 
 extern int VPSS_ModInit(void);
 extern void VPSS_ModExit(void);
@@ -48,7 +49,7 @@ static compat_platform_remove_ret hi35xx_vpss_remove(struct platform_device *pde
 }
 
 static const struct of_device_id hi35xx_vpss_match[] = {
-	{ .compatible = "hisilicon,hisi-vpss" },
+	{ .compatible = PLATFORM_NAME "," HISI_PRX "vpss" },
 	{},
 };
 MODULE_DEVICE_TABLE(of, hi35xx_vpss_match);
