@@ -52,28 +52,33 @@ include $(src)/mipi_rx/Kbuild
 
 ifneq ($(filter $(CHIPARCH),hi3516ev200 gk7205v200),)
 
-# V4 vendor blobs ship in three side-by-side variants per module — pick
-# the one whose userspace ABI matches the OpenIPC firmware shipping
-# alongside this kernel. The kernel<->userspace MPI boundary (ioctl
-# numbers, struct layouts in mod_ext.h, comm_video.h, etc.) is binary,
-# not source-level: scripts/hi2gk.sh handles only source-level renames,
-# so cross-vintage userspace + kernel pairings segfault majestic on its
-# first MPI call.
+# V4 vendor blobs ship under per-chiparch subdirs to make their origin
+# explicit. Pick the one whose userspace ABI matches the OpenIPC
+# firmware shipping alongside this kernel. The kernel<->userspace MPI
+# boundary (ioctl numbers, struct layouts in mod_ext.h, comm_video.h,
+# etc.) is binary, not source-level: scripts/hi2gk.sh handles only
+# source-level renames, so cross-vintage userspace + kernel pairings
+# segfault majestic on its first MPI call.
 #
-#   kernel/<mod>/<mod>.o       - HiSi Hi3516EV200_SDK_V1.0.1.2 (Oct 2019)
-#                                Used by hi3516ev200/ev300 to match
-#                                OpenIPC's HiSi-vintage libmpi.so.
-#   kernel/<mod>/<mod>_log.o   - Goke GKIPCLinuxV100R001C00SPC030 ko_log
-#                                (Aug 2021) — opt-in debug build for
-#                                gk7205v200/v300 (verbose printk).
-#   kernel/<mod>/<mod>_nolog.o - Goke SPC030 ko_nolog (Aug 2021) —
-#                                default for gk7205v200/v300, ~30%
-#                                smaller, required by the 5 MB rootfs
-#                                cap on the gk7205v300 lite build.
+#   kernel/<mod>/hi3516ev200/<mod>.o
+#       HiSi Hi3516EV200_SDK_V1.0.1.2 (Oct 2019). The only variant
+#       on the HiSi side because pre-built blobs were never released
+#       for newer HiSi SDKs (V5.x ships source only, and the V4
+#       module set isn't in V5 anyway). Matches OpenIPC's HiSi-vintage
+#       libmpi.so on hi3516ev200/ev300 boards.
+#
+#   kernel/<mod>/gk7205v200/<mod>_log.o
+#       Goke GKIPCLinuxV100R001C00SPC030 ko_log (Aug 2021). Opt-in
+#       debug build for gk7205v200/v300 — verbose printk, larger.
+#
+#   kernel/<mod>/gk7205v200/<mod>_nolog.o
+#       Goke SPC030 ko_nolog (Aug 2021). Default for gk7205v200/v300
+#       — ~30% smaller, required by the 5 MB rootfs cap on the
+#       gk7205v300 lite build. Matches Goke userspace (libgk_*.so
+#       MPP_V1.0.1.0 B020 + libhi_mpi.so).
 #
 # KO_LOG selects log vs nolog within the gk7205v200 family. hi3516ev200
-# only has one variant available (HiSi V1.0.1.2 — pre-built blobs were
-# never released for newer HiSi SDKs).
+# silently ignores it (only one variant exists).
 ifeq ($(CHIPARCH),hi3516ev200)
 KO_LOG_SUFFIX :=
 else ifeq ($(CHIPARCH),gk7205v200)

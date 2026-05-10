@@ -6,7 +6,7 @@ DIR=$(MOD_NAME)
 SRCS := $(DIR)/h265e_init.c
 
 OBJS := $(SRCS:%.c=%.o) $(ASM_SRCS:%.S=%.o)
-OBJS += $(DIR)/h265e$(KO_LOG_SUFFIX).o
+OBJS += $(DIR)/$(CHIPARCH)/h265e$(KO_LOG_SUFFIX).o
 
 $(OUT)-objs := $(OBJS)
 
