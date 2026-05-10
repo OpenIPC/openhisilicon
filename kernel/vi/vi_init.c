@@ -7,6 +7,7 @@
 #include "comm_video.h"
 #include "common.h"
 #include "osal.h"
+#include "../../compat/compat.h"
 
 extern int VI_ModInit(void);
 extern void VI_ModExit(void);
@@ -90,7 +91,7 @@ static compat_platform_remove_ret hi35xx_vi_remove(struct platform_device *pdev)
 }
 
 static const struct of_device_id hi35xx_vi_match[] = {
-	{ .compatible = "hisilicon,hisi-vi" },
+	{ .compatible = PLATFORM_NAME "," HISI_PRX "vi" },
 	{},
 };
 MODULE_DEVICE_TABLE(of, hi35xx_vi_match);

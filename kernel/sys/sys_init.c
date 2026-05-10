@@ -7,6 +7,7 @@
 #include "osal.h"
 #include "common.h"
 
+#include "../../compat/compat.h"
 #include "../../compat/kernel_compat.h"
 
 #define PHASE 32
@@ -81,7 +82,7 @@ static compat_platform_remove_ret hi35xx_sys_remove(struct platform_device *pdev
 }
 
 static const struct of_device_id hi35xx_sys_match[] = {
-	{ .compatible = "hisilicon,hisi-sys" },
+	{ .compatible = PLATFORM_NAME "," HISI_PRX "sys" },
 	{},
 };
 MODULE_DEVICE_TABLE(of, hi35xx_sys_match);

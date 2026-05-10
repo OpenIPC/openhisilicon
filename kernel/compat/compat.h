@@ -60,7 +60,19 @@ extern int hi_i2c_master_send(const struct i2c_client *client,
 #define HI_PRX ""
 #define VENDOR_PRX "vendor_"
 
+/*
+ * The vendor goke i2c-pl031-style driver exports gk_i2c_master_send for
+ * sensor probing. On kernels where that symbol is unavailable (mainline
+ * 6.x, or kernels built without the in-tree goke-i2c driver), fall back
+ * to the standard i2c_master_send which has the same signature.
+ */
+#if LINUX_VERSION_CODE < KERNEL_VERSION(6, 0, 0)
+extern int gk_i2c_master_send(const struct i2c_client *client,
+			      const char *buf, int count);
 #define I2C_MASTER_SEND gk_i2c_master_send
+#else
+#define I2C_MASTER_SEND i2c_master_send
+#endif
 #define GET_CMA_ZONE goke_get_cma_zone
 
 #define DEFAULT_ALLOCATOR "gk"

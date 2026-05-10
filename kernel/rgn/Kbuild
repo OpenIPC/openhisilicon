@@ -6,7 +6,7 @@ DIR=$(MOD_NAME)
 SRCS := $(DIR)/rgn_init.c
 
 OBJS := $(SRCS:%.c=%.o) $(ASM_SRCS:%.S=%.o)
-OBJS += $(DIR)/rgn.o
+OBJS += $(DIR)/$(CHIPARCH)/rgn$(KO_LOG_SUFFIX).o
 
 $(OUT)-objs := $(OBJS)
 
