@@ -51,6 +51,26 @@ include $(src)/mipi_rx/Kbuild
 #+user
 
 ifneq ($(filter $(CHIPARCH),hi3516ev200 gk7205v200),)
+
+# V4 vendor blobs ship in two flavours from Goke SPC030: ko_log (debug
+# logging compiled in, the default for HiSilicon ev200/ev300 hardware)
+# and ko_nolog (debug strings stripped, ~30% smaller — required for the
+# 5 MB rootfs cap on gk7205v300 lite). Both flavours are extracted to
+# kernel/<mod>/<mod>.o (log) and kernel/<mod>/<mod>_nolog.o (nolog) at
+# repo prep time. KO_LOG selects which the wrapper links against.
+ifeq ($(CHIPARCH),gk7205v200)
+KO_LOG ?= nolog
+else
+KO_LOG ?= log
+endif
+ifeq ($(KO_LOG),nolog)
+KO_LOG_SUFFIX := _nolog
+else ifeq ($(KO_LOG),log)
+KO_LOG_SUFFIX :=
+else
+$(error KO_LOG must be 'log' or 'nolog', got '$(KO_LOG)')
+endif
+
     include $(src)/acodec/Kbuild
     include $(src)/adec/Kbuild
     include $(src)/aenc/Kbuild
