@@ -241,6 +241,12 @@ static int ive_build_task_nodes(struct xnn_model_ctx *m,
 			node_idx++;
 			break;
 		case 2: /* FC */
+			/* node+32 and node+44 are vendor-patched per-tile in
+			 * ive_start_task; the formula isn't reverse-engineered.
+			 * The hardcoded values below match a kprobe capture for
+			 * a non-tiled FC layer; tiled FC will produce wrong
+			 * output. Loud one-time warn so users know. */
+			pr_warn_once("ive_neo: FC layer using non-tiled hardcoded params (node+32=0x400, node+44=0x20); tiled FC will compute incorrect output\n");
 			ive_link_node(node_buf, node_idx, node_phys);
 			*(u8 *)(node + 8) = desc[3];
 			*(u8 *)(node + 9) = desc[4];
@@ -251,14 +257,10 @@ static int ive_build_task_nodes(struct xnn_model_ctx *m,
 			*(u32 *)(node + 20) = ive_cvt(tmp_phys + *(u32 *)(desc + 28));
 			*(u32 *)(node + 24) = ive_cvt(model_phys + *(u32 *)(desc + 20));
 			*(u32 *)(node + 28) = *(u32 *)(desc + 16);
-			/* Per-tile fields that vendor patches in ive_start_task.
-			 * For a non-tiled FC these match values captured via kprobe:
-			 * node+32 = 0x400 (total in bytes / 0x20 units * 0x20?)
-			 * node+44 = 0x20 (in_stride = 32-byte HW alignment) */
-			*(u32 *)(node + 32) = 0x400;  /* TEMP: hardcoded from vendor capture */
+			*(u32 *)(node + 32) = 0x400;
 			*(u16 *)(node + 40) = 1;
 			*(u16 *)(node + 42) = 1;
-			*(u16 *)(node + 44) = 0x20;   /* TEMP: hardcoded from vendor capture */
+			*(u16 *)(node + 44) = 0x20;
 			*(u16 *)(node + 46) = *(u16 *)(desc + 14);
 			*(u16 *)(node + 48) = *(u16 *)(desc + 8);
 			*(u16 *)(node + 50) = *(u16 *)(desc + 10);
@@ -382,8 +384,11 @@ static int ive_build_task_nodes(struct xnn_model_ctx *m,
 				rows, cols, rows * cols);
 			break;
 		}
-		case 3: case 6:
-			break;
+		case 3: /* Eltwise */
+		case 6: /* XNN-DMA layer */
+			pr_warn_once("ive_neo: XNN layer type %u (Eltwise/DMA-layer) not implemented; rejecting model load\n",
+				     type);
+			return -EOPNOTSUPP;
 		}
 		desc += sz;
 	}
@@ -862,6 +867,27 @@ static long ive_xnn_unloadmodel(unsigned long arg)
 #define IMG_HEIGHT(img) (*(u32 *)((img) + 64))
 #define IMG_TYPE(img)   (*(u32 *)((img) + 68))
 
+/* Defensive validation: phys non-zero and 16-byte aligned (IVE HW requirement);
+ * width/height/stride non-zero and fit in u16 (HW node packs them as u16);
+ * stride >= width. The vendor blob carries ~397 distinct constraint checks
+ * across all ops; this minimum slice catches the worst classes of bad input
+ * (uninitialized struct → phys=0; wild values → HW programmed with garbage). */
+static inline int ive_check_buf(u32 phys, u32 stride, u32 width, u32 height)
+{
+	if (!phys || (phys & 0xF))
+		return -EINVAL;
+	if (!width || width > 0xFFFF)
+		return -EINVAL;
+	if (!height || height > 0xFFFF)
+		return -EINVAL;
+	if (stride < width || stride > 0xFFFF)
+		return -EINVAL;
+	return 0;
+}
+
+#define IVE_CHECK_IMG(img) \
+	ive_check_buf(IMG_PHYS(img), IMG_STRIDE(img), IMG_WIDTH(img), IMG_HEIGHT(img))
+
 /* Submit a pre-filled 208-byte non-XNN task node. Copies the
  * stack-local node to the pre-allocated MMZ task buffer, kicks HW,
  * and waits briefly for the completion IRQ. Returns 0. */
@@ -934,6 +960,9 @@ static long ive_op_thresh(unsigned long arg)
 	u8 *src = buf + 8, *dst = buf + 80, *ctrl = buf + 152;
 	u8 node[208];
 
+	if (IVE_CHECK_IMG(src) || IVE_CHECK_IMG(dst))
+		return -EINVAL;
+
 	memset(node, 0, sizeof(node));
 	node[10]  = 8;  /* op = Thresh */
 	node[11]  = ctrl[0]; /* enMode */
@@ -958,6 +987,9 @@ static long ive_op_dilate(unsigned long arg)
 	u8 *src = buf + 8, *dst = buf + 80, *mask = buf + 152;
 	u8 node[208];
 
+	if (IVE_CHECK_IMG(src) || IVE_CHECK_IMG(dst))
+		return -EINVAL;
+
 	memset(node, 0, sizeof(node));
 	node[10] = 6; /* op = Dilate */
 	*(u32 *)(node + 16) = IMG_PHYS(src);
@@ -976,6 +1008,9 @@ static long ive_op_erode(unsigned long arg)
 	u8 *buf = (u8 *)arg;
 	u8 *src = buf + 8, *dst = buf + 80, *mask = buf + 152;
 	u8 node[208];
+
+	if (IVE_CHECK_IMG(src) || IVE_CHECK_IMG(dst))
+		return -EINVAL;
 
 	memset(node, 0, sizeof(node));
 	node[10] = 7; /* op = Erode */
@@ -996,6 +1031,20 @@ static long ive_op_dma(unsigned long arg)
 	u8 *buf = (u8 *)arg;
 	u8 *src = buf + 8, *dst = buf + 40, *ctrl = buf + 72;
 	u8 node[208];
+	u32 src_phys = *(u32 *)src;
+	u32 dst_phys = *(u32 *)dst;
+	u32 src_stride = *(u32 *)(src + 16);
+	u32 dst_stride = *(u32 *)(dst + 16);
+	u32 width = *(u32 *)(src + 20);
+	u32 height = *(u32 *)(src + 24);
+
+	/* DATA_S layout differs from IMAGE_S; check explicit fields. dst_phys
+	 * is only consumed when enMode <= 1 (memcpy variants); ctrl[0] is
+	 * enMode. For other modes dst may be NULL/zero which is legal. */
+	if (ive_check_buf(src_phys, src_stride, width, height))
+		return -EINVAL;
+	if (ctrl[0] <= 1 && ive_check_buf(dst_phys, dst_stride, width, height))
+		return -EINVAL;
 
 	memset(node, 0, sizeof(node));
 	node[10] = 0;           /* op = DMA */
@@ -1015,6 +1064,9 @@ static long ive_op_logic(unsigned long arg, u8 opcode)
 	u8 *buf = (u8 *)arg;
 	u8 *src1 = buf + 8, *src2 = buf + 80, *dst = buf + 152;
 	u8 node[208];
+
+	if (IVE_CHECK_IMG(src1) || IVE_CHECK_IMG(src2) || IVE_CHECK_IMG(dst))
+		return -EINVAL;
 
 	memset(node, 0, sizeof(node));
 	node[10] = opcode;
@@ -1036,6 +1088,9 @@ static long ive_op_sub(unsigned long arg)
 	u8 *src1 = buf + 8, *src2 = buf + 80, *dst = buf + 152, *ctrl = buf + 224;
 	u8 node[208];
 
+	if (IVE_CHECK_IMG(src1) || IVE_CHECK_IMG(src2) || IVE_CHECK_IMG(dst))
+		return -EINVAL;
+
 	memset(node, 0, sizeof(node));
 	node[10] = 10;
 	node[11] = ctrl[0]; /* enMode */
@@ -1056,6 +1111,9 @@ static long ive_op_add(unsigned long arg)
 	u8 *buf = (u8 *)arg;
 	u8 *src1 = buf + 8, *src2 = buf + 80, *dst = buf + 152, *ctrl = buf + 224;
 	u8 node[208];
+
+	if (IVE_CHECK_IMG(src1) || IVE_CHECK_IMG(src2) || IVE_CHECK_IMG(dst))
+		return -EINVAL;
 
 	memset(node, 0, sizeof(node));
 	node[10] = 20;
@@ -1079,6 +1137,9 @@ static long ive_op_filter(unsigned long arg)
 	u8 *src = buf + 8, *dst = buf + 80, *ctrl = buf + 152;
 	u8 node[208];
 
+	if (IVE_CHECK_IMG(src) || IVE_CHECK_IMG(dst))
+		return -EINVAL;
+
 	memset(node, 0, sizeof(node));
 	node[10] = 1;  /* op = Filter */
 	*(u32 *)(node + 16) = IMG_PHYS(src);
@@ -1099,6 +1160,12 @@ static long ive_op_hist(unsigned long arg)
 	u8 *src = buf + 8, *dst_mem = buf + 80;
 	u8 node[208];
 
+	/* dst_mem is IVE_MEM_INFO_S (24B); only check source image. */
+	if (IVE_CHECK_IMG(src))
+		return -EINVAL;
+	if (!*(u32 *)dst_mem)
+		return -EINVAL;
+
 	memset(node, 0, sizeof(node));
 	node[10] = 13; /* op = Hist */
 	*(u32 *)(node + 16) = IMG_PHYS(src);
@@ -1115,6 +1182,9 @@ static long ive_op_thresh_s16(unsigned long arg)
 	u8 *buf = (u8 *)arg;
 	u8 *src = buf + 8, *dst = buf + 80, *ctrl = buf + 152;
 	u8 node[208];
+
+	if (IVE_CHECK_IMG(src) || IVE_CHECK_IMG(dst))
+		return -EINVAL;
 
 	memset(node, 0, sizeof(node));
 	node[6]  = 1;  /* s16 flag */
@@ -1141,6 +1211,9 @@ static long ive_op_thresh_u16(unsigned long arg)
 	u8 *src = buf + 8, *dst = buf + 80, *ctrl = buf + 152;
 	u8 node[208];
 
+	if (IVE_CHECK_IMG(src) || IVE_CHECK_IMG(dst))
+		return -EINVAL;
+
 	memset(node, 0, sizeof(node));
 	node[6]  = 1;
 	node[10] = 15; /* op = Thresh_U16 */
@@ -1166,6 +1239,9 @@ static long ive_op_16to8(unsigned long arg)
 	u8 *src = buf + 8, *dst = buf + 80, *ctrl = buf + 152;
 	u8 node[208];
 	u32 gain = 0;
+
+	if (IVE_CHECK_IMG(src) || IVE_CHECK_IMG(dst))
+		return -EINVAL;
 
 	/* Compute gain = (numerator << 16) / denominator, capped at 0xFFFF */
 	if (ctrl[6]) { /* numerator != 0 */
@@ -1196,6 +1272,9 @@ static long ive_op_ordstat(unsigned long arg)
 	u8 *src = buf + 8, *dst = buf + 80, *ctrl = buf + 152;
 	u8 node[208];
 
+	if (IVE_CHECK_IMG(src) || IVE_CHECK_IMG(dst))
+		return -EINVAL;
+
 	memset(node, 0, sizeof(node));
 	node[10] = 17;
 	node[11] = ctrl[0]; /* enMode */
@@ -1214,6 +1293,9 @@ static long ive_op_integ(unsigned long arg)
 	u8 *buf = (u8 *)arg;
 	u8 *src = buf + 8, *dst = buf + 80, *ctrl = buf + 152;
 	u8 node[208];
+
+	if (IVE_CHECK_IMG(src) || IVE_CHECK_IMG(dst))
+		return -EINVAL;
 
 	memset(node, 0, sizeof(node));
 	node[10] = 12;
@@ -1234,6 +1316,13 @@ static long ive_op_sobel(unsigned long arg)
 	u8 *src = buf + 8, *dst_h = buf + 80, *dst_v = buf + 152, *ctrl = buf + 224;
 	u8 node[208];
 	u8 mode = ctrl[0]; /* enOutCtrl: 0=both, 1=H only, 2=V only */
+
+	if (IVE_CHECK_IMG(src))
+		return -EINVAL;
+	if (mode != 2 && IVE_CHECK_IMG(dst_h))
+		return -EINVAL;
+	if (mode != 1 && IVE_CHECK_IMG(dst_v))
+		return -EINVAL;
 
 	memset(node, 0, sizeof(node));
 	node[10] = 4;
@@ -1266,6 +1355,11 @@ static long ive_op_mag_and_ang(unsigned long arg)
 	u8 node[208];
 	u8 mode = ctrl[0]; /* enOutCtrl: 0=mag only, 1=mag+ang */
 
+	if (IVE_CHECK_IMG(src) || IVE_CHECK_IMG(mag))
+		return -EINVAL;
+	if (mode != 0 && IVE_CHECK_IMG(ang))
+		return -EINVAL;
+
 	memset(node, 0, sizeof(node));
 	node[10] = 5;
 	node[9]  = mode;
@@ -1294,6 +1388,11 @@ static long ive_op_map(unsigned long arg)
 	u8 *src = buf + 8, *map_mem = buf + 80, *dst = buf + 104, *ctrl = buf + 176;
 	u8 node[208];
 
+	if (IVE_CHECK_IMG(src) || IVE_CHECK_IMG(dst))
+		return -EINVAL;
+	if (!*(u32 *)map_mem)
+		return -EINVAL;
+
 	memset(node, 0, sizeof(node));
 	node[10] = 19;
 	node[11] = ctrl[0]; /* enMode */
@@ -1316,6 +1415,15 @@ static long ive_op_norm_grad(unsigned long arg)
 	u8 *dst_c = buf + 224, *ctrl = buf + 296;
 	u8 node[208];
 	u8 mode = ctrl[0]; /* enOutCtrl: 0=H+V, 1=H, 2=V, 3=combine */
+
+	if (IVE_CHECK_IMG(src))
+		return -EINVAL;
+	if ((mode == 0 || mode == 1) && IVE_CHECK_IMG(dst_h))
+		return -EINVAL;
+	if ((mode == 0 || mode == 2) && IVE_CHECK_IMG(dst_v))
+		return -EINVAL;
+	if (mode == 3 && IVE_CHECK_IMG(dst_c))
+		return -EINVAL;
 
 	memset(node, 0, sizeof(node));
 	node[10] = 27;
@@ -1358,6 +1466,13 @@ static long ive_op_sad(unsigned long arg)
 	u8 node[208];
 	u8 out_ctrl = ctrl[4]; /* enOutCtrl */
 
+	if (IVE_CHECK_IMG(src1) || IVE_CHECK_IMG(src2))
+		return -EINVAL;
+	if (out_ctrl <= 3 && IVE_CHECK_IMG(sad_out))
+		return -EINVAL;
+	if ((out_ctrl <= 1 || out_ctrl == 4) && IVE_CHECK_IMG(thr_out))
+		return -EINVAL;
+
 	memset(node, 0, sizeof(node));
 	node[10] = 46;
 	node[9]  = out_ctrl;
@@ -1396,6 +1511,9 @@ static long ive_op_st_candi_corner(unsigned long arg)
 	u8 *buf = (u8 *)arg;
 	u8 *src = buf + 8, *src2 = buf + 80, *dst = buf + 152;
 	u8 node[208];
+
+	if (IVE_CHECK_IMG(src) || IVE_CHECK_IMG(src2) || IVE_CHECK_IMG(dst))
+		return -EINVAL;
 
 	memset(node, 0, sizeof(node));
 	node[10] = 30;
@@ -1439,8 +1557,16 @@ static long ive_op_canny_hys(unsigned long arg)
 	u16 low_thr  = *(u16 *)(buf + 200);
 	u16 high_thr = *(u16 *)(buf + 202);
 	u8 *mask = buf + 204;
-	u16 w = (u16)IMG_WIDTH(src);
-	u16 h = (u16)IMG_HEIGHT(src);
+	u16 w, h;
+
+	if (IVE_CHECK_IMG(src) || IVE_CHECK_IMG(edge))
+		return -EINVAL;
+	if (!*(u32 *)stack_info || !*(u32 *)ctrl_mem)
+		return -EINVAL;
+	if (high_thr < low_thr)
+		return -EINVAL;
+	w = (u16)IMG_WIDTH(src);
+	h = (u16)IMG_HEIGHT(src);
 	u16 src_stride = (u16)IMG_STRIDE(src);
 	u16 edge_stride = (u16)IMG_STRIDE(edge);
 	u32 stride16 = (w + 15u) & ~15u;     /* 16-aligned, vendor ive_calc_stride */
@@ -1546,9 +1672,18 @@ static long ive_op_gmm2(unsigned long arg)
 	u8 *match  = buf + 296;
 	u8 *model  = buf + 368;   /* IVE_MEM_INFO_S */
 	u8 *ctrl   = buf + 392;   /* IVE_GMM2_CTRL_S */
-	u16 w = (u16)IMG_WIDTH(src);
-	u16 h = (u16)IMG_HEIGHT(src);
+	u16 w, h;
 	u8 node[208];
+
+	if (IVE_CHECK_IMG(src) || IVE_CHECK_IMG(fg) || IVE_CHECK_IMG(bg) ||
+	    IVE_CHECK_IMG(match))
+		return -EINVAL;
+	if (!*(u32 *)model)
+		return -EINVAL;
+	if ((ctrl[0] || ctrl[4]) && IVE_CHECK_IMG(factor))
+		return -EINVAL;
+	w = (u16)IMG_WIDTH(src);
+	h = (u16)IMG_HEIGHT(src);
 
 	memset(node, 0, sizeof(node));
 	node[10] = 49; /* op = GMM2 */
@@ -1593,6 +1728,11 @@ static long ive_op_ncc(unsigned long arg)
 	u8 *src1 = buf + 8, *src2 = buf + 80, *dst_mem = buf + 152;
 	u8 node[208];
 
+	if (IVE_CHECK_IMG(src1) || IVE_CHECK_IMG(src2))
+		return -EINVAL;
+	if (!*(u32 *)dst_mem)
+		return -EINVAL;
+
 	memset(node, 0, sizeof(node));
 	node[10] = 18; /* NCC op code (guessed from nr=0x15, nearby Hist=13) */
 	*(u32 *)(node + 16) = IMG_PHYS(src1);
@@ -1613,6 +1753,11 @@ static long ive_op_ccl(unsigned long arg)
 	u8 *blob = buf + 80;    /* IVE_MEM_INFO_S: u64 phys, u64 virt, u32 size */
 	u8 *ctrl = buf + 104;   /* IVE_CCL_CTRL_S: u32 enMode, u16 initAreaThr, u16 step */
 	u8 node[208];
+
+	if (IVE_CHECK_IMG(src))
+		return -EINVAL;
+	if (!*(u32 *)blob)
+		return -EINVAL;
 
 	memset(node, 0, sizeof(node));
 	node[10] = 23; /* op = CCL */
