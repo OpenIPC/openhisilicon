@@ -112,6 +112,7 @@ int parse_sensor_clock(const char *name)
 		clock = 0x4;
 	} else if ((strncmp("sc4236", name, len) == 0) ||
 		   (strncmp("soi_f37", name, len) == 0) ||
+		   (strncmp("sp2308", name, len) == 0) ||
 		   (strncmp("os05a", name, len) == 0)) {
 		clock = 0x3;
 	} else if ((strncmp("sc2235", name, len) == 0) ||
