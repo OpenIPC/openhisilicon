@@ -52,23 +52,39 @@ include $(src)/mipi_rx/Kbuild
 
 ifneq ($(filter $(CHIPARCH),hi3516ev200 gk7205v200),)
 
-# V4 vendor blobs ship in two flavours from Goke SPC030: ko_log (debug
-# logging compiled in, the default for HiSilicon ev200/ev300 hardware)
-# and ko_nolog (debug strings stripped, ~30% smaller — required for the
-# 5 MB rootfs cap on gk7205v300 lite). Both flavours are extracted to
-# kernel/<mod>/<mod>.o (log) and kernel/<mod>/<mod>_nolog.o (nolog) at
-# repo prep time. KO_LOG selects which the wrapper links against.
-ifeq ($(CHIPARCH),gk7205v200)
+# V4 vendor blobs ship in three side-by-side variants per module — pick
+# the one whose userspace ABI matches the OpenIPC firmware shipping
+# alongside this kernel. The kernel<->userspace MPI boundary (ioctl
+# numbers, struct layouts in mod_ext.h, comm_video.h, etc.) is binary,
+# not source-level: scripts/hi2gk.sh handles only source-level renames,
+# so cross-vintage userspace + kernel pairings segfault majestic on its
+# first MPI call.
+#
+#   kernel/<mod>/<mod>.o       - HiSi Hi3516EV200_SDK_V1.0.1.2 (Oct 2019)
+#                                Used by hi3516ev200/ev300 to match
+#                                OpenIPC's HiSi-vintage libmpi.so.
+#   kernel/<mod>/<mod>_log.o   - Goke GKIPCLinuxV100R001C00SPC030 ko_log
+#                                (Aug 2021) — opt-in debug build for
+#                                gk7205v200/v300 (verbose printk).
+#   kernel/<mod>/<mod>_nolog.o - Goke SPC030 ko_nolog (Aug 2021) —
+#                                default for gk7205v200/v300, ~30%
+#                                smaller, required by the 5 MB rootfs
+#                                cap on the gk7205v300 lite build.
+#
+# KO_LOG selects log vs nolog within the gk7205v200 family. hi3516ev200
+# only has one variant available (HiSi V1.0.1.2 — pre-built blobs were
+# never released for newer HiSi SDKs).
+ifeq ($(CHIPARCH),hi3516ev200)
+KO_LOG_SUFFIX :=
+else ifeq ($(CHIPARCH),gk7205v200)
 KO_LOG ?= nolog
-else
-KO_LOG ?= log
-endif
 ifeq ($(KO_LOG),nolog)
 KO_LOG_SUFFIX := _nolog
 else ifeq ($(KO_LOG),log)
-KO_LOG_SUFFIX :=
+KO_LOG_SUFFIX := _log
 else
 $(error KO_LOG must be 'log' or 'nolog', got '$(KO_LOG)')
+endif
 endif
 
     include $(src)/acodec/Kbuild
