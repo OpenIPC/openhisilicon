@@ -67,6 +67,7 @@ typedef enum {
     IMX415_8M_30FPS_10BIT_LINEAR_MODE                = 0,
     IMX415_8M_20FPS_10BIT_LINEAR_MODE                = 1,
     IMX415_2M_60FPS_12BIT_LINEAR_MODE                = 2,
+    IMX415_8M_60FPS_10BIT_LINEAR_MODE                = 3,
     IMX415_MODE_BUTT
 } IMX415_RES_MODE_E;
 

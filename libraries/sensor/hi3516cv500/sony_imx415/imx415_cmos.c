@@ -53,9 +53,10 @@ ISP_SNS_STATE_S *imx415_get_ctx(VI_PIPE vi_pipe)
  * extern                                                                   *
  ****************************************************************************/
 const IMX415_VIDEO_MODE_TBL_S g_astImx415ModeTbl[IMX415_MODE_BUTT] = {
-    {0x08CA, 0, 2, 8, 30.00,  0, "4K2K_10BIT_30FPS"  }, /* 891Mbps 4lane 37.125MHz */
-    {0x08CA, 0, 2, 8, 20.00,  1, "4K2K_10BIT_20FPS"  }, /* 594Mbps 4lane 37.125MHz */
-    {0x08F8, 0, 2, 8, 60.00,  0,   "2M_12BIT_60FPS"  }, /* 891Mbps 4lane 37.125MHz */
+    {0x08CA, 0, 2, 8, 30.00,  0, "4K2K_10BIT_30FPS"  }, /*  891Mbps 4lane 37.125MHz */
+    {0x08CA, 0, 2, 8, 20.00,  1, "4K2K_10BIT_20FPS"  }, /*  594Mbps 4lane 37.125MHz */
+    {0x08F8, 0, 2, 8, 60.00,  0,   "2M_12BIT_60FPS"  }, /*  891Mbps 4lane 37.125MHz */
+    {0x08CA, 0, 2, 8, 60.00,  2, "4K2K_10BIT_60FPS"  }, /* 1782Mbps 4lane 37.125MHz */
 };
 
 const IMX415_VIDEO_MODE_TBL_S *imx415_get_mode_tb1(HI_U8 u8ImgMode)
@@ -731,7 +732,13 @@ static HI_S32 cmos_set_image_mode(VI_PIPE vi_pipe, ISP_CMOS_SENSOR_IMAGE_MODE_S 
             return HI_FAILURE;
         }
     } else if (IMX415_RES_IS_8M(u32W, u32H)) {
-        if (u8SnsMode == 0) {
+        if (u8SnsMode == 2) {
+            u8SensorImageMode = IMX415_8M_60FPS_10BIT_LINEAR_MODE;
+        } else if (u8SnsMode == 0 && pstSensorImageMode->f32Fps > 30.0f) {
+            /* Allow majestic to select the 60fps 1782Mbps mode by simply
+             * asking for >30 fps at 4K — saves users from configuring SnsMode=2. */
+            u8SensorImageMode = IMX415_8M_60FPS_10BIT_LINEAR_MODE;
+        } else if (u8SnsMode == 0) {
             u8SensorImageMode = IMX415_8M_30FPS_10BIT_LINEAR_MODE;
         } else if (u8SnsMode == 1) {
             u8SensorImageMode = IMX415_8M_20FPS_10BIT_LINEAR_MODE;
