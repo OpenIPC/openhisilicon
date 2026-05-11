@@ -180,6 +180,58 @@ static HI_S32 cmos_get_ae_default(VI_PIPE vi_pipe, AE_SENSOR_DEFAULT_S *pstAeSns
     return HI_SUCCESS;
 }
 
+extern void imx415_init(VI_PIPE vi_pipe);
+
+/* Promotes to a same-resolution mode with higher f32MaxFps when caller requests
+ * f32Fps > current mode's cap. Returns 1 if a switch happened (re-init done),
+ * 0 otherwise. Called only from cmos_fps_set. Keeps the existing failure path
+ * if no compatible higher-fps mode exists. */
+static HI_S32 cmos_try_promote_mode(VI_PIPE vi_pipe, ISP_SNS_STATE_S *pstSnsState, HI_FLOAT f32Fps)
+{
+    HI_U8 u8Cur = pstSnsState->u8ImgMode;
+    HI_U8 u8New = 0xFF;
+    HI_U8 i;
+
+    /* Group modes by resolution. Currently:
+     *  Mode 0 = 4K@30, Mode 1 = 4K@20, Mode 3 = 4K@60  → all 4K all-pixel
+     *  Mode 2 = 1080p@60                               → binning
+     * Searching by VMax is unreliable (Mode 2 has different VMax for binning),
+     * so we use an explicit lookup table per-resolution. */
+    HI_BOOL bIs4K =  (u8Cur == IMX415_8M_30FPS_10BIT_LINEAR_MODE)
+                  || (u8Cur == IMX415_8M_20FPS_10BIT_LINEAR_MODE)
+                  || (u8Cur == IMX415_8M_60FPS_10BIT_LINEAR_MODE);
+    if (!bIs4K) return 0;  /* binning mode 2 already at MaxFps=60 */
+
+    /* Find the 4K mode with the smallest f32MaxFps that still satisfies f32Fps. */
+    HI_FLOAT f32BestFps = 1e30f;
+    HI_U8    a4KModes[] = {
+        IMX415_8M_30FPS_10BIT_LINEAR_MODE,
+        IMX415_8M_20FPS_10BIT_LINEAR_MODE,
+        IMX415_8M_60FPS_10BIT_LINEAR_MODE,
+    };
+    for (i = 0; i < sizeof(a4KModes); i++) {
+        HI_U8 m = a4KModes[i];
+        HI_FLOAT cap = g_astImx415ModeTbl[m].f32MaxFps;
+        if (cap + 0.001f >= f32Fps && cap < f32BestFps) {
+            f32BestFps = cap;
+            u8New = m;
+        }
+    }
+    if (u8New == 0xFF || u8New == u8Cur) return 0;
+
+    SNS_ERR_TRACE("cmos_fps_set: requested fps %.2f > mode %u cap %.2f — promoting to mode %u (%s)\n",
+                  f32Fps, u8Cur, g_astImx415ModeTbl[u8Cur].f32MaxFps,
+                  u8New, g_astImx415ModeTbl[u8New].pszModeName);
+    pstSnsState->u8ImgMode = u8New;
+    pstSnsState->u32FLStd  = g_astImx415ModeTbl[u8New].u32VMax;
+    pstSnsState->au32FL[0] = pstSnsState->u32FLStd;
+    pstSnsState->au32FL[1] = pstSnsState->u32FLStd;
+    pstSnsState->bInit     = HI_FALSE;   /* re-run i2c init below */
+    pstSnsState->bSyncInit = HI_FALSE;
+    imx415_init(vi_pipe);
+    return 1;
+}
+
 /* the function of sensor set fps */
 static HI_VOID cmos_fps_set(VI_PIPE vi_pipe, HI_FLOAT f32Fps, AE_SENSOR_DEFAULT_S *pstAeSnsDft)
 {
@@ -192,6 +244,15 @@ static HI_VOID cmos_fps_set(VI_PIPE vi_pipe, HI_FLOAT f32Fps, AE_SENSOR_DEFAULT_
     CMOS_CHECK_POINTER_VOID(pstSnsState);
 
     f32MaxFps = g_astImx415ModeTbl[pstSnsState->u8ImgMode].f32MaxFps;
+
+    /* If the requested fps exceeds the current mode's cap, try to promote to a
+     * same-resolution mode that supports it. */
+    if (f32Fps > f32MaxFps) {
+        if (cmos_try_promote_mode(vi_pipe, pstSnsState, f32Fps)) {
+            f32MaxFps = g_astImx415ModeTbl[pstSnsState->u8ImgMode].f32MaxFps;
+        }
+    }
+
     u32Lines = g_astImx415ModeTbl[pstSnsState->u8ImgMode].u32VMax * (f32MaxFps / SNS_DIV_0_TO_1_FLOAT(f32Fps));
     pstSnsState->u32FLStd = u32Lines;
     pstAeSnsDft->u32MaxIntTime = pstSnsState->u32FLStd - g_astImx415ModeTbl[pstSnsState->u8ImgMode].u32ExpLineLimit;
