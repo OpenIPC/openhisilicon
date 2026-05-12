@@ -34,6 +34,8 @@ void imx415_restart(VI_PIPE vi_pipe);
 void imx415_mirror_flip(VI_PIPE vi_pipe, ISP_SNS_MIRRORFLIP_TYPE_E eSnsMirrorFlip);
 int  imx415_write_register(VI_PIPE vi_pipe, HI_U32 addr, HI_U32 data);
 int  imx415_read_register(VI_PIPE vi_pipe, HI_U32 addr);
+/* Crop W×H stored by cmos_set_image_mode for Mode 4 / Mode 5. NULL-tolerant. */
+HI_VOID imx415_get_crop(VI_PIPE vi_pipe, HI_U32 *pu32W, HI_U32 *pu32H);
 #ifdef __cplusplus
 #if __cplusplus
 }
