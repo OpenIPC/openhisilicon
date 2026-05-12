@@ -192,14 +192,6 @@ extern int IMX335_read_register(VI_PIPE ViPipe, int addr);
 	} while (0)
 
 
-#define XSTR(x) STR(x)
-#define STR(x) #x
-
-#ifndef CHIPARCH
-    #error "CHIPARCH must be defined at compile time (via -DCHIPARCH=$(CHIPARCH) in the Makefile)"
-#endif
-
-
 static GK_S32 cmos_get_ae_default(VI_PIPE ViPipe,
 				  AE_SENSOR_DEFAULT_S *pstAeSnsDft)
 {
@@ -447,22 +439,9 @@ static GK_VOID cmos_fps_set(VI_PIPE ViPipe, GK_FLOAT f32Fps,
 		}
 		break;
 	case IMX335_1520P_10BIT_MODE:		
-		if ((f32Fps <= 82.0) && (f32Fps >= 2.0)) { // this is the teorethical max as calculated by the sensor registers???		
-
+		if ((f32Fps <= 82.0) && (f32Fps >= 2.0)) {
 			u32MaxFps = 60;
-
-			/* Per-SoC max-fps ceilings for the cropped-1520P sensor mode,
-			 * established empirically (49 fps on Goke gk7205v200, 60 on
-			 * Hisilicon hi3516ev200). CHIPARCH compared as string because
-			 * preprocessor token comparison isn't portable across SDK builds. */
-			if (strcmp(XSTR(CHIPARCH), "gk7205v200") == 0) {
-				u32MaxFps = 49;
-				u32Lines = IMX335_VMAX_CROPPED_1520P * u32MaxFps / DIV_0_TO_1_FLOAT(f32Fps);
-			} else if (strcmp(XSTR(CHIPARCH), "hi3516ev200") == 0) {
-				u32MaxFps = 60;
-				u32Lines = IMX335_VMAX_5M_30FPS_12BIT_LINEAR * u32MaxFps / DIV_0_TO_1_FLOAT(f32Fps);
-			}
-
+			u32Lines = IMX335_VMAX_5M_30FPS_12BIT_LINEAR * u32MaxFps / DIV_0_TO_1_FLOAT(f32Fps);
 			pstAeSnsDft->u32LinesPer500ms = IMX335_VMAX_CROPPED_1520P * 30;
 			pstSnsState->u32FLStd = u32Lines;
 		} else {
@@ -481,9 +460,11 @@ static GK_VOID cmos_fps_set(VI_PIPE ViPipe, GK_FLOAT f32Fps,
 			pstSnsState->u32FLStd = u32Lines;
 		} else if (f32Fps > 30) {
 			/* Above 30 fps the sensor switches to the boosted full-1944P path.
-			 * Goke gk7205v200 caps at 33 fps for this mode; Hisilicon ev200 reaches 45. */
+			 * Reaches ~45 fps on both hi3516ev200 and gk7205v200 with the
+			 * IMX335 INCK pinned to the SoC default 37.125 MHz (via
+			 * [mode]/clock= in the sensor INI). */
 			pstSnsState->u8ImgMode = IMX335_60FPS_FULL_1944P_MODE;
-			u32MaxFps = strcmp(XSTR(CHIPARCH), "gk7205v200") == 0 ? 33 : 45;
+			u32MaxFps = 45;
 			u32Lines = IMX335_VMAX_5M_30FPS_12BIT_LINEAR * u32MaxFps / DIV_0_TO_1_FLOAT(f32Fps);
 			pstAeSnsDft->u32LinesPer500ms = IMX335_VMAX_5M_30FPS_12BIT_LINEAR * 15;
 			pstSnsState->u32FLStd = u32Lines;
