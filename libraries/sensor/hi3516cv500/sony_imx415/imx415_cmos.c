@@ -31,6 +31,25 @@ static HI_U16 g_au16SampleBgain[ISP_MAX_PIPE_NUM] = {0};
 static HI_U16 g_init_ccm[ISP_MAX_PIPE_NUM][CCM_MATRIX_SIZE] = {{0}};
 static HI_BOOL g_quick_start_en[ISP_MAX_PIPE_NUM] = {HI_FALSE};
 
+/* Per-pipe crop W×H, set by cmos_set_image_mode from the
+ * ISP_CMOS_SENSOR_IMAGE_MODE_S the SDK delivers (which comes from majestic's
+ * pub_attr.stWndRect / stSnsSize). Read back by imx415_runtime_crop_h() and
+ * by imx415_init()'s crop register writes. Avoids env-var hacks for Mode 4 /
+ * Mode 5 dispatch. */
+static HI_U32 g_au32CropW[ISP_MAX_PIPE_NUM] = {[0 ...(ISP_MAX_PIPE_NUM - 1)] = IMX415_CROP_W_DEFAULT};
+static HI_U32 g_au32CropH[ISP_MAX_PIPE_NUM] = {[0 ...(ISP_MAX_PIPE_NUM - 1)] = IMX415_CROP_H_DEFAULT};
+
+HI_VOID imx415_get_crop(VI_PIPE vi_pipe, HI_U32 *pu32W, HI_U32 *pu32H)
+{
+    if (vi_pipe < 0 || vi_pipe >= ISP_MAX_PIPE_NUM) {
+        if (pu32W) *pu32W = IMX415_CROP_W_DEFAULT;
+        if (pu32H) *pu32H = IMX415_CROP_H_DEFAULT;
+        return;
+    }
+    if (pu32W) *pu32W = g_au32CropW[vi_pipe];
+    if (pu32H) *pu32H = g_au32CropH[vi_pipe];
+}
+
 static HI_BOOL g_abAERouteExValid[ISP_MAX_PIPE_NUM] = {0};
 static ISP_AE_ROUTE_S g_astInitAERoute[ISP_MAX_PIPE_NUM] = {{0}};
 static ISP_AE_ROUTE_EX_S g_astInitAERouteEx[ISP_MAX_PIPE_NUM] = {{0}};
@@ -256,20 +275,21 @@ static HI_S32 cmos_try_promote_mode(VI_PIPE vi_pipe, ISP_SNS_STATE_S *pstSnsStat
  * Below the per-mode minimum the sensor either truncates the active area
  * or stalls; the mainline Linux driver (drivers/media/i2c/imx415.c) uses
  * the same logic. */
-/* Read the runtime crop height (env override or compile default).
+/* Read the crop height set by cmos_set_image_mode for this pipe.
  * Used by Mode 4 / Mode 5 VMAX_MIN computation so smaller crops actually
  * reach their lane-rate-allowed higher fps. */
-static HI_U32 imx415_runtime_crop_h(HI_VOID)
+static HI_U32 imx415_runtime_crop_h(VI_PIPE vi_pipe)
 {
-    const char *ch = getenv("IMX415_CROP_H");
-    HI_U32 h = ch ? (HI_U32)atoi(ch) : IMX415_CROP_H_DEFAULT;
+    HI_U32 h = (vi_pipe >= 0 && vi_pipe < ISP_MAX_PIPE_NUM)
+               ? g_au32CropH[vi_pipe]
+               : IMX415_CROP_H_DEFAULT;
     h = (h / 4) * 4;
     if (h < 4) h = 4;
     if (h > IMX415_SENSOR_H) h = IMX415_SENSOR_H;
     return h;
 }
 
-static HI_U32 imx415_vmax_min_for_mode(HI_U8 u8ImgMode)
+static HI_U32 imx415_vmax_min_for_mode(VI_PIPE vi_pipe, HI_U8 u8ImgMode)
 {
     HI_U32 u32OutH;
     switch (u8ImgMode) {
@@ -283,7 +303,7 @@ static HI_U32 imx415_vmax_min_for_mode(HI_U8 u8ImgMode)
             /* Datasheet p63: VTTL ≥ max((PIX_VWIDTH/2)+46, 1222) for window
              * cropping in all-pixel timing. The 1222 floor dominates for any
              * crop_h ≤ 2352, so this mode is lane-rate-bound at ≈55 fps. */
-            HI_U32 crop_h = imx415_runtime_crop_h();
+            HI_U32 crop_h = imx415_runtime_crop_h(vi_pipe);
             HI_U32 u32CropFloor = (crop_h / 2) + 46;
             HI_U32 u32VMin      = (u32CropFloor > IMX415_VMAX_MIN_CROP)
                                   ? u32CropFloor : IMX415_VMAX_MIN_CROP;
@@ -294,7 +314,7 @@ static HI_U32 imx415_vmax_min_for_mode(HI_U8 u8ImgMode)
              * of all-pixel cropping doesn't apply because binning halves the
              * effective 1H period. Smaller crops now genuinely unlock more
              * fps until either the lane or the ISP_FE wall hits. */
-            return imx415_runtime_crop_h() + IMX415_VBLANK_MIN;
+            return imx415_runtime_crop_h(vi_pipe) + IMX415_VBLANK_MIN;
         default:
             u32OutH = 2160; break;
     }
@@ -304,9 +324,9 @@ static HI_U32 imx415_vmax_min_for_mode(HI_U8 u8ImgMode)
 /* Compute the achievable fps ceiling for the current mode given its fixed
  * T1H period (set by SYS_MODE / lane rate) and the per-mode VMAX minimum.
  * Returns f32MaxFps from the mode table if no T1H is known. */
-static HI_FLOAT imx415_fps_ceiling_for_mode(HI_U8 u8ImgMode)
+static HI_FLOAT imx415_fps_ceiling_for_mode(VI_PIPE vi_pipe, HI_U8 u8ImgMode)
 {
-    HI_U32 u32VMin = imx415_vmax_min_for_mode(u8ImgMode);
+    HI_U32 u32VMin = imx415_vmax_min_for_mode(vi_pipe, u8ImgMode);
     HI_U32 u32T1HNs;
     switch (u8ImgMode) {
         case IMX415_8M_30FPS_10BIT_LINEAR_MODE: u32T1HNs = IMX415_T1H_NS_891MBPS_4K; break;
@@ -358,8 +378,8 @@ static HI_VOID cmos_fps_set(VI_PIPE vi_pipe, HI_FLOAT f32Fps, AE_SENSOR_DEFAULT_
     }
 
     f32ModeMaxFps = g_astImx415ModeTbl[pstSnsState->u8ImgMode].f32MaxFps;
-    f32CeilingFps = imx415_fps_ceiling_for_mode(pstSnsState->u8ImgMode);
-    u32VMin       = imx415_vmax_min_for_mode(pstSnsState->u8ImgMode);
+    f32CeilingFps = imx415_fps_ceiling_for_mode(vi_pipe, pstSnsState->u8ImgMode);
+    u32VMin       = imx415_vmax_min_for_mode(vi_pipe, pstSnsState->u8ImgMode);
 
     /* VMAX = u32VMax × (f32ModeMaxFps / f32Fps).
      * Solving for f32Fps: f32Fps = u32VMax × f32ModeMaxFps / VMAX. */
@@ -910,34 +930,23 @@ static HI_S32 cmos_set_image_mode(VI_PIPE vi_pipe, ISP_CMOS_SENSOR_IMAGE_MODE_S 
     u32W      = pstSensorImageMode->u16Width;
     u8SnsMode = pstSensorImageMode->u8SnsMode;
 
-    /* Debug knob: force a specific mode index from the env. Useful to verify
-     * modes the SDK sample dispatch can't reach by sensor-type alone (Mode 3
-     * has no SAMPLE_SNS_TYPE_E entry that sets u8SnsMode=2 with 4K resolution;
-     * Mode 4 / Mode 5 need IMX415_CROP_FLEX/IMX415_CROP_BIN_FLEX or u8SnsMode
-     * 4/5). For normal majestic 4K@60 use, prefer setting video0.fps=60 in
-     * majestic.yaml — cmos_fps_set auto-promotes Mode 0 → Mode 3 from there. */
-    {
-        const char *fm = getenv("IMX415_FORCE_IMG_MODE");
-        if (fm) {
-            int m = atoi(fm);
-            if (m >= 0 && m < IMX415_MODE_BUTT) {
-                u8SensorImageMode = (HI_U8)m;
-                pstSnsState->u8ImgMode = u8SensorImageMode;
-                pstSnsState->u32FLStd  = g_astImx415ModeTbl[pstSnsState->u8ImgMode].u32VMax;
-                pstSnsState->au32FL[0] = pstSnsState->u32FLStd;
-                pstSnsState->au32FL[1] = pstSnsState->au32FL[0];
-                return HI_SUCCESS;
-            }
-        }
+    /* Save crop dimensions for Mode 4 / Mode 5 — read back by imx415_init
+     * (crop register writes) and imx415_runtime_crop_h (VMAX_MIN calc). The
+     * caller (majestic, sample app, etc.) is responsible for choosing a
+     * resolution that fits the mode's constraints; the driver snaps to
+     * datasheet multiples-of-N when writing the registers. */
+    if (vi_pipe >= 0 && vi_pipe < ISP_MAX_PIPE_NUM) {
+        g_au32CropW[vi_pipe] = (u32W > 0) ? u32W : IMX415_CROP_W_DEFAULT;
+        g_au32CropH[vi_pipe] = (u32H > 0) ? u32H : IMX415_CROP_H_DEFAULT;
     }
 
-    /* Mode 4 (window crop) is selected by u8SnsMode=4 at either resolution.
-     * The cropped output size is set by the IMX415_CROP_W/H_DEFAULT compile-
-     * time constants (or by a future runtime API). Trades active area for fps
-     * up to ~54.9 (lane-rate-limited at 891 Mbps, VTTL floor = 1222). */
-    if (u8SnsMode == 5 || getenv("IMX415_CROP_BIN_FLEX")) {
+    /* Mode 4 (all-pixel window crop, ≤55 fps lane-rate-bound) and
+     * Mode 5 (2×2 binning + window crop, fps scales with crop_h)
+     * are selected by u8SnsMode. The caller passes the crop W×H in
+     * pstSensorImageMode->u16Width/u16Height. */
+    if (u8SnsMode == 5) {
         u8SensorImageMode = IMX415_CROP_BIN_FLEX_LINEAR_MODE;
-    } else if (u8SnsMode == 4 || getenv("IMX415_CROP_FLEX")) {
+    } else if (u8SnsMode == 4) {
         u8SensorImageMode = IMX415_CROP_FLEX_LINEAR_MODE;
     } else if (imx415_res_is_2m(u32W, u32H)) {
         if (u8SnsMode == 0) {

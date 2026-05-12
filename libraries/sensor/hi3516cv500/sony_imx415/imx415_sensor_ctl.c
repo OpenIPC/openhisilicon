@@ -355,23 +355,21 @@ void imx415_init(VI_PIPE vi_pipe)
                                      pastimx415->astRegsInfo[0].astI2cData[i].u32Data);
     }
 
-    /* ─── Mode 4 / Mode 5: runtime crop W×H override ──────────────────────
-     * Env vars IMX415_CROP_W and IMX415_CROP_H let the user pick a different
-     * crop window without recompiling. Values are clamped to sensor extents,
-     * snapped to the datasheet multiple-of-N rules, and centred in the 4K
-     * active area. Applies to Mode 4 (all-pixel crop) and Mode 5 (binning
-     * crop). Without this, Mode 5 keeps emitting 1920×1080 binned per frame
-     * — VMAX shrinks faster than the active line count and the sensor's
-     * output frame no longer fits in VMAX lines, capping VI at the largest
-     * fps where VMAX ≥ 1080+58 (≈121 fps). With the crop applied for Mode 5,
-     * fps scales freely with crop_h until either lane or ISP_FE hits. */
+    /* ─── Mode 4 / Mode 5: write crop registers from saved W×H ────────────
+     * cmos_set_image_mode stored the requested crop dimensions in
+     * g_au32CropW/g_au32CropH (sourced from majestic's pub_attr.stWndRect or
+     * sample-app's pstSensorImageMode->u16Width/Height). Values are clamped
+     * to sensor extents, snapped to datasheet multiple-of-N rules, and
+     * centred in the 4K active area.
+     *
+     * Without this register pass, Mode 5 keeps emitting 1920×1080 binned per
+     * frame — VMAX shrinks faster than active line count and frames stop
+     * fitting in VMAX, capping at ~121 fps (VMAX_min = 1080+58). With it,
+     * fps scales freely with crop_h until lane or ISP_FE budget hits. */
     if (u8ImgMode == IMX415_CROP_FLEX_LINEAR_MODE ||
         u8ImgMode == IMX415_CROP_BIN_FLEX_LINEAR_MODE) {
-        const char *cw = getenv("IMX415_CROP_W");
-        const char *ch = getenv("IMX415_CROP_H");
-        HI_U32 crop_w = cw ? (HI_U32)atoi(cw) : IMX415_CROP_W_DEFAULT;
-        HI_U32 crop_h = ch ? (HI_U32)atoi(ch) : IMX415_CROP_H_DEFAULT;
-        /* snap to required multiples: HWIDTH×24, VWIDTH×4 (lines) */
+        HI_U32 crop_w, crop_h;
+        imx415_get_crop(vi_pipe, &crop_w, &crop_h);
         /* Crop registers operate on PRE-binning coordinates per datasheet.
          * Mode 5 has ADDMODE=1 (2×2 binning), so the post-binning output is
          * crop_w × crop_h while the AREA registers must describe the
@@ -399,8 +397,6 @@ void imx415_init(VI_PIPE vi_pipe)
         ret += imx415_write_register(vi_pipe, IMX415_PIX_VST_HIGH,   (vst    >> 8) & 0x1F);
         ret += imx415_write_register(vi_pipe, IMX415_PIX_VWIDTH_LOW,  vwidth & 0xFF);
         ret += imx415_write_register(vi_pipe, IMX415_PIX_VWIDTH_HIGH,(vwidth >> 8) & 0x1F);
-        printf("IMX415 crop: %ux%u centred (HST=%u HWIDTH=%u VST=%u VWIDTH=%u)\n",
-               crop_w, crop_h, hst, hwidth, vst, vwidth);
     }
 
     ret += imx415_write_register(vi_pipe, 0x3000, 0x00); /* Standby Cancel */
