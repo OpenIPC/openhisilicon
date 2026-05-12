@@ -256,19 +256,37 @@ both boards); the encoder is not the bottleneck.
 | Binning | 1296×972 | 64 fps | 64 fps | `DevRect_w=1296 DevRect_h=972` |
 | Cropped 1.5x zoom | 1920×1080 | 55 fps | 55 fps | `DevRect_w=1920 DevRect_h=1080` |
 | Boost-1944p | 2592×1944 | 39 fps (`Isp_FrameRate=45`) | 31 fps (`Isp_FrameRate=36`) | `Isp_SnsMode=6` |
-| Flexible crop | arbitrary W×H | up to **147 fps** at 800×480 | up to **147 fps** at 800×480 | `Isp_SnsMode=4` + `Isp_W=...` + `Isp_H=...` |
+| Flexible crop | arbitrary W×H | up to **304 fps** at 480×352 | up to **207 fps** at 480×352 | `Isp_SnsMode=4` + `Isp_W=...` + `Isp_H=...` |
 
 Flexible-crop ceiling rises as crop shrinks; per-size points measured:
 
 | Flex crop W×H | hi3516ev300 | gk7205v300 |
 |---|---|---|
-| 1280×720 @ 100 fps | 98 fps | 98 fps |
-| 1024×576 @ 120 fps | 118 fps | 118 fps |
-| 800×480 @ 130 fps | 128 fps | 128 fps |
-| 800×480 @ 150 fps | 147 fps | 147 fps |
+| 1280×720 @ 100 fps | 123 fps | 123 fps |
+| 1024×576 @ 120 fps | 169 fps | 169 fps |
+| 800×480 @ 130 fps | 183 fps | 183 fps |
+| 800×480 @ 150 fps | 211 fps | 208 fps |
+| 800×480 @ 240 fps | 243 fps | 207 fps |
+| 480×352 @ 240 fps | 304 fps | 207 fps |
 
 Set `Isp_FrameRate` in the sensor INI to request a target rate; the driver
-clamps to the per-mode sensor ceiling.
+clamps to the per-mode sensor ceiling. Sensor delivers whatever rate the
+HMAX register supports — requesting > the practical ceiling still produces
+the ceiling (not a fallback). Above ~240 fps the ev silicon outpaces the
+gk silicon because the gk's MIPI/ISP clock budget is binned lower (see
+`crystalline-singing-storm` notes); at larger crops both boards saturate
+on the encoder budget and match.
+
+Flex-crop ceiling is controlled by `HMAX = 0x0100` at
+`libraries/sensor/hi3516ev200/sony_imx335/imx335_sensor_ctl.c:811`.
+That value sweeps through an unstable band on the way down from the
+prior 0x016E default; `0x0100` is the empirically-stable peak at
+SYS_MODE=2 (891 Mbps lanes). The SYS_MODE=1 (1188 Mbps) path *might*
+unlock another 20-30% headroom but requires more than the 3-register
+patch we tried; see [docs/imx335-v4-high-fps.md](docs/imx335-v4-high-fps.md)
+for the stability map, the failed SYS_MODE=1 attempt, the AE-library
+u32FLStd race that explains ev's run-to-run variance (288-339 fps at
+480×352), and a self-contained build/deploy recipe.
 
 ### IMX307 high-framerate modes (hi3516ev200 / gk7205v200)
 
