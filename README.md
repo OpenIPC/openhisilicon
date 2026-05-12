@@ -242,10 +242,12 @@ Each sensor has `.so` (shared) and `.a` (static) library builds. The goal is to 
 Encoded fps delivered by VENC (`/proc/umap/venc` `VENC SEND1` `Send`
 counter, delta over 8 s after a 6 s warm-up), measured side-by-side on
 `openipc-hi3516ev300` and `openipc-gk7205v300` with identical sensor INI
-and majestic config (h265, 4 Mbps, `video0.size = 1920x1080` for high-res
+and majestic config (4 Mbps, `video0.size = 1920x1080` for high-res
 4:3 / 16:9 sensor modes — the typical IP-cam streaming target — and
 sensor-crop-native for smaller modes; VPSS handles the downscale and
-center-crops 4:3 sensors when streaming 16:9):
+center-crops 4:3 sensors when streaming 16:9). H.264 and H.265 produce
+identical fps in every mode at this bitrate (verified codec-by-codec on
+both boards); the encoder is not the bottleneck.
 
 | Mode | Sensor crop | hi3516ev300 | gk7205v300 | Selected by |
 |------|-------------|------------|------------|-------------|
