@@ -239,19 +239,20 @@ Each sensor has `.so` (shared) and `.a` (static) library builds. The goal is to 
 
 ### IMX335 high-framerate modes (hi3516ev200 only)
 
-Sustained fps delivered to VENC (`/proc/umap/vpss` `CHN OUTPUT FrameRate`),
-measured side-by-side on `openipc-hi3516ev300` and `openipc-gk7205v300` with
-identical sensor INI / majestic config (h265, 4 Mbps, native venc output =
-sensor crop, no VPSS downscale):
+Encoded fps delivered by VENC (`/proc/umap/venc` `VENC SEND1` `Send`
+counter, delta over 8 s after a 6 s warm-up), measured side-by-side on
+`openipc-hi3516ev300` and `openipc-gk7205v300` with identical sensor INI
+and majestic config (h265, 4 Mbps, native venc output = sensor crop, no
+VPSS downscale):
 
 | Mode | Resolution | hi3516ev300 | gk7205v300 | Selected by |
 |------|-----------|------------|------------|-------------|
-| Stock full-scale | 2592x1944 | 20 fps | 18 fps | `DevRect_w=2592 DevRect_h=1944` (default) |
-| Cropped 16:9 | 2592x1520 | 25 fps | 27 fps | `DevRect_w=2592 DevRect_h=1520` |
+| Stock full-scale | 2592x1944 | 21 fps | 18 fps | `DevRect_w=2592 DevRect_h=1944` (default) |
+| Cropped 16:9 | 2592x1520 | 26 fps | 26 fps | `DevRect_w=2592 DevRect_h=1520` |
 | Binning | 1296x972 | 64 fps | 64 fps | `DevRect_w=1296 DevRect_h=972` |
 | Cropped 1.5x zoom | 1920x1080 | 55 fps | 55 fps | `DevRect_w=1920 DevRect_h=1080` |
 | Boost-1944p | 2592x1944 | 39 fps | 29 fps | `Isp_SnsMode=6` + `Isp_FrameRate≥45` |
-| Flexible crop | arbitrary W×H | up to **147 fps** at 800×480 | up to **148 fps** at 800×480 | `Isp_SnsMode=4` + `Isp_W=...` + `Isp_H=...` |
+| Flexible crop | arbitrary W×H | up to **147 fps** at 800×480 | up to **147 fps** at 800×480 | `Isp_SnsMode=4` + `Isp_W=...` + `Isp_H=...` |
 
 Flexible-crop ceiling rises as crop shrinks; per-size points measured:
 
@@ -260,7 +261,7 @@ Flexible-crop ceiling rises as crop shrinks; per-size points measured:
 | 1280×720 @ 100 fps | 98 fps | 98 fps |
 | 1024×576 @ 120 fps | 118 fps | 118 fps |
 | 800×480 @ 130 fps | 128 fps | 128 fps |
-| 800×480 @ 150 fps | 147 fps | 148 fps |
+| 800×480 @ 150 fps | 147 fps | 147 fps |
 
 Set `Isp_FrameRate` in the sensor INI to request a target rate; the driver
 clamps to the per-mode sensor ceiling.
