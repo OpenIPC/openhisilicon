@@ -8,6 +8,7 @@
 #include "imx415_cmos.h"
 #include "imx415_cmos_ex.h"
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include <assert.h>
 #include "mpi_isp.h"
@@ -56,7 +57,21 @@ const IMX415_VIDEO_MODE_TBL_S g_astImx415ModeTbl[IMX415_MODE_BUTT] = {
     {0x08CA, 0, 2, 8, 30.00,  0, "4K2K_10BIT_30FPS"  }, /*  891Mbps 4lane 37.125MHz */
     {0x08CA, 0, 2, 8, 20.00,  1, "4K2K_10BIT_20FPS"  }, /*  594Mbps 4lane 37.125MHz */
     {0x08F8, 0, 2, 8, 60.00,  0,   "2M_12BIT_60FPS"  }, /*  891Mbps 4lane 37.125MHz */
-    {0x08CA, 0, 2, 8, 60.00,  2, "4K2K_10BIT_60FPS"  }, /* 1782Mbps 4lane 37.125MHz */
+    {0x08CA, 0, 2, 8, 60.00,  2, "4K2K_10BIT_60FPS"  }, /* 1485Mbps 4lane 37.125MHz (SYS_MODE=8h);
+                                                          * targets 4K@60 just under av300's
+                                                          * 1.5 Gbps MIPI PHY ceiling. */
+    {0x08CA, 0, 2, 8, 30.00,  4,   "CROP_FLEX_30FPS" }, /* Window crop at 891Mbps. VMAX_MIN
+                                                          * floor = 1222 (datasheet p63) caps
+                                                          * fps_max ≈ 54.9. Crop W×H configurable
+                                                          * via IMX415_CROP_W/H_DEFAULT or runtime
+                                                          * PIX_HST/HWIDTH/VST/VWIDTH writes. */
+    {0x08F8, 0, 2, 8, 60.00,  5,   "CROP_BIN_FLEX"   }, /* Binning + window crop. 1H = 7.26µs
+                                                          * (binning halves 1H from full-pixel
+                                                          * rate). Crop on the 1080p binned
+                                                          * output area; VMAX_MIN = crop_h + 58
+                                                          * gives fps_max well above 100 — actual
+                                                          * ceiling on av300 is the FE-finalisation
+                                                          * wall at ~60 fps. */
 };
 
 const IMX415_VIDEO_MODE_TBL_S *imx415_get_mode_tb1(HI_U8 u8ImgMode)
@@ -182,33 +197,34 @@ static HI_S32 cmos_get_ae_default(VI_PIPE vi_pipe, AE_SENSOR_DEFAULT_S *pstAeSns
 
 extern void imx415_init(VI_PIPE vi_pipe);
 
-/* Promotes to a same-resolution mode with higher f32MaxFps when caller requests
- * f32Fps > current mode's cap. Returns 1 if a switch happened (re-init done),
- * 0 otherwise. Called only from cmos_fps_set. Keeps the existing failure path
- * if no compatible higher-fps mode exists. */
+/* Auto-promote: when the caller asks cmos_fps_set for a frame rate higher than
+ * the current mode's ceiling, pick the smallest-MaxFps same-resolution mode
+ * that satisfies the request and re-init the sensor for it. Without this,
+ * majestic's `video0.size: 3840x2160` + `video0.fps: 60` config falls back to
+ * Mode 0 (4K@30) because the SDK sample-sensor-type enum has no
+ * SONY_IMX415_MIPI_8M_60FPS entry that would set u8SnsMode=2 → Mode 3.
+ * Returns 1 if a switch happened, 0 otherwise.
+ *
+ * Resolution groups:
+ *   4K all-pixel: Mode 0 (30 fps, 891 Mbps), Mode 1 (20 fps, 594 Mbps), Mode 3 (60 fps, 1485 Mbps)
+ *   1080p binning: Mode 2 (60 fps, 891 Mbps)
+ *   Mode 4 / Mode 5: flexible crop — not promoted (caller manages crop_h explicitly) */
 static HI_S32 cmos_try_promote_mode(VI_PIPE vi_pipe, ISP_SNS_STATE_S *pstSnsState, HI_FLOAT f32Fps)
 {
     HI_U8 u8Cur = pstSnsState->u8ImgMode;
     HI_U8 u8New = 0xFF;
-    HI_U8 i;
-
-    /* Group modes by resolution. Currently:
-     *  Mode 0 = 4K@30, Mode 1 = 4K@20, Mode 3 = 4K@60  → all 4K all-pixel
-     *  Mode 2 = 1080p@60                               → binning
-     * Searching by VMax is unreliable (Mode 2 has different VMax for binning),
-     * so we use an explicit lookup table per-resolution. */
-    HI_BOOL bIs4K =  (u8Cur == IMX415_8M_30FPS_10BIT_LINEAR_MODE)
-                  || (u8Cur == IMX415_8M_20FPS_10BIT_LINEAR_MODE)
-                  || (u8Cur == IMX415_8M_60FPS_10BIT_LINEAR_MODE);
-    if (!bIs4K) return 0;  /* binning mode 2 already at MaxFps=60 */
-
-    /* Find the 4K mode with the smallest f32MaxFps that still satisfies f32Fps. */
     HI_FLOAT f32BestFps = 1e30f;
-    HI_U8    a4KModes[] = {
+    HI_U8 a4KModes[] = {
         IMX415_8M_30FPS_10BIT_LINEAR_MODE,
         IMX415_8M_20FPS_10BIT_LINEAR_MODE,
         IMX415_8M_60FPS_10BIT_LINEAR_MODE,
     };
+    HI_BOOL bIs4K = (u8Cur == IMX415_8M_30FPS_10BIT_LINEAR_MODE)
+                 || (u8Cur == IMX415_8M_20FPS_10BIT_LINEAR_MODE)
+                 || (u8Cur == IMX415_8M_60FPS_10BIT_LINEAR_MODE);
+    if (!bIs4K) return 0; /* 1080p binning mode 2 already at MaxFps=60; flex modes managed elsewhere */
+
+    HI_U8 i;
     for (i = 0; i < sizeof(a4KModes); i++) {
         HI_U8 m = a4KModes[i];
         HI_FLOAT cap = g_astImx415ModeTbl[m].f32MaxFps;
@@ -219,49 +235,152 @@ static HI_S32 cmos_try_promote_mode(VI_PIPE vi_pipe, ISP_SNS_STATE_S *pstSnsStat
     }
     if (u8New == 0xFF || u8New == u8Cur) return 0;
 
-    SNS_ERR_TRACE("cmos_fps_set: requested fps %.2f > mode %u cap %.2f — promoting to mode %u (%s)\n",
-                  f32Fps, u8Cur, g_astImx415ModeTbl[u8Cur].f32MaxFps,
-                  u8New, g_astImx415ModeTbl[u8New].pszModeName);
     pstSnsState->u8ImgMode = u8New;
     pstSnsState->u32FLStd  = g_astImx415ModeTbl[u8New].u32VMax;
     pstSnsState->au32FL[0] = pstSnsState->u32FLStd;
-    pstSnsState->au32FL[1] = pstSnsState->u32FLStd;
-    pstSnsState->bInit     = HI_FALSE;   /* re-run i2c init below */
-    pstSnsState->bSyncInit = HI_FALSE;
+    pstSnsState->au32FL[1] = pstSnsState->au32FL[0];
+    pstSnsState->bInit     = HI_FALSE;  /* force imx415_init to re-run the full cfg_seq */
     imx415_init(vi_pipe);
     return 1;
 }
 
-/* the function of sensor set fps */
+/* Returns the per-mode VMAX minimum.
+ *
+ * - All-pixel / binning modes: VMAX_MIN = output_height + IMX415_VBLANK_MIN
+ *   (sensor must read out active lines + minimum vertical blanking).
+ * - Window-cropping mode (WINMODE=4h): the datasheet (page 63) imposes a hard
+ *   floor of VTTL ≥ 1222 in addition to VTTL ≥ (PIX_VWIDTH/2) + 46. For any
+ *   crop height ≤ 2352, the 1222 floor wins, so window-crop mode is fps-capped
+ *   by the lane rate rather than by the crop size.
+ *
+ * Below the per-mode minimum the sensor either truncates the active area
+ * or stalls; the mainline Linux driver (drivers/media/i2c/imx415.c) uses
+ * the same logic. */
+/* Read the runtime crop height (env override or compile default).
+ * Used by Mode 4 / Mode 5 VMAX_MIN computation so smaller crops actually
+ * reach their lane-rate-allowed higher fps. */
+static HI_U32 imx415_runtime_crop_h(HI_VOID)
+{
+    const char *ch = getenv("IMX415_CROP_H");
+    HI_U32 h = ch ? (HI_U32)atoi(ch) : IMX415_CROP_H_DEFAULT;
+    h = (h / 4) * 4;
+    if (h < 4) h = 4;
+    if (h > IMX415_SENSOR_H) h = IMX415_SENSOR_H;
+    return h;
+}
+
+static HI_U32 imx415_vmax_min_for_mode(HI_U8 u8ImgMode)
+{
+    HI_U32 u32OutH;
+    switch (u8ImgMode) {
+        case IMX415_8M_30FPS_10BIT_LINEAR_MODE:
+        case IMX415_8M_20FPS_10BIT_LINEAR_MODE:
+        case IMX415_8M_60FPS_10BIT_LINEAR_MODE:
+            u32OutH = 2160; break;
+        case IMX415_2M_60FPS_12BIT_LINEAR_MODE:
+            u32OutH = 1080; break;
+        case IMX415_CROP_FLEX_LINEAR_MODE: {
+            /* Datasheet p63: VTTL ≥ max((PIX_VWIDTH/2)+46, 1222) for window
+             * cropping in all-pixel timing. The 1222 floor dominates for any
+             * crop_h ≤ 2352, so this mode is lane-rate-bound at ≈55 fps. */
+            HI_U32 crop_h = imx415_runtime_crop_h();
+            HI_U32 u32CropFloor = (crop_h / 2) + 46;
+            HI_U32 u32VMin      = (u32CropFloor > IMX415_VMAX_MIN_CROP)
+                                  ? u32CropFloor : IMX415_VMAX_MIN_CROP;
+            return u32VMin;
+        }
+        case IMX415_CROP_BIN_FLEX_LINEAR_MODE:
+            /* Binning + crop: VMAX_MIN = crop_h + VBLANK_MIN — the 1222 floor
+             * of all-pixel cropping doesn't apply because binning halves the
+             * effective 1H period. Smaller crops now genuinely unlock more
+             * fps until either the lane or the ISP_FE wall hits. */
+            return imx415_runtime_crop_h() + IMX415_VBLANK_MIN;
+        default:
+            u32OutH = 2160; break;
+    }
+    return u32OutH + IMX415_VBLANK_MIN;
+}
+
+/* Compute the achievable fps ceiling for the current mode given its fixed
+ * T1H period (set by SYS_MODE / lane rate) and the per-mode VMAX minimum.
+ * Returns f32MaxFps from the mode table if no T1H is known. */
+static HI_FLOAT imx415_fps_ceiling_for_mode(HI_U8 u8ImgMode)
+{
+    HI_U32 u32VMin = imx415_vmax_min_for_mode(u8ImgMode);
+    HI_U32 u32T1HNs;
+    switch (u8ImgMode) {
+        case IMX415_8M_30FPS_10BIT_LINEAR_MODE: u32T1HNs = IMX415_T1H_NS_891MBPS_4K; break;
+        case IMX415_8M_20FPS_10BIT_LINEAR_MODE: u32T1HNs = IMX415_T1H_NS_594MBPS_4K; break;
+        case IMX415_2M_60FPS_12BIT_LINEAR_MODE: u32T1HNs = IMX415_T1H_NS_891MBPS_2M; break;
+        case IMX415_8M_60FPS_10BIT_LINEAR_MODE: u32T1HNs = IMX415_T1H_NS_1485MBPS_4K; break;
+        case IMX415_CROP_FLEX_LINEAR_MODE:      u32T1HNs = IMX415_T1H_NS_891MBPS_4K; break;
+        case IMX415_CROP_BIN_FLEX_LINEAR_MODE:  u32T1HNs = IMX415_T1H_NS_891MBPS_2M; break;
+        default: return g_astImx415ModeTbl[u8ImgMode].f32MaxFps;
+    }
+    /* fps_max = 1e9 / (VMIN × T1H_ns) */
+    return 1.0e9f / ((HI_FLOAT)u32VMin * (HI_FLOAT)u32T1HNs);
+}
+
+/* the function of sensor set fps — adjusts VMAX (and therefore the per-frame
+ * line count) within the constraints of the current SYS_MODE. Going beyond
+ * a mode's ceiling requires a SYS_MODE switch (different lane rate + INCKSEL
+ * + D-PHY timings), handled by imx415_init re-running the full cfg_seq.
+ *
+ * The current sensor lane rate dictates the per-line period (T1H), which is
+ * FIXED inside a SYS_MODE — within-mode fps changes touch ONLY VMAX. The
+ * INCKSEL PLL config, HMAX, BCWAIT_TIME, CPWAIT_TIME, TXCLKESC_FREQ and the
+ * MIPI D-PHY timing block (TCLKPOST / TCLKPREPARE / TCLKTRAIL / TCLKZERO /
+ * THSPREPARE / THSZERO / THSTRAIL / THSEXIT / TLPX at 0x4018-0x4029) all
+ * stay at their mode-defined values; recomputing them from fps would be
+ * incorrect because they're tied to the lane rate, not the frame rate. */
 static HI_VOID cmos_fps_set(VI_PIPE vi_pipe, HI_FLOAT f32Fps, AE_SENSOR_DEFAULT_S *pstAeSnsDft)
 {
-    HI_FLOAT f32MaxFps;
-    HI_U32 u32Lines;
+    HI_FLOAT f32ModeMaxFps;
+    HI_FLOAT f32CeilingFps;
+    HI_U32   u32Lines;
+    HI_U32   u32VMin;
     ISP_SNS_STATE_S *pstSnsState = HI_NULL;
 
     CMOS_CHECK_POINTER_VOID(pstAeSnsDft);
     IMX415_SENSOR_GET_CTX(vi_pipe, pstSnsState);
     CMOS_CHECK_POINTER_VOID(pstSnsState);
 
-    f32MaxFps = g_astImx415ModeTbl[pstSnsState->u8ImgMode].f32MaxFps;
-
-    /* If the requested fps exceeds the current mode's cap, try to promote to a
-     * same-resolution mode that supports it. */
-    if (f32Fps > f32MaxFps) {
-        if (cmos_try_promote_mode(vi_pipe, pstSnsState, f32Fps)) {
-            f32MaxFps = g_astImx415ModeTbl[pstSnsState->u8ImgMode].f32MaxFps;
-        }
+    /* Auto-promote if requested fps exceeds current mode's nominal cap, e.g.
+     * majestic asks for 4K@60 while ISP is still on Mode 0 (4K@30). */
+    if (f32Fps > g_astImx415ModeTbl[pstSnsState->u8ImgMode].f32MaxFps + 0.001f) {
+        cmos_try_promote_mode(vi_pipe, pstSnsState, f32Fps);
     }
 
-    u32Lines = g_astImx415ModeTbl[pstSnsState->u8ImgMode].u32VMax * (f32MaxFps / SNS_DIV_0_TO_1_FLOAT(f32Fps));
+    f32ModeMaxFps = g_astImx415ModeTbl[pstSnsState->u8ImgMode].f32MaxFps;
+    f32CeilingFps = imx415_fps_ceiling_for_mode(pstSnsState->u8ImgMode);
+    u32VMin       = imx415_vmax_min_for_mode(pstSnsState->u8ImgMode);
+
+    /* VMAX = u32VMax × (f32ModeMaxFps / f32Fps).
+     * Solving for f32Fps: f32Fps = u32VMax × f32ModeMaxFps / VMAX. */
+    u32Lines = g_astImx415ModeTbl[pstSnsState->u8ImgMode].u32VMax *
+               (f32ModeMaxFps / SNS_DIV_0_TO_1_FLOAT(f32Fps));
+
+    /* Clamp to the per-mode VMAX_MIN. Without this, the driver would write a
+     * VMAX that makes the sensor truncate the active area. With the clamp,
+     * the maximum effective fps is f32CeilingFps. */
+    if (u32Lines < u32VMin) {
+        SNS_ERR_TRACE("cmos_fps_set: fps %.2f exceeds mode '%s' ceiling %.2f "
+                      "(VMAX would be %u, clamped to %u)\n",
+                      f32Fps, g_astImx415ModeTbl[pstSnsState->u8ImgMode].pszModeName,
+                      f32CeilingFps, u32Lines, u32VMin);
+        u32Lines = u32VMin;
+    }
+
+    if (u32Lines > IMX415_FULL_LINES_MAX) {
+        SNS_ERR_TRACE("cmos_fps_set: fps %.2f below mode minimum "
+                      "(VMAX %u > max %u)\n",
+                      f32Fps, u32Lines, IMX415_FULL_LINES_MAX);
+        u32Lines = IMX415_FULL_LINES_MAX;
+    }
+
     pstSnsState->u32FLStd = u32Lines;
-    pstAeSnsDft->u32MaxIntTime = pstSnsState->u32FLStd - g_astImx415ModeTbl[pstSnsState->u8ImgMode].u32ExpLineLimit;
-
-    /* SHR 16bit, So limit full_lines as 0xFFFF */
-    if (f32Fps > f32MaxFps || u32Lines > IMX415_FULL_LINES_MAX) {
-        SNS_ERR_TRACE("Not support Fps: %f\n", f32Fps);
-        return;
-    }
+    pstAeSnsDft->u32MaxIntTime = pstSnsState->u32FLStd -
+                                 g_astImx415ModeTbl[pstSnsState->u8ImgMode].u32ExpLineLimit;
 
     pstAeSnsDft->f32Fps = f32Fps;
     pstAeSnsDft->u32LinesPer500ms = pstSnsState->u32FLStd * f32Fps / 2; /* div 2 */
@@ -785,7 +904,36 @@ static HI_S32 cmos_set_image_mode(VI_PIPE vi_pipe, ISP_CMOS_SENSOR_IMAGE_MODE_S 
     u32W      = pstSensorImageMode->u16Width;
     u8SnsMode = pstSensorImageMode->u8SnsMode;
 
-    if (imx415_res_is_2m(u32W, u32H)) {
+    /* Debug knob: force a specific mode index from the env. Useful to verify
+     * modes the SDK sample dispatch can't reach by sensor-type alone (Mode 3
+     * has no SAMPLE_SNS_TYPE_E entry that sets u8SnsMode=2 with 4K resolution;
+     * Mode 4 / Mode 5 need IMX415_CROP_FLEX/IMX415_CROP_BIN_FLEX or u8SnsMode
+     * 4/5). For normal majestic 4K@60 use, prefer setting video0.fps=60 in
+     * majestic.yaml — cmos_fps_set auto-promotes Mode 0 → Mode 3 from there. */
+    {
+        const char *fm = getenv("IMX415_FORCE_IMG_MODE");
+        if (fm) {
+            int m = atoi(fm);
+            if (m >= 0 && m < IMX415_MODE_BUTT) {
+                u8SensorImageMode = (HI_U8)m;
+                pstSnsState->u8ImgMode = u8SensorImageMode;
+                pstSnsState->u32FLStd  = g_astImx415ModeTbl[pstSnsState->u8ImgMode].u32VMax;
+                pstSnsState->au32FL[0] = pstSnsState->u32FLStd;
+                pstSnsState->au32FL[1] = pstSnsState->au32FL[0];
+                return HI_SUCCESS;
+            }
+        }
+    }
+
+    /* Mode 4 (window crop) is selected by u8SnsMode=4 at either resolution.
+     * The cropped output size is set by the IMX415_CROP_W/H_DEFAULT compile-
+     * time constants (or by a future runtime API). Trades active area for fps
+     * up to ~54.9 (lane-rate-limited at 891 Mbps, VTTL floor = 1222). */
+    if (u8SnsMode == 5 || getenv("IMX415_CROP_BIN_FLEX")) {
+        u8SensorImageMode = IMX415_CROP_BIN_FLEX_LINEAR_MODE;
+    } else if (u8SnsMode == 4 || getenv("IMX415_CROP_FLEX")) {
+        u8SensorImageMode = IMX415_CROP_FLEX_LINEAR_MODE;
+    } else if (imx415_res_is_2m(u32W, u32H)) {
         if (u8SnsMode == 0) {
             u8SensorImageMode = IMX415_2M_60FPS_12BIT_LINEAR_MODE;
         } else {
@@ -794,10 +942,6 @@ static HI_S32 cmos_set_image_mode(VI_PIPE vi_pipe, ISP_CMOS_SENSOR_IMAGE_MODE_S 
         }
     } else if (IMX415_RES_IS_8M(u32W, u32H)) {
         if (u8SnsMode == 2) {
-            u8SensorImageMode = IMX415_8M_60FPS_10BIT_LINEAR_MODE;
-        } else if (u8SnsMode == 0 && pstSensorImageMode->f32Fps > 30.0f) {
-            /* Allow majestic to select the 60fps 1782Mbps mode by simply
-             * asking for >30 fps at 4K — saves users from configuring SnsMode=2. */
             u8SensorImageMode = IMX415_8M_60FPS_10BIT_LINEAR_MODE;
         } else if (u8SnsMode == 0) {
             u8SensorImageMode = IMX415_8M_30FPS_10BIT_LINEAR_MODE;
