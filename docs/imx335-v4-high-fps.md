@@ -5,10 +5,13 @@ flex-crop mode tops out at **237 fps** at 480×352 out of the box. A
 one-byte patch to `imx335_sensor_ctl.c:811` lifts the ceiling to
 **~300 fps typical, 339 fps observed on cold-boot** (+27% to +43%,
 85-98% of theoretical 346 fps). Run-to-run variance is real — §4.4
-and §7.3 cover the AE-library u32FLStd race that causes it. This
+and §8.3 cover the AE-library u32FLStd race that causes it. This
 document captures *why* the patch works, *how* to reproduce it,
-*why the obvious next step doesn't*, and the plumbing pitfalls that
-will eat a day if you don't know them.
+*why the obvious next step doesn't*, the **ev-vs-gk gap that isn't
+silicon binning** (§6 — both are the same Hisilicon die, with the
+gap likely living in undocumented CRG registers populated by Goke's
+SDK variant), and the plumbing pitfalls that will eat a day if you
+don't know them.
 
 Written for someone who has never touched a HiSilicon camera SoC. If
 you know the platform already, skim §1–2 and start at §3.
@@ -18,9 +21,12 @@ you know the platform already, skim §1–2 and start at §3.
 ### 1.1 The chip families
 
 HiSilicon (a Huawei subsidiary, US-sanctioned in 2020) shipped 8 generations
-of IP-camera SoCs from 2010 to 2019. Goke (a Hong Kong fab partner)
-re-spun several of them under their own part numbers, pin-compatible
-and binary-compatible with the HiSilicon originals. This repo
+of IP-camera SoCs from 2010 to 2019. Goke (a Hong Kong fab partner) sells
+re-marked versions of those same dies under their own part numbers —
+`gk7205v200` is `hi3516ev200`, `gk7205v300` is `hi3516ev300`. Same
+silicon, same datasheet applies. The Goke vendor SDK is a fork with its
+own runtime policy (and a different `.ko` blob set), but the chip itself
+is identical. This repo
 (`openhisilicon`) refers to those 8 platforms by their `CHIPARCH` build
 variable — `hi3516cv100`, `hi3516cv200`, `hi3516av100`, `hi3516cv300`,
 `hi3519v101`, `hi3516cv500`, `hi3516ev200`, `gk7205v200`. The last two
@@ -299,7 +305,7 @@ codec h265, GOP=240, bitrate 4096 kbps.
 | 0x0120           | 308 |   237   | 5 s × 1          | unstable  |
 | 0x0118           | 317 |   298   | 5 s × 1          | unstable  |
 | 0x0110           | 326 | 186 / 234 | 5 s × 3          | **unstable** |
-| **0x0100**       | **346** | **288 – 339** | **8 runs × 10 s; cold-boot pair hit 338.6, settled runs 290-310** | **stable peak; variance from AE race (§7.3)** |
+| **0x0100**       | **346** | **288 – 339** | **8 runs × 10 s; cold-boot pair hit 338.6, settled runs 290-310** | **stable peak; variance from AE race (§8.3)** |
 | 0x00F0           | 370 |   175   | 5 s × 1          | sensor doesn't lock (falls back) |
 | 0x00E0           | 396 |   181   | 5 s × 1          | sensor doesn't lock |
 | 0x00D0           | 426 |   189   | 5 s × 1          | sensor doesn't lock |
@@ -316,7 +322,7 @@ The peak is **HMAX=0x0100**. Cold-boot runs measure 338.6 fps
 (98% of the 346 fps theoretical, +43% over the 237-fps baseline);
 across longer test sessions ongoing runs settle into a 288-310 fps
 band (+22% to +31%). The variance source is the cmos_get_ae_default /
-cmos_fps_set u32FLStd race in §7.3 — both functions overwrite the
+cmos_fps_set u32FLStd race in §8.3 — both functions overwrite the
 same field with different formulas, and which one lands last
 depends on AE-library convergence path. The HMAX patch raises the
 ceiling unambiguously; what fraction of that ceiling is realised
@@ -570,7 +576,95 @@ binning-coupled and copy only the PLL-coupled ones. We didn't
 do that bisection. Estimated effort: 2-4 hours with a
 datasheet on hand.
 
-## 6. Reproduction guide
+## 6. The ev-vs-gk fps gap — what it isn't
+
+A measurement quirk to be honest about: at the same crop and same
+HMAX, hi3516ev300 outpaces gk7205v300 by ~30-40% above 240 fps
+(at 480×352 @240: ev ~300 fps, gk ~210 fps). This is *not* silicon
+binning — the two parts are the **same Hisilicon die**, just
+re-marked. Hisilicon's datasheet applies to both.
+
+To localise the gap we read all of CRG (`base 0x1201_0000`, 256
+dwords) live on both boards while running the same `majestic_new`
++ HMAX=0x0100 build at 480×352 @240:
+
+```
+ssh root@<board> 'for off in $(seq 0 4 0x1FC); do
+  a=$(printf 0x12010%03x $off); v=$(devmem $a 2>/dev/null)
+  echo "$a $v"
+done'
+```
+
+Side-by-side diff of two such dumps:
+
+| Reg / offset | Description | ev300 | gk7205v300 |
+|---|---|---|---|
+| CRG31 / 0x07C | DDR clock | `0x74` | `0x74` ✓ |
+| CRG32 / 0x080 | SoC clock select | `0x549` | `0x549` ✓ |
+| CRG40 / 0x0A0 | media block freq | `0x0` (vpss=257, vedu=450, ive=450) | `0x0` ✓ |
+| CRG42 / 0x0A8 | VPSS clock + reset | `0x6` (online, clock on) | `0x6` ✓ |
+| CRG60 / 0x0F0 | SENSOR clock | `0x11` (INCK=37.125 MHz) | `0x11` ✓ |
+| CRG61 / 0x0F4 | **VI clock** | `0x340` (`vi_ppc_cksel=000=360 MHz`) | `0x340` ✓ |
+| CRG62 / 0x0F8 | MIPI RX clock | `0xD` | `0xD` ✓ |
+| CRG63 / 0x0FC | VIPROC clock | `0x18` (online, clock on) | `0x18` ✓ |
+
+**Every documented clock-select register matches byte-for-byte.**
+Both boards run the entire online pixel pipeline (VI / VPSS /
+VIPROC) at 360 MHz via `vi_ppc_cksel=000`. DDR clock matches.
+Sensor INCK matches. No backpressure counters trigger
+(`DropErrFrame=0`, `LostFrame=0`, `IspResetCnt=0`,
+`IspBeStaLost=0` on both, throughout the test).
+
+So whatever's binding gk's rate is *not* visible at the CRG layer.
+
+What does differ:
+
+| Offset | ev300 | gk7205v300 | Hisilicon datasheet says |
+|---|---|---|---|
+| 0x008 | 0x00000000 | 0x00032000 | (no entry — undocumented) |
+| 0x00C | 0x00000000 | 0x019F0000 | (no entry) |
+| 0x010 | 0x00000000 | 0x00032000 | (no entry) |
+| 0x014 | 0x00000000 | 0x01870000 | (no entry) |
+| 0x020 - 0x034 | all zero (6 dwords) | `0xE0000004 0x00B40000 0x20111FA8 0x2404FF20 0x0802013F 0x00004046` | (no entries) |
+| 0x038 - 0x04C | all zero (6 dwords) | **identical repeat** of 0x020-0x034 | (no entries) |
+
+The Hisilicon public CRG overview table jumps `0x004 → 0x018 →
+0x050`, deliberately omitting these. They're undocumented on the
+Hisilicon side. Goke's vendor SDK clearly knows about them — the
+closed `gk7205v200_vi.ko` blob writes them at module init.
+
+The 0x020-0x04C block repeats as two identical 6-dword structures
+— textbook shape of two PLLs each with 6 control words. Possibly
+PLL2 / PLL3 (the documented ones are PLL0/1 and PLL6/7; PLL2-5 are
+"reserved"). Whether they're actually changing internal clock
+frequencies, or merely fine-tune registers that don't affect rate,
+or aliases of the documented PLLs that read differently — we can't
+tell without writing to them, which is risky without bit-field
+docs.
+
+What's most likely happening: **same silicon, different vendor SDK
+policy**. The Goke variant of the vendor blob (`vi_nolog.o`, ~24%
+smaller than the Hisilicon variant) programs PLL/divider state
+differently — possibly to comply with Goke's marketing rate spec,
+possibly because the Goke SDK was a fork that diverged on internal
+config. Same hardware; different software.
+
+To distinguish "same final clocks, different config representation"
+from "actually different clocks":
+
+- Write ev's CRG state onto gk (the 0x020-0x04C block to zero, plus
+  ensure the documented regs stay matched) **post-`load_hisilicon`**
+  via `devmem`, re-measure fps. If lift → these registers were the
+  binding. If no lift → look further (DDR PHY tuning,
+  ISP_BE buffer config, board-level RC).
+
+This wasn't done in the session that produced this doc — writing to
+PLL registers on a live system is the kind of operation that wants
+a bench rebuild plan and a serial console attached. The
+investigation handed off the next experimenter is documented in
+kaeru as `imx335-ev-vs-gk-crg-decode-2026-05-12`.
+
+## 7. Reproduction guide
 
 ```sh
 # 1. Backup, then patch HMAX
@@ -657,9 +751,9 @@ awk "BEGIN{printf \"fps = %.1f over %.3fs (%d frames)\n\", ($S2-$S1)/($T2-$T1), 
 # expected: ~339 fps
 ```
 
-## 7. Future work
+## 8. Future work
 
-### 7.1 Bigger sensor crops at the same HMAX
+### 8.1 Bigger sensor crops at the same HMAX
 
 VMAX_min scales with crop_h. We didn't test smaller crops. At
 crop_h = 144 (480×144) theoretical with HMAX=0x0100 is `72.8e6 /
@@ -668,7 +762,7 @@ encoder bits/sec might cap before sensor pixels/sec does. Worth
 checking — start with a CBR target way below the current 4 Mbps
 to give VENC headroom.
 
-### 7.2 SYS_MODE=1 done properly
+### 8.2 SYS_MODE=1 done properly
 
 Take the 12-register diff between `IMX335_cropped_flex_init`
 (the M7 setup we patched) and `IMX335_cropped_binning_1080p_init`
@@ -678,7 +772,7 @@ coupled. Copy the PLL-coupled ones. Predict +20-30% over the
 current peak if the SoC MIPI RX can ingest 1188 Mbps cleanly
 (it should — the binning init at 1188 Mbps works fine).
 
-### 7.3 The cmos_get_ae_default / cmos_fps_set u32FLStd race
+### 8.3 The cmos_get_ae_default / cmos_fps_set u32FLStd race
 
 There's a known race in `imx335_cmos.c`:
 
@@ -705,7 +799,7 @@ affect both AE behaviour and frame rate. Tidying this up is a
 prerequisite for letting users set higher fps via the INI
 without overriding HMAX.
 
-### 7.4 Bandwidth-encoder regime testing
+### 8.4 Bandwidth-encoder regime testing
 
 At 339 fps × 480 × 352 = 57.3 Mpix/s × 12 bits raw = 687 Mbit/s
 on the bus. VENC at 4 Mbps target compression ratio = ~170:1.
@@ -715,7 +809,7 @@ sustain h265 at usable quality. The high-fps regime is useful
 for *measurement / latency* applications (FPV, machine vision)
 not for storage / streaming.
 
-## 8. Critical files and line references
+## 9. Critical files and line references
 
 - `libraries/sensor/hi3516ev200/sony_imx335/imx335_sensor_ctl.c:811`
   — the HMAX byte that controls fps ceiling in M7

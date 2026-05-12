@@ -272,10 +272,24 @@ Flexible-crop ceiling rises as crop shrinks; per-size points measured:
 Set `Isp_FrameRate` in the sensor INI to request a target rate; the driver
 clamps to the per-mode sensor ceiling. Sensor delivers whatever rate the
 HMAX register supports — requesting > the practical ceiling still produces
-the ceiling (not a fallback). Above ~240 fps the ev silicon outpaces the
-gk silicon because the gk's MIPI/ISP clock budget is binned lower (see
-`crystalline-singing-storm` notes); at larger crops both boards saturate
-on the encoder budget and match.
+the ceiling (not a fallback).
+
+Above ~240 fps the ev runs ~30-40% faster than gk despite the two being
+the *same silicon* (gk7205v200 ≡ hi3516ev200, gk7205v300 ≡ hi3516ev300 —
+re-marked Hisilicon dies). Live CRG dump on both boards at base
+`0x1201_0000` confirms: every documented clock-select register matches
+byte-for-byte — `CRG60` SENSOR INCK = 37.125 MHz (`0x11`), `CRG61`
+`vi_ppc_cksel` = `000` = 360 MHz (which drives VPSS / VIPROC in
+online mode on both boards), `CRG31` DDR clock = `0x74`, `CRG32` SoC
+clock select = `0x549`. The gap therefore is **not** clock-tree
+binning. Undocumented CRG offsets `0x008-0x014` and `0x020-0x04C`
+(which the Hisilicon datasheet leaves blank) *do* differ — gk
+populates them, ev reads zero — but writing to them is risky without
+field definitions. The closed `gk7205v200_vi.ko` blob (~24% smaller
+than `hi3516ev200_vi.ko`) is the most likely source: same hardware,
+different runtime policy programmed by Goke's variant of the vendor
+SDK. See [docs/imx335-v4-high-fps.md](docs/imx335-v4-high-fps.md) §6
+for the CRG-decode reproduction and what remains to test.
 
 Flex-crop ceiling is controlled by `HMAX = 0x0100` at
 `libraries/sensor/hi3516ev200/sony_imx335/imx335_sensor_ctl.c:811`.
