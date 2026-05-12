@@ -20,9 +20,9 @@ set Isp_FrameRate=30 to enable this mode
 
 
 # To configure. 
-Copy new driver to camera as ```usr/lib/sensors/libsns_imx335_fpv.so```
+Copy new driver to camera as ```usr/lib/sensors/libsns_imx335.so```
 
-Copy imx335_fpv.ini to ```/etc/sensors/imx335_fpv.ini```
+Copy imx335.ini to ```/etc/sensors/imx335.ini```
 
 in /etc/majestic.yaml set:
 ```
@@ -34,10 +34,10 @@ video0:
   fps: 45
 ...
 isp:
-  sensorConfig: /etc/sensors/imx335_fpv.ini
+  sensorConfig: /etc/sensors/imx335.ini
 ```
 
-follow instructions in /etc/sensors/imx335_fpv.ini
+follow instructions in /etc/sensors/imx335.ini
 
 
 
