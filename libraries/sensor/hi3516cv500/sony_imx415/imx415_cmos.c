@@ -346,7 +346,13 @@ static HI_VOID cmos_fps_set(VI_PIPE vi_pipe, HI_FLOAT f32Fps, AE_SENSOR_DEFAULT_
     CMOS_CHECK_POINTER_VOID(pstSnsState);
 
     /* Auto-promote if requested fps exceeds current mode's nominal cap, e.g.
-     * majestic asks for 4K@60 while ISP is still on Mode 0 (4K@30). */
+     * majestic asks for 4K@60 while ISP is still on Mode 0 (4K@30). On
+     * hi3516av300 the promoted Mode 3 (sensor 4K@60 at 1485 Mbps) is only
+     * usable through the raw / BE-bypass capture path — full encoded
+     * pipeline (ISP_FE→BE→VPSS→VENC) stalls because ISP_BE is budgeted for
+     * 4K@30 on this SoC variant. Promotion is still correct behaviour: the
+     * sensor driver doesn't know downstream limits, so it honours the fps
+     * request and lets callers handle the downstream tax. */
     if (f32Fps > g_astImx415ModeTbl[pstSnsState->u8ImgMode].f32MaxFps + 0.001f) {
         cmos_try_promote_mode(vi_pipe, pstSnsState, f32Fps);
     }
