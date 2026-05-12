@@ -244,7 +244,7 @@ measured side-by-side on `openipc-hi3516ev300` and `openipc-gk7205v300` with
 identical sensor INI / majestic config (h265, 4 Mbps, native venc output =
 sensor crop, no VPSS downscale):
 
-| Mode | Resolution | hi3516ev300 | gk7205v300 [^1] | Selected by |
+| Mode | Resolution | hi3516ev300 | gk7205v300 | Selected by |
 |------|-----------|------------|------------|-------------|
 | Stock full-scale | 2592x1944 | 21 fps | 18 fps | `DevRect_w=2592 DevRect_h=1944` (default) |
 | Cropped 16:9 | 2592x1520 | 26 fps | 28 fps | `DevRect_w=2592 DevRect_h=1520` |
@@ -255,7 +255,7 @@ sensor crop, no VPSS downscale):
 
 Flexible-crop ceiling rises as crop shrinks; per-size points measured:
 
-| Flex crop W×H | hi3516ev300 | gk7205v300 [^1] |
+| Flex crop W×H | hi3516ev300 | gk7205v300 |
 |---|---|---|
 | 1280×720 @ 100 fps | 98 fps | 99 fps |
 | 1024×576 @ 120 fps | 118 fps | 118 fps |
@@ -264,18 +264,6 @@ Flexible-crop ceiling rises as crop shrinks; per-size points measured:
 
 Set `Isp_FrameRate` in the sensor INI to request a target rate; the driver
 clamps to the per-mode sensor ceiling.
-
-[^1]: gk7205v300 numbers above require setting `clock=37.125MHz` under
-      `[mode]` in the sensor INI. The vendor `gk7205v200_vi.ko` blob
-      otherwise programs PERI_CRG60 (`0x120100F0`) to feed the IMX335 a
-      27 MHz reference clock during its `module_init`, capping the sensor
-      pixel rate at ~73% of the table values. The Hisilicon counterpart
-      `hi3516ev200_vi.ko` leaves the register at the SoC default 37.125
-      MHz, so the INI key is a no-op on hi3516ev300 but is needed on
-      gk7205v300. Majestic's `HiSi_HAL_SetSensorClock` writes the
-      requested cksel value back to PERI_CRG60 during `start_sdk`,
-      reverting the vendor blob's override (verified on
-      `openipc-gk7205v300`).
 
 ## Kernel modules
 
