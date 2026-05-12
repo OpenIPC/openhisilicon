@@ -245,8 +245,8 @@ High-framerate IMX335 modes for FPV applications on hi3516ev300/gk7205v300:
 |------|-----------|----------------------|---------------------|
 | Cropped 16:9 | 2592x1520 | 50 fps | 47 fps |
 | Full scale boosted | 2592x1944 | 39 fps | 33 fps |
-| Cropped 1.5x zoom | 1920x1080 | 55 fps | — |
-| Binning | 1296x972 | 65 fps | — |
+| Cropped 1.5x zoom | 1920x1080 | 55 fps | 55 fps |
+| Binning | 1296x972 | 65 fps | 49 fps |
 | Stock full scale | 2592x1944 | 30 fps | 30 fps |
 
 Configure via `Isp_FrameRate` in majestic settings.
