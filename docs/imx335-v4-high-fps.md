@@ -1,17 +1,22 @@
 # Pushing IMX335 past the documented 60 fps on V4 SoCs
 
-A field report from a research session on `hi3516ev300`. Baseline `IMX335`
-flex-crop mode tops out at **237 fps** at 480×352 out of the box. A
-one-byte patch to `imx335_sensor_ctl.c:811` lifts the ceiling to
-**~300 fps typical, 339 fps observed on cold-boot** (+27% to +43%,
-85-98% of theoretical 346 fps). Run-to-run variance is real — §4.4
+A field report from a research session on `hi3516ev300` and
+`gk7205v300`. Baseline `IMX335` flex-crop mode tops out at **237 fps**
+at 480×352 measured at the encoder counter (`/proc/umap/venc`), or
+**98 fps over the UDP-RTP wire** (deliverable, the FPV-drone number).
+A one-byte patch to `imx335_sensor_ctl.c:811` lifts both:
+encoder-counter to **~300 fps** (290-339 depending on AE
+convergence), UDP-wire to **140 fps** — a clean **+43% deliverable
+lift** at 480×352 and similar across other crops, identical on both
+boards. Run-to-run variance on the encoder side is real — §4.4
 and §8.3 cover the AE-library u32FLStd race that causes it. This
 document captures *why* the patch works, *how* to reproduce it,
-*why the obvious next step doesn't*, the **ev-vs-gk gap that isn't
-silicon binning** (§6 — both are the same Hisilicon die, with the
-gap likely living in undocumented CRG registers populated by Goke's
-SDK variant), and the plumbing pitfalls that will eat a day if you
-don't know them.
+*why the obvious next step doesn't*, the **ev-vs-gk gap that turned
+out to be an RTSP-stack artifact** (§6 — both boards run at the
+same rate over UDP), the **gap between encoder-counter and
+deliverable fps** (§6.2 — VENC SEND counter overstates wire rate
+when an active consumer exists), and the plumbing pitfalls that
+will eat a day if you don't know them.
 
 Written for someone who has never touched a HiSilicon camera SoC. If
 you know the platform already, skim §1–2 and start at §3.
@@ -663,6 +668,89 @@ PLL registers on a live system is the kind of operation that wants
 a bench rebuild plan and a serial console attached. The
 investigation handed off the next experimenter is documented in
 kaeru as `imx335-ev-vs-gk-crg-decode-2026-05-12`.
+
+### 6.1 Update — the gap *vanishes* on UDP-RTP
+
+A separate measurement using outgoing-RTP-over-UDP push (FPV-drone
+style, `outgoing: { enabled: true; - udp://host:port }` in
+majestic.yaml, no RTSP server in the loop) reveals the "gap" was
+100% RTSP-stack artifact. Under direct UDP push, ev and gk deliver
+**identical fps at identical CPU** across every measured crop:
+
+| Crop @ req fps | UDP-delivered ev | UDP-delivered gk | ev CPU | gk CPU |
+|---|---|---|---|---|
+| 1280×720 @100 | 56.1 fps | 56.1 fps | 16% | 15% |
+| 800×480 @130  | 82.5 fps | 82.5 fps | 23% | 23% |
+| 800×480 @150  | 93.6 fps | 93.6 fps | 26% | 26% |
+| 800×480 @240  | 110.2 fps | 110.2 fps | 30% | 31% |
+| 480×352 @240  | 140.2 fps | 140.3 fps | 35% | 36% |
+
+What was happening under RTSP: the bundled `smolrtsp` library's
+HEVC packetizer has a known framing bug — `send_fragmentized_nal_data`
+at `majestic/thirdparty/smolrtsp/src/nal_transport.c:96-128`
+generates illegal "S=1 AND E=1" Fragmentation Units when a NAL is
+exactly one MTU-payload-size (RFC 7798 §4.4.3 forbids this). ffmpeg
+recovers but warns frequently. The CPU cost of generating these
+packets, plus RTSP's TCP control-channel and the server-side
+session bookkeeping, drove ev's CPU to **72% busy** (vs 35% on UDP)
+just to deliver 209 fps out of 290 encoder-side fps — ~28% loss in
+transit. On gk the same path bottlenecked earlier, delivering
+~140 fps out of ~200 encoder-side fps — ~30% loss. So ffmpeg over RTSP saw 209 fps (ev)
+vs 140 fps (gk) — a "30% gap" that turns out to be RTSP-side
+asymmetry, not the silicon.
+
+Strip RTSP out of the path, push raw UDP-RTP, and the two boards
+match. The CRG diff in the documented registers (which all match)
+is therefore consistent with the actual behaviour; the undocumented
+0x008-0x04C registers may still differ, but they don't appear to
+have functional rate consequences as far as deliverable fps goes.
+
+### 6.2 The `VENC SEND` counter overstates deliverable fps
+
+A practical note for anyone doing fps measurements on V4: the
+`/proc/umap/venc VENC SEND1.Send` counter measures *what the encoder
+emits*, not *what reaches the wire*. With outgoing-UDP enabled, the
+encoder back-pressures to the consumer rate (the RTP send-loop
+drains at ~140 fps for 480×352 @4 Mbps, so VENC produces 140 fps).
+With RTSP serving, the socket buffer absorbs the rate mismatch by
+*dropping* frames silently — VENC happily produces 290 fps, ffmpeg
+sees 209 fps, the other ~80 fps die in transit.
+
+For the headline ceiling tests in §3, we deliberately ran with no
+network consumer, so VENC SEND ≈ what the encoder could produce.
+For deliverable-fps numbers — what an FPV drone actually serves
+over the radio link — see §6.1 or the README's table.
+
+### 6.3 Baseline (HMAX=0x16E) vs patched (HMAX=0x100) over UDP
+
+Head-to-head, deliberately apples-to-apples, identical config, both
+boards, 10 s measurement window after 2 s warmup, marker-bit frame
+count from raw RTP:
+
+| Crop @ req fps | Baseline ev | Patched ev | Baseline gk | Patched gk | Lift |
+|---|---|---|---|---|---|
+| 1280×720 @100 | 45.2 | **56.1** | 39.3 | **56.1** | +24% (ev) / +43% (gk) |
+| 1024×576 @120 | 49.1* | **168.4** | 49.1* | **168.5** | (anomaly — see note) |
+| 800×480 @130  | 57.7 | **82.5**  | 57.7 | **82.5**  | +43% |
+| 800×480 @150  | 65.4 | **93.6**  | 65.4 | **93.6**  | +43% |
+| 800×480 @240  | 77.1 | **110.2** | 77.1 | **110.2** | +43% |
+| 480×352 @240  | 98.1 | **140.2** | 98.1 | **140.3** | +43% |
+
+*The 1024×576 baseline row is anomalous. Both boards delivered 49
+frames per second of nearly-empty content (ev 0.13 Mbps, gk 0.04
+Mbps, 100-500 byte frames). The encoder's RC algorithm got confused
+at this resolution and produced near-empty P-frames at the requested
+120 fps; the +243% jump to the patched value isn't really
+"+243% performance", it's "patched delivered an ordinarily-encoded
+stream where baseline had collapsed". Don't quote it as a headline.
+All other rows are legitimate.
+
+The +43% lift translates cleanly from encoder-counter to wire-rate:
+the patch raises the sensor pixel-clock budget (§3), the encoder
+keeps up, the RTP path keeps up. At 1280×720 the lift compresses to
++24% on ev (gk gets the full +43% — gk's baseline was further from
+the binding) because the encoder rate ceiling — not the sensor —
+is what binds at that crop.
 
 ## 7. Reproduction guide
 
