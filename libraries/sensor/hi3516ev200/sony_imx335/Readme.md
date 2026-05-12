@@ -19,12 +19,14 @@ Isp_FrameRate=68 #  # max supported value on hi356ev300 at 1280x720
 set Isp_FrameRate=30 to enable this mode
 
 
-# To configure. 
-Copy new driver to camera as ```usr/lib/sensors/libsns_imx335.so```
+# To configure.
 
-Copy imx335.ini to ```/etc/sensors/imx335.ini```
+The driver is shipped as `libsns_imx335.so` in the firmware package
+(`hisilicon-osdrv-hi3516ev200` / `hisilicon-osdrv-gk7205v200`). A matching
+preset `imx335.ini` lives alongside it under
+`/etc/sensors/imx335.ini` on the device.
 
-in /etc/majestic.yaml set:
+In `/etc/majestic.yaml`:
 ```
 video0:
   codec: h265
@@ -37,9 +39,8 @@ isp:
   sensorConfig: /etc/sensors/imx335.ini
 ```
 
-follow instructions in /etc/sensors/imx335.ini
+The preset `imx335.ini` contains commented-out `DevRect_w` / `DevRect_h` /
+`Isp_FrameRate` blocks — uncomment the one for the desired mode.
 
-
-
-### Follow instructions in imx335_fps.ini to set the sensor mode
-All modes will work at fps: 45, some of them can run at higher refresh rate.
+All modes will work at fps 45; some support higher refresh rates per the
+table above.
