@@ -897,6 +897,35 @@ sustain h265 at usable quality. The high-fps regime is useful
 for *measurement / latency* applications (FPV, machine vision)
 not for storage / streaming.
 
+### 8.5 AE-VMAX clamp — the wire-rate cap is *not* VEDU after all
+
+After PR #100 merged, follow-up investigation found that the 140 fps
+wire-rate cap at 480×352 is *not* a VEDU encoder limit. The AE
+library writes VMAX to ~2060 lines instead of the datasheet
+minimum (840 lines for crop_h=352), dragging real sensor rate to
+half of theoretical. Clamping VMAX to `vmax_min` inside
+`cmos_slow_framerate_set` (the per-frame VMAX-update path that AE
+calls every frame) more than doubles the deliverable rate:
+
+| Crop @ req fps | PR #100 (no clamp) | With AE-VMAX clamp | Lift |
+|---|---|---|---|
+| 1280×720 @100 | 56 fps | **123 fps** | +120% |
+| 800×480 @130  | 83 fps | **225 fps** | +171% |
+| 800×480 @240  | 110 fps | **237 fps** | +115% |
+| 480×352 @240  | 140 fps | **319 fps** | +128% |
+
+The trade-off is exposure: VMAX=840 caps max integration time at
+~2.9 ms (vs ~28 ms otherwise). Fine for FPV daylight, bad for
+indoor IP-cam. Needs a config gate.
+
+The clamp is *not* part of this PR (it changes AE behaviour for
+every M7 user). A follow-up PR adds it behind an opt-in dispatch
+(`Isp_SnsMode=5` in the sensor INI: M7 + FPS-priority AE),
+documenting the exposure trade-off, with the gk init failure at
+480×352 as a known issue to debug separately. See
+`v4-ae-vmax-clamp-doubles-deliverable-fps` in kaeru and the
+companion PR.
+
 ## 9. Critical files and line references
 
 - `libraries/sensor/hi3516ev200/sony_imx335/imx335_sensor_ctl.c:811`
