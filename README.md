@@ -237,19 +237,38 @@ sensor driver found online came from — see
 
 Each sensor has `.so` (shared) and `.a` (static) library builds. The goal is to eventually unify sensor drivers across platforms where the same sensor model is used.
 
-### FPV sensor modes (hi3516ev200 only)
+### IMX335 high-framerate modes (hi3516ev200 only)
 
-High-framerate IMX335 modes for FPV applications on hi3516ev300/gk7205v300:
+Encoded fps delivered by VENC (`/proc/umap/venc` `VENC SEND1` `Send`
+counter, delta over 8 s after a 6 s warm-up), measured side-by-side on
+`openipc-hi3516ev300` and `openipc-gk7205v300` with identical sensor INI
+and majestic config (4 Mbps, `video0.size = 1920x1080` for high-res
+4:3 / 16:9 sensor modes — the typical IP-cam streaming target — and
+sensor-crop-native for smaller modes; VPSS handles the downscale and
+center-crops 4:3 sensors when streaming 16:9). H.264 and H.265 produce
+identical fps in every mode at this bitrate (verified codec-by-codec on
+both boards); the encoder is not the bottleneck.
 
-| Mode | Resolution | Max FPS (hi3516ev300) | Max FPS (gk7205v300) |
-|------|-----------|----------------------|---------------------|
-| Cropped 16:9 | 2592x1520 | 50 fps | 47 fps |
-| Full scale boosted | 2592x1944 | 39 fps | 33 fps |
-| Cropped 1.5x zoom | 1920x1080 | 55 fps | — |
-| Binning | 1296x972 | 65 fps | — |
-| Stock full scale | 2592x1944 | 30 fps | 30 fps |
+| Mode | Sensor crop | hi3516ev300 | gk7205v300 | Selected by |
+|------|-------------|------------|------------|-------------|
+| Stock full-scale | 2592×1944 | 30 fps | 30 fps | `DevRect_w=2592 DevRect_h=1944` (default) |
+| Cropped 16:9 | 2592×1520 | 49 fps | 45 fps | `DevRect_w=2592 DevRect_h=1520` |
+| Binning | 1296×972 | 64 fps | 64 fps | `DevRect_w=1296 DevRect_h=972` |
+| Cropped 1.5x zoom | 1920×1080 | 55 fps | 55 fps | `DevRect_w=1920 DevRect_h=1080` |
+| Boost-1944p | 2592×1944 | 39 fps (`Isp_FrameRate=45`) | 31 fps (`Isp_FrameRate=36`) | `Isp_SnsMode=6` |
+| Flexible crop | arbitrary W×H | up to **147 fps** at 800×480 | up to **147 fps** at 800×480 | `Isp_SnsMode=4` + `Isp_W=...` + `Isp_H=...` |
 
-Configure via `Isp_FrameRate` in majestic settings.
+Flexible-crop ceiling rises as crop shrinks; per-size points measured:
+
+| Flex crop W×H | hi3516ev300 | gk7205v300 |
+|---|---|---|
+| 1280×720 @ 100 fps | 98 fps | 98 fps |
+| 1024×576 @ 120 fps | 118 fps | 118 fps |
+| 800×480 @ 130 fps | 128 fps | 128 fps |
+| 800×480 @ 150 fps | 147 fps | 147 fps |
+
+Set `Isp_FrameRate` in the sensor INI to request a target rate; the driver
+clamps to the per-mode sensor ceiling.
 
 ## Kernel modules
 

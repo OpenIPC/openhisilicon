@@ -13,6 +13,7 @@
 #include "gk_api_awb.h"
 #include "hicompat.h"
 
+
 #include "imx335_cmos_ex.h"
 #ifdef __cplusplus
 #if __cplusplus
@@ -50,6 +51,26 @@ static GK_U32 g_u32Imx335AGain[ISP_MAX_PIPE_NUM] = { [0 ...(ISP_MAX_PIPE_NUM -
 							    1)] = 1024 };
 static GK_U32 g_u32Imx335DGain[ISP_MAX_PIPE_NUM] = { [0 ...(ISP_MAX_PIPE_NUM -
 							    1)] = 1024 };
+
+/* Per-pipe crop W×H for the flexible window-crop mode (selected by
+ * u8SnsMode=4 / IMX335_CROP_FLEX_LINEAR_MODE). Set in cmos_set_image_mode
+ * from pstSensorImageMode->u16Width/Height (majestic propagates pub_attr.
+ * stWndRect/stSnsSize from the sensor INI's Isp_W/Isp_H). Read back by
+ * IMX335_cropped_flex_init() when programming AREA3_ST_ADR_1 /
+ * AREA3_WIDTH_1 / HTRIMMING_START / HNUM. */
+static GK_U32 g_au32Imx335CropW[ISP_MAX_PIPE_NUM] = {[0 ...(ISP_MAX_PIPE_NUM - 1)] = 1920};
+static GK_U32 g_au32Imx335CropH[ISP_MAX_PIPE_NUM] = {[0 ...(ISP_MAX_PIPE_NUM - 1)] = 1080};
+
+GK_VOID IMX335_get_crop(VI_PIPE ViPipe, GK_U32 *pu32W, GK_U32 *pu32H)
+{
+	if (ViPipe < 0 || ViPipe >= ISP_MAX_PIPE_NUM) {
+		if (pu32W) *pu32W = 1920;
+		if (pu32H) *pu32H = 1080;
+		return;
+	}
+	if (pu32W) *pu32W = g_au32Imx335CropW[ViPipe];
+	if (pu32H) *pu32H = g_au32Imx335CropH[ViPipe];
+}
 
 ISP_SNS_COMMBUS_U g_aunImx335BusInfo[ISP_MAX_PIPE_NUM] = {
 	[0] = { .s8I2cDev = 0 },
@@ -116,22 +137,38 @@ extern int IMX335_read_register(VI_PIPE ViPipe, int addr);
 
 #define IMX335_VMAX_5M_30FPS_12BIT_LINEAR (0x1194 + IMX335_INCREASE_LINES)
 #define IMX335_VMAX_5M_30FPS_10BIT_WDR (0x1194 + IMX335_INCREASE_LINES)
-#define IMX335_VMAX_4M_30FPS_10BIT_WDR (3300 + IMX335_INCREASE_LINES)
+#define IMX335_VMAX_4M_30FPS_10BIT_WDR (3300 + IMX335_INCREASE_LINES)//0xCE4
 #define IMX335_VMAX_4M_25FPS_10BIT_WDR (0xBB8 + IMX335_INCREASE_LINES)
+
+#define IMX335_VMAX_BINNING   (0x1194 + IMX335_INCREASE_LINES) //!?
+#define IMX335_VMAX_CROPPED_1080P   (0x8F8 + IMX335_INCREASE_LINES) //!? 0x8F8
+#define IMX335_VMAX_CROPPED_1520P   (0xC58 + IMX335_INCREASE_LINES) //!?
 
 // sensor fps mode
 
 #define IMX335_5M_30FPS_12BIT_LINEAR_MODE (0) //2592x1944
-#define IMX335_5M_30FPS_10BIT_WDR_MODE (1) //2592x1944
-#define IMX335_4M_25FPS_10BIT_WDR_MODE (2) //2560x1440
-#define IMX335_4M_30FPS_10BIT_WDR_MODE (3) //2592x1520
+#define IMX335_5M_30FPS_10BIT_WDR_MODE   (1) //2592x1944
+#define IMX335_1520P_10BIT_MODE          (2) //2592x1520 linear
+#define IMX335_4M_30FPS_10BIT_WDR_MODE   (3) //2592x1520 WDR
+#define IMX335_60FPS_BINNING_MODE        (4) //1296x972
+#define IMX335_60FPS_CROPPED_1080P_MODE  (5) //1920x1080
+#define IMX335_60FPS_FULL_1944P_MODE     (6) //2592x1944
+#define IMX335_CROP_FLEX_LINEAR_MODE     (7) /* window crop, all-pixel, flexible W×H */
+#define IMX335_4M_25FPS_10BIT_WDR_MODE   (8) //2560x1440 WDR (preserved from stock driver)
+
 
 #define IMX335_RES_IS_5M_12BIT_LINEAR(w, h) (((w) == 2592) && ((h) == 1944))
 #define IMX335_RES_IS_5M_10BIT_WDR(w, h) (((w) == 2592) && ((h) == 1944))
-#define IMX335_RES_IS_4M_12BIT_LINEAR(w, h) (((w) == 2592) && ((h) == 1520))
+#define IMX335_RES_IS_1520P_10BIT(w, h) (((w) == 2592) && ((h) == 1520))
 #define IMX335_RES_IS_4M_10BIT_LINEAR(w, h) (((w) == 2560) && ((h) == 1440))
 #define IMX335_RES_IS_4M_10BIT_WDR(w, h) (((w) == 2592) && ((h) == 1520))
 #define IMX335_RES_IS_4M_10BIT_WDR_EX(w, h) (((w) == 2560) && ((h) == 1440))
+
+#define IMX335_RES_IS_BINNING_12BIT(w, h) (((w) == 1296) && ((h) == 972))
+
+#define IMX335_RES_IS_BINNING(w, h)  (((w) == 1296) && ((h) == 972))
+
+#define IMX335_RES_IS_1080P(w, h)  (((w) == 1920) && ((h) == 1080))
 
 // sensor gain
 #define IMX335_AGAIN_MIN (1024)
@@ -154,6 +191,7 @@ extern int IMX335_read_register(VI_PIPE ViPipe, int addr);
 			pstSensorImageMode->f32Fps, pstSnsState->enWDRMode);      \
 	} while (0)
 
+
 static GK_S32 cmos_get_ae_default(VI_PIPE ViPipe,
 				  AE_SENSOR_DEFAULT_S *pstAeSnsDft)
 {
@@ -166,9 +204,14 @@ static GK_S32 cmos_get_ae_default(VI_PIPE ViPipe,
 	IMX335_SENSOR_GET_CTX(ViPipe, pstSnsState);
 	CMOS_CHECK_POINTER(pstSnsState);
 
-	if (IMX335_5M_30FPS_12BIT_LINEAR_MODE == pstSnsState->u8ImgMode) {
+	if (IMX335_5M_30FPS_12BIT_LINEAR_MODE == pstSnsState->u8ImgMode
+	|| IMX335_60FPS_CROPPED_1080P_MODE == pstSnsState->u8ImgMode
+	|| IMX335_CROP_FLEX_LINEAR_MODE == pstSnsState->u8ImgMode
+	|| IMX335_1520P_10BIT_MODE == pstSnsState->u8ImgMode
+	|| IMX335_60FPS_FULL_1944P_MODE == pstSnsState->u8ImgMode
+	) {
 		u32Fll = IMX335_VMAX_5M_30FPS_12BIT_LINEAR;
-		U32MaxFps = 30;
+		U32MaxFps = 60;//needs  60   ??
 		pstSnsState->u32FLStd =
 			u32Fll * U32MaxFps / DIV_0_TO_1_FLOAT(gu32STimeFps);
 	} else if (IMX335_5M_30FPS_10BIT_WDR_MODE == pstSnsState->u8ImgMode) {
@@ -213,15 +256,17 @@ static GK_S32 cmos_get_ae_default(VI_PIPE ViPipe,
 				4; //Because FSC value an integer multiple of 8
 		}
 		pstSnsState->u32FLStd = pstSnsState->u32FLStd * 2;
-
+	}
+	else if (IMX335_60FPS_BINNING_MODE == pstSnsState->u8ImgMode) {
+	  u32Fll    = IMX335_VMAX_BINNING;
+      U32MaxFps = 60;
+      pstSnsState->u32FLStd = u32Fll * U32MaxFps / DIV_0_TO_1_FLOAT(gu32STimeFps);
 	} else {
 		u32Fll = IMX335_VMAX_5M_30FPS_12BIT_LINEAR;
 		U32MaxFps = 30;
 		pstSnsState->u32FLStd =
 			u32Fll * U32MaxFps / DIV_0_TO_1_FLOAT(gu32STimeFps);
 	}
-
-	//pstSnsState->u32FLStd = u32Fll;
 
 	pstAeSnsDft->stIntTimeAccu.f32Offset = 0;
 	pstAeSnsDft->u32MaxIntTime = pstSnsState->u32FLStd - 8;
@@ -347,6 +392,7 @@ static GK_S32 cmos_get_ae_default(VI_PIPE ViPipe,
 static GK_VOID cmos_fps_set(VI_PIPE ViPipe, GK_FLOAT f32Fps,
 			    AE_SENSOR_DEFAULT_S *pstAeSnsDft)
 {
+
 	GK_U32 u32MaxFps;
 	GK_U32 u32Lines;
 	ISP_SNS_STATE_S *pstSnsState = GK_NULL;
@@ -356,20 +402,84 @@ static GK_VOID cmos_fps_set(VI_PIPE ViPipe, GK_FLOAT f32Fps,
 	CMOS_CHECK_POINTER_VOID(pstSnsState);
 
 	switch (pstSnsState->u8ImgMode) {
-	case IMX335_5M_30FPS_12BIT_LINEAR_MODE:
-		if ((f32Fps <= 30.0) && (f32Fps >= 2.0)) {
-			u32MaxFps = 30;
-			u32Lines = IMX335_VMAX_5M_30FPS_12BIT_LINEAR *
-				   u32MaxFps / DIV_0_TO_1_FLOAT(f32Fps);
+    case IMX335_60FPS_CROPPED_1080P_MODE:
+		if ((f32Fps <= 90.0) && (f32Fps >= 2.0)) {
+			u32MaxFps = 90;//was 30;
+			u32Lines = IMX335_VMAX_CROPPED_1080P* u32MaxFps/ DIV_0_TO_1_FLOAT(f32Fps);
 			pstAeSnsDft->u32LinesPer500ms =
-				IMX335_VMAX_5M_30FPS_12BIT_LINEAR * 15;
+				IMX335_VMAX_CROPPED_1080P * 30; //was 15
 			pstSnsState->u32FLStd = u32Lines;
 		} else {
-			ISP_TRACE(MODULE_DBG_ERR, "Not support Fps: %f\n",
+			ISP_TRACE(MODULE_DBG_ERR, "Not support Fps A: %f\n",
 				  f32Fps);
 			return;
 		}
 		break;
+    case IMX335_CROP_FLEX_LINEAR_MODE:
+		/* Flex window crop: fps ceiling scales with crop height. Datasheet
+		 * (p55) says VTTL ≥ AREA3_WIDTH_1 + 96. AREA3_WIDTH_1 = (crop_h+20)*2.
+		 * At HMAX=0x16E (1080p-init baseline) the achievable fps at the
+		 * VMAX_MIN is roughly 90 × (1080+20) / (crop_h+20). Don't cap;
+		 * just clamp VMAX so the sensor doesn't truncate the frame. */
+		if (f32Fps >= 2.0) {
+			u32MaxFps = 90;
+			u32Lines  = IMX335_VMAX_CROPPED_1080P * u32MaxFps / DIV_0_TO_1_FLOAT(f32Fps);
+			{
+				GK_U32 cw, ch;
+				GK_U32 vmax_min;
+				IMX335_get_crop(ViPipe, &cw, &ch);
+				vmax_min = (ch + 20) * 2 + 96;
+				if (u32Lines < vmax_min) u32Lines = vmax_min;
+			}
+			pstAeSnsDft->u32LinesPer500ms = IMX335_VMAX_CROPPED_1080P * 30;
+			pstSnsState->u32FLStd = u32Lines;
+		} else {
+			ISP_TRACE(MODULE_DBG_ERR, "Not support Fps FLEX: %f\n", f32Fps);
+			return;
+		}
+		break;
+	case IMX335_1520P_10BIT_MODE:		
+		if ((f32Fps <= 82.0) && (f32Fps >= 2.0)) {
+			u32MaxFps = 60;
+			u32Lines = IMX335_VMAX_5M_30FPS_12BIT_LINEAR * u32MaxFps / DIV_0_TO_1_FLOAT(f32Fps);
+			pstAeSnsDft->u32LinesPer500ms = IMX335_VMAX_CROPPED_1520P * 30;
+			pstSnsState->u32FLStd = u32Lines;
+		} else {
+			ISP_TRACE(MODULE_DBG_ERR, "Not support Fps CROPPED_1520P : %f\n",
+				  f32Fps);
+			return;
+		}
+		break;
+
+	case IMX335_60FPS_FULL_1944P_MODE:
+	case IMX335_5M_30FPS_12BIT_LINEAR_MODE:
+		if ((f32Fps <= 30.0) && (f32Fps >= 2.0)) {
+			u32MaxFps = 30;
+			u32Lines = IMX335_VMAX_5M_30FPS_12BIT_LINEAR * u32MaxFps / DIV_0_TO_1_FLOAT(f32Fps);
+			pstAeSnsDft->u32LinesPer500ms = IMX335_VMAX_5M_30FPS_12BIT_LINEAR * 15;
+			pstSnsState->u32FLStd = u32Lines;
+		} else if (f32Fps > 30) {
+			/* Above 30 fps the sensor switches to the boosted full-1944P path.
+			 * Reaches ~45 fps on both hi3516ev200 and gk7205v200 with the
+			 * IMX335 INCK pinned to the SoC default 37.125 MHz (via
+			 * [mode]/clock= in the sensor INI). */
+			pstSnsState->u8ImgMode = IMX335_60FPS_FULL_1944P_MODE;
+			u32MaxFps = 45;
+			u32Lines = IMX335_VMAX_5M_30FPS_12BIT_LINEAR * u32MaxFps / DIV_0_TO_1_FLOAT(f32Fps);
+			pstAeSnsDft->u32LinesPer500ms = IMX335_VMAX_5M_30FPS_12BIT_LINEAR * 15;
+			pstSnsState->u32FLStd = u32Lines;
+		} else {
+			ISP_TRACE(MODULE_DBG_ERR, "Not support Fps A: %f\n", f32Fps);
+			return;
+		}
+		break;
+
+	case IMX335_60FPS_BINNING_MODE: {
+		u32MaxFps                     = 90;
+		u32Lines                      = 0xBE8 * u32MaxFps / DIV_0_TO_1_FLOAT(f32Fps);
+		pstAeSnsDft->u32LinesPer500ms = IMX335_VMAX_BINNING * 30;
+		pstSnsState->u32FLStd         = u32Lines;
+	}; break;
 
 	case IMX335_5M_30FPS_10BIT_WDR_MODE:
 		if ((f32Fps <= 30.0) && (f32Fps >= 15.0)) {
@@ -387,7 +497,7 @@ static GK_VOID cmos_fps_set(VI_PIPE ViPipe, GK_FLOAT f32Fps,
 		}
 
 		else {
-			ISP_TRACE(MODULE_DBG_ERR, "Not support Fps: %f\n",
+			ISP_TRACE(MODULE_DBG_ERR, "Not support Fps B : %f\n",
 				  f32Fps);
 			return;
 		}
@@ -408,7 +518,7 @@ static GK_VOID cmos_fps_set(VI_PIPE ViPipe, GK_FLOAT f32Fps,
 		}
 
 		else {
-			ISP_TRACE(MODULE_DBG_ERR, "Not support Fps: %f\n",
+			ISP_TRACE(MODULE_DBG_ERR, "Not support Fps C: %f\n",
 				  f32Fps);
 			return;
 		}
@@ -422,24 +532,18 @@ static GK_VOID cmos_fps_set(VI_PIPE ViPipe, GK_FLOAT f32Fps,
 				   (u32Lines % 2); //VMAX is 2n(n-0,1,2.....)
 			pstSnsState->u32FLStd = u32Lines;
 		} else {
-			ISP_TRACE(MODULE_DBG_ERR, "Not support Fps: %f\n",
+			ISP_TRACE(MODULE_DBG_ERR, "Not support Fps D: %f\n",
 				  f32Fps);
 			return;
 		}
 		break;
-
 	default:
-		ISP_TRACE(MODULE_DBG_ERR, "Not support this Mode!!!\n");
+		ISP_TRACE(MODULE_DBG_ERR, "Not support this Mode : %d !!!\n",pstSnsState->u8ImgMode);
 		return;
 		break;
 	}
 
 	/* SHR 16bit, So limit full_lines as 0xFFFF */
-	if (f32Fps > u32MaxFps) {
-		ISP_TRACE(MODULE_DBG_ERR, "Not support Fps: %f\n", f32Fps);
-		return;
-	}
-
 	if (u32Lines > IMX335_FULL_LINES_MAX) {
 		u32Lines = IMX335_FULL_LINES_MAX;
 	}
@@ -884,8 +988,6 @@ static GK_VOID cmos_get_inttime_max(VI_PIPE ViPipe, GK_U16 u16ManRatioEnable,
            (VMAX*2 - BRL*2) / 4 -2 > (RHS1/2 - 3) / 2
            ==> RHS < ((((VMAX*2 - BRL*2) / 4 -2)* 2) + 3) * 2
         */
-		//RHS1(N+1)>=RHS1(N)+BRL*2-VMAX*2+2
-
 		u16LimitValue = (IMX335_VMAX_4M_30FPS_10BIT_WDR * 2 -
 				 g_astimx335State[ViPipe].u32BRL * 2 - 2) -
 				8;
@@ -1275,24 +1377,33 @@ static GK_S32 cmos_get_isp_default(VI_PIPE ViPipe, ISP_CMOS_DEFAULT_S *pstDef)
 	       sizeof(ISP_CMOS_DNG_COLORPARAM_S));
 
 	switch (pstSnsState->u8ImgMode) {
-	default:
+	default:	
+	case IMX335_60FPS_FULL_1944P_MODE:
+	case IMX335_60FPS_CROPPED_1080P_MODE:
+	case IMX335_CROP_FLEX_LINEAR_MODE:
 	case IMX335_5M_30FPS_12BIT_LINEAR_MODE:
-		pstDef->stSensorMode.stDngRawFormat.u8BitsPerSample = 12;
+		pstDef->stSensorMode.stDngRawFormat.u8BitsPerSample = 10;//was 12
 		pstDef->stSensorMode.stDngRawFormat.u32WhiteLevel = 2592;
 		break;
+
+	case IMX335_60FPS_BINNING_MODE:
+    	pstDef->stSensorMode.stDngRawFormat.u8BitsPerSample   = 12;
+    	pstDef->stSensorMode.stDngRawFormat.u32WhiteLevel     = 2592;
+    break;
 
 	case IMX335_5M_30FPS_10BIT_WDR_MODE:
 		pstDef->stSensorMode.stDngRawFormat.u8BitsPerSample = 10;
 		pstDef->stSensorMode.stDngRawFormat.u32WhiteLevel = 2592;
 		break;
 	case IMX335_4M_30FPS_10BIT_WDR_MODE:
+	case IMX335_4M_25FPS_10BIT_WDR_MODE:
 		pstDef->stSensorMode.stDngRawFormat.u8BitsPerSample = 10;
 		pstDef->stSensorMode.stDngRawFormat.u32WhiteLevel = 2592;
 		break;
 
-	case IMX335_4M_25FPS_10BIT_WDR_MODE:
+	case IMX335_1520P_10BIT_MODE:
 		pstDef->stSensorMode.stDngRawFormat.u8BitsPerSample = 10;
-		pstDef->stSensorMode.stDngRawFormat.u32WhiteLevel = 2560;
+		pstDef->stSensorMode.stDngRawFormat.u32WhiteLevel = 2592;
 		break;
 	}
 
@@ -1426,11 +1537,17 @@ static GK_VOID cmos_set_pixel_detect(VI_PIPE ViPipe, GK_BOOL bEnable)
 	if (WDR_MODE_2To1_LINE == pstSnsState->enWDRMode) {
 		return;
 	} else {
-		if (IMX335_5M_30FPS_12BIT_LINEAR_MODE ==
-		    pstSnsState->u8ImgMode) {
+		if (IMX335_5M_30FPS_12BIT_LINEAR_MODE == pstSnsState->u8ImgMode ||
+			IMX335_60FPS_CROPPED_1080P_MODE == pstSnsState->u8ImgMode ||
+			IMX335_CROP_FLEX_LINEAR_MODE == pstSnsState->u8ImgMode ||
+			IMX335_60FPS_FULL_1944P_MODE == pstSnsState->u8ImgMode
+			) {
 			u32FullLines_5Fps =
-				(IMX335_VMAX_5M_30FPS_12BIT_LINEAR * 30) / 5;
-		} else {
+				(IMX335_VMAX_5M_30FPS_12BIT_LINEAR * 60 /*30*/) / 5; 
+		} else if (IMX335_60FPS_BINNING_MODE ==  pstSnsState->u8ImgMode) {
+  			u32FullLines_5Fps = (IMX335_VMAX_BINNING * 60) / 5;
+		}else{
+
 			return;
 		}
 	}
@@ -1672,7 +1789,24 @@ cmos_set_image_mode(VI_PIPE ViPipe,
 
 	pstSnsState->bSyncInit = GK_FALSE;
 
-	//printf("Lation@ cmos_set_image_mode width: %d, height: %d\n", pstSensorImageMode->u16Width, pstSensorImageMode->u16Height);
+	/* Flexible window-crop (Mode 7), driven by sensor INI's Isp_SnsMode=4.
+	 * Mirrors the IMX415 Mode 4 dispatch: caller passes the requested crop
+	 * W×H in stWndRect / stSnsSize → ISP_CMOS_SENSOR_IMAGE_MODE_S.u16Width/
+	 * u16Height. Driver applies WINMODE=4 with parameterized HTRIMMING_START
+	 * / HNUM / AREA3_ST_ADR_1 / AREA3_WIDTH_1 so users can pick arbitrary
+	 * crop sizes within the datasheet's all-pixel window-crop constraints. */
+	if (pstSensorImageMode->u8SnsMode == 4 &&
+	    WDR_MODE_NONE == pstSnsState->enWDRMode) {
+		u8SensorImageMode = IMX335_CROP_FLEX_LINEAR_MODE;
+		g_astimx335State[ViPipe].u32BRL = 1984 * 2;
+		pstSnsState->u32FLStd           = IMX335_VMAX_5M_30FPS_12BIT_LINEAR;
+		if (ViPipe >= 0 && ViPipe < ISP_MAX_PIPE_NUM) {
+			g_au32Imx335CropW[ViPipe] = pstSensorImageMode->u16Width  ?: 1920;
+			g_au32Imx335CropH[ViPipe] = pstSensorImageMode->u16Height ?: 1080;
+		}
+		goto img_mode_set;
+	}
+
 	if (WDR_MODE_2To1_LINE == pstSnsState->enWDRMode) {
 		if (IMX335_RES_IS_4M_10BIT_WDR_EX(
 			    pstSensorImageMode->u16Width,
@@ -1700,9 +1834,6 @@ cmos_set_image_mode(VI_PIPE ViPipe,
 		if (IMX335_RES_IS_5M_12BIT_LINEAR(
 			    pstSensorImageMode->u16Width,
 			    pstSensorImageMode->u16Height) ||
-		    IMX335_RES_IS_4M_12BIT_LINEAR(
-			    pstSensorImageMode->u16Width,
-			    pstSensorImageMode->u16Height) ||
 		    IMX335_RES_IS_4M_10BIT_LINEAR(
 			    pstSensorImageMode->u16Width,
 			    pstSensorImageMode->u16Height)) {
@@ -1710,7 +1841,20 @@ cmos_set_image_mode(VI_PIPE ViPipe,
 			g_astimx335State[ViPipe].u32BRL = 1984 * 2;
 			pstSnsState->u32FLStd =
 				IMX335_VMAX_5M_30FPS_12BIT_LINEAR;
-		} else {
+		} else if (IMX335_RES_IS_BINNING(pstSensorImageMode->u16Width, pstSensorImageMode->u16Height)) {
+      		u8SensorImageMode               = IMX335_60FPS_BINNING_MODE;
+      		g_astimx335State[ViPipe].u32BRL = 1984 * 2;
+      		pstSnsState->u32FLStd =
+				IMX335_VMAX_BINNING; 
+    	} else if (IMX335_RES_IS_1080P(pstSensorImageMode->u16Width, pstSensorImageMode->u16Height)) {
+      		u8SensorImageMode               = IMX335_60FPS_CROPPED_1080P_MODE;
+      		g_astimx335State[ViPipe].u32BRL = 1984 * 2;
+      		pstSnsState->u32FLStd           = IMX335_VMAX_5M_30FPS_12BIT_LINEAR;        
+    	} else if (IMX335_RES_IS_1520P_10BIT(pstSensorImageMode->u16Width, pstSensorImageMode->u16Height)) {
+      		u8SensorImageMode               = IMX335_1520P_10BIT_MODE;
+      		g_astimx335State[ViPipe].u32BRL = 1984 * 2;
+      		pstSnsState->u32FLStd           = IMX335_VMAX_5M_30FPS_12BIT_LINEAR;        
+    	} else {
 			IMX335_ERR_MODE_PRINT(pstSensorImageMode, pstSnsState);
 			return GK_FAILURE;
 		}
@@ -1719,6 +1863,7 @@ cmos_set_image_mode(VI_PIPE ViPipe,
 		return GK_FAILURE;
 	}
 
+img_mode_set:
 	if ((GK_TRUE == pstSnsState->bInit) &&
 	    (u8SensorImageMode == pstSnsState->u8ImgMode)) {
 		/* Don't need to switch SensorImageMode */
