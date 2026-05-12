@@ -265,16 +265,17 @@ Flexible-crop ceiling rises as crop shrinks; per-size points measured:
 Set `Isp_FrameRate` in the sensor INI to request a target rate; the driver
 clamps to the per-mode sensor ceiling.
 
-[^1]: gk7205v300 numbers above assume the vendor `gk7205v200_vi.ko` blob's
-      IMX335 INCK override is undone. On a stock OpenIPC firmware the
-      vendor blob programs PERI_CRG60 (`0x120100F0`) to feed the sensor a
-      27 MHz reference clock at boot, whereas the open `sensor_clock_config`
-      and the Hisilicon counterpart both leave it at 37.125 MHz. The fps
-      drops to ~73% of the table values until that override is reverted
-      with `devmem 0x120100F0 32 0x11`. The fix is one line in the firmware
-      `load_goke` script — tracked in
-      [openipc/firmware](https://github.com/OpenIPC/firmware) (companion
-      PR to land alongside this driver fuse).
+[^1]: gk7205v300 numbers above require setting `clock=37.125MHz` under
+      `[mode]` in the sensor INI. The vendor `gk7205v200_vi.ko` blob
+      otherwise programs PERI_CRG60 (`0x120100F0`) to feed the IMX335 a
+      27 MHz reference clock during its `module_init`, capping the sensor
+      pixel rate at ~73% of the table values. The Hisilicon counterpart
+      `hi3516ev200_vi.ko` leaves the register at the SoC default 37.125
+      MHz, so the INI key is a no-op on hi3516ev300 but is needed on
+      gk7205v300. Majestic's `HiSi_HAL_SetSensorClock` writes the
+      requested cksel value back to PERI_CRG60 during `start_sdk`,
+      reverting the vendor blob's override (verified on
+      `openipc-gk7205v300`).
 
 ## Kernel modules
 
