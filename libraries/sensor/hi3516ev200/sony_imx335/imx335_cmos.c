@@ -159,7 +159,6 @@ extern int IMX335_read_register(VI_PIPE ViPipe, int addr);
 
 #define IMX335_RES_IS_5M_12BIT_LINEAR(w, h) (((w) == 2592) && ((h) == 1944))
 #define IMX335_RES_IS_5M_10BIT_WDR(w, h) (((w) == 2592) && ((h) == 1944))
-//#define IMX335_RES_IS_4M_12BIT_LINEAR(w, h) (((w) == 2592) && ((h) == 1520))
 #define IMX335_RES_IS_1520P_10BIT(w, h) (((w) == 2592) && ((h) == 1520))
 #define IMX335_RES_IS_4M_10BIT_LINEAR(w, h) (((w) == 2560) && ((h) == 1440))
 #define IMX335_RES_IS_4M_10BIT_WDR(w, h) (((w) == 2592) && ((h) == 1520))
@@ -196,10 +195,8 @@ extern int IMX335_read_register(VI_PIPE ViPipe, int addr);
 #define XSTR(x) STR(x)
 #define STR(x) #x
 
-// add  -DCHIPARCH=$(CHIPARCH) to make file!!!
-// override CFLAGS += -DSDK_CODE=$(SDK_CODE) -fPIC -I$(CURDIR)/../../../../include -DCHIPARCH=$(CHIPARCH)
 #ifndef CHIPARCH
-    #error "CHIPARCH is not defined. Please specify CHIPARCH during compilation."
+    #error "CHIPARCH must be defined at compile time (via -DCHIPARCH=$(CHIPARCH) in the Makefile)"
 #endif
 
 
@@ -278,8 +275,6 @@ static GK_S32 cmos_get_ae_default(VI_PIPE ViPipe,
 		pstSnsState->u32FLStd =
 			u32Fll * U32MaxFps / DIV_0_TO_1_FLOAT(gu32STimeFps);
 	}
-
-	//pstSnsState->u32FLStd = u32Fll;
 
 	pstAeSnsDft->stIntTimeAccu.f32Offset = 0;
 	pstAeSnsDft->u32MaxIntTime = pstSnsState->u32FLStd - 8;
@@ -454,34 +449,22 @@ static GK_VOID cmos_fps_set(VI_PIPE ViPipe, GK_FLOAT f32Fps,
 	case IMX335_1520P_10BIT_MODE:		
 		if ((f32Fps <= 82.0) && (f32Fps >= 2.0)) { // this is the teorethical max as calculated by the sensor registers???		
 
-			u32MaxFps = 60;// Found by trial and error for hi3516ev300			
+			u32MaxFps = 60;
 
-// Need to have different values for Goke and Hisilicon encoders!
-#ifdef CHIPARCH
-     printf("CHIPARCH is defined and its value is: " XSTR(CHIPARCH));
-#endif 
+			/* Per-SoC max-fps ceilings for the cropped-1520P sensor mode,
+			 * established empirically (49 fps on Goke gk7205v200, 60 on
+			 * Hisilicon hi3516ev200). CHIPARCH compared as string because
+			 * preprocessor token comparison isn't portable across SDK builds. */
+			if (strcmp(XSTR(CHIPARCH), "gk7205v200") == 0) {
+				u32MaxFps = 49;
+				u32Lines = IMX335_VMAX_CROPPED_1520P * u32MaxFps / DIV_0_TO_1_FLOAT(f32Fps);
+			} else if (strcmp(XSTR(CHIPARCH), "hi3516ev200") == 0) {
+				u32MaxFps = 60;
+				u32Lines = IMX335_VMAX_5M_30FPS_12BIT_LINEAR * u32MaxFps / DIV_0_TO_1_FLOAT(f32Fps);
+			}
 
-
-//#if CHIPARCH == gk7205v200  //Does not work as desired... read some C books
-if (strcmp(XSTR(CHIPARCH), "gk7205v200") == 0){
-				u32MaxFps = 49;//this is the max achievable frame rate with Goke				
-				u32Lines =  IMX335_VMAX_CROPPED_1520P /* IMX335_VMAX_5M_30FPS_12BIT_LINEAR*/ * u32MaxFps / DIV_0_TO_1_FLOAT(f32Fps);
-				ISP_TRACE(MODULE_DBG_ERR, "Goke u32Lines : %d\n",u32Lines);
-}
-//#endif
-
-//#if CHIPARCH == hi3516ev300
-if (strcmp(XSTR(CHIPARCH), "hi3516ev200") == 0){			
-			u32MaxFps = 60;// Found by trial and error for hi3516ev300	
-			u32Lines = /*IMX335_VMAX_CROPPED_1520P*/ IMX335_VMAX_5M_30FPS_12BIT_LINEAR * u32MaxFps / DIV_0_TO_1_FLOAT(f32Fps);			
-			ISP_TRACE(MODULE_DBG_ERR, "HiSillicon u32Lines : %d\n",u32Lines);
-}
-
-			//u32Lines = 3200 form max fps
-			pstAeSnsDft->u32LinesPer500ms =
-				IMX335_VMAX_CROPPED_1520P * 30; //was 15
+			pstAeSnsDft->u32LinesPer500ms = IMX335_VMAX_CROPPED_1520P * 30;
 			pstSnsState->u32FLStd = u32Lines;
-			ISP_TRACE(MODULE_DBG_ERR, "Set 1520P_10BIT_MODE u32MaxFps:%f / fps:%f\n",u32MaxFps, f32Fps);
 		} else {
 			ISP_TRACE(MODULE_DBG_ERR, "Not support Fps CROPPED_1520P : %f\n",
 				  f32Fps);
@@ -494,43 +477,28 @@ if (strcmp(XSTR(CHIPARCH), "hi3516ev200") == 0){
 		if ((f32Fps <= 30.0) && (f32Fps >= 2.0)) {
 			u32MaxFps = 30;
 			u32Lines = IMX335_VMAX_5M_30FPS_12BIT_LINEAR * u32MaxFps / DIV_0_TO_1_FLOAT(f32Fps);
-			pstAeSnsDft->u32LinesPer500ms =
-				IMX335_VMAX_5M_30FPS_12BIT_LINEAR * 15; //was 15
+			pstAeSnsDft->u32LinesPer500ms = IMX335_VMAX_5M_30FPS_12BIT_LINEAR * 15;
 			pstSnsState->u32FLStd = u32Lines;
-			ISP_TRACE(MODULE_DBG_ERR, "Set 30FPS_STOCK_1944P_MODE: %f\n",f32Fps);
-		} else
-
-	//	break;
-	//case IMX335_60FPS_FULL_1944P_MODE:
-		if ((f32Fps >30) ) {			
-			pstSnsState->u8ImgMode=IMX335_60FPS_FULL_1944P_MODE;//Set new mode
-			u32MaxFps = 45;//was 30;			
-
-			if (strcmp(XSTR(CHIPARCH), "gk7205v200") == 0){
-				ISP_TRACE(MODULE_DBG_ERR, "Goke SoC");
-				u32MaxFps=33;//this is the max achievable frame rate with Goke
-			}
-			u32Lines =  IMX335_VMAX_5M_30FPS_12BIT_LINEAR * u32MaxFps / DIV_0_TO_1_FLOAT(f32Fps);
-			pstAeSnsDft->u32LinesPer500ms =
-				IMX335_VMAX_5M_30FPS_12BIT_LINEAR * 15; //was 15
+		} else if (f32Fps > 30) {
+			/* Above 30 fps the sensor switches to the boosted full-1944P path.
+			 * Goke gk7205v200 caps at 33 fps for this mode; Hisilicon ev200 reaches 45. */
+			pstSnsState->u8ImgMode = IMX335_60FPS_FULL_1944P_MODE;
+			u32MaxFps = strcmp(XSTR(CHIPARCH), "gk7205v200") == 0 ? 33 : 45;
+			u32Lines = IMX335_VMAX_5M_30FPS_12BIT_LINEAR * u32MaxFps / DIV_0_TO_1_FLOAT(f32Fps);
+			pstAeSnsDft->u32LinesPer500ms = IMX335_VMAX_5M_30FPS_12BIT_LINEAR * 15;
 			pstSnsState->u32FLStd = u32Lines;
-			
-			ISP_TRACE(MODULE_DBG_ERR, "Set 60FPS_FULL_1944P_MODE %f / fps: %f\n",u32MaxFps, f32Fps);
 		} else {
-			ISP_TRACE(MODULE_DBG_ERR, "Not support Fps A: %f\n",
-				  f32Fps);
+			ISP_TRACE(MODULE_DBG_ERR, "Not support Fps A: %f\n", f32Fps);
 			return;
 		}
 		break;
 
-		//IMX335_60FPS_FULL_1944P_MODE
-
- 	case IMX335_60FPS_BINNING_MODE: {
-        u32MaxFps                     = 90;//was 60
-        u32Lines                      =  0xBE8 * u32MaxFps / DIV_0_TO_1_FLOAT(f32Fps);
-        pstAeSnsDft->u32LinesPer500ms = IMX335_VMAX_BINNING * 30;
-        pstSnsState->u32FLStd         = u32Lines;
-    }; break;		
+	case IMX335_60FPS_BINNING_MODE: {
+		u32MaxFps                     = 90;
+		u32Lines                      = 0xBE8 * u32MaxFps / DIV_0_TO_1_FLOAT(f32Fps);
+		pstAeSnsDft->u32LinesPer500ms = IMX335_VMAX_BINNING * 30;
+		pstSnsState->u32FLStd         = u32Lines;
+	}; break;
 
 	case IMX335_5M_30FPS_10BIT_WDR_MODE:
 		if ((f32Fps <= 30.0) && (f32Fps >= 15.0)) {
@@ -595,12 +563,6 @@ if (strcmp(XSTR(CHIPARCH), "hi3516ev200") == 0){
 	}
 
 	/* SHR 16bit, So limit full_lines as 0xFFFF */
-	if (/*f32Fps > u32MaxFps*/ 0) {//disable the check to easily tweak fpsfalse
-		ISP_TRACE(MODULE_DBG_ERR, "Not support Fps Z : %f\n", f32Fps);
-		return;
-	}
-	//ISP_TRACE(MODULE_DBG_ERR, "u32Lines : %d\n", u32Lines);	
-
 	if (u32Lines > IMX335_FULL_LINES_MAX) {
 		u32Lines = IMX335_FULL_LINES_MAX;
 	}
@@ -1045,8 +1007,6 @@ static GK_VOID cmos_get_inttime_max(VI_PIPE ViPipe, GK_U16 u16ManRatioEnable,
            (VMAX*2 - BRL*2) / 4 -2 > (RHS1/2 - 3) / 2
            ==> RHS < ((((VMAX*2 - BRL*2) / 4 -2)* 2) + 3) * 2
         */
-		//RHS1(N+1)>=RHS1(N)+BRL*2-VMAX*2+2
-
 		u16LimitValue = (IMX335_VMAX_4M_30FPS_10BIT_WDR * 2 -
 				 g_astimx335State[ViPipe].u32BRL * 2 - 2) -
 				8;
@@ -1866,7 +1826,6 @@ cmos_set_image_mode(VI_PIPE ViPipe,
 		goto img_mode_set;
 	}
 
-	//printf("Lation@ cmos_set_image_mode width: %d, height: %d\n", pstSensorImageMode->u16Width, pstSensorImageMode->u16Height);
 	if (WDR_MODE_2To1_LINE == pstSnsState->enWDRMode) {
 		if (IMX335_RES_IS_4M_10BIT_WDR_EX(
 			    pstSensorImageMode->u16Width,
@@ -1894,20 +1853,9 @@ cmos_set_image_mode(VI_PIPE ViPipe,
 		if (IMX335_RES_IS_5M_12BIT_LINEAR(
 			    pstSensorImageMode->u16Width,
 			    pstSensorImageMode->u16Height) ||
-//		    IMX335_RES_IS_1520P_10BIT(
-//			    pstSensorImageMode->u16Width,
-//			    pstSensorImageMode->u16Height) ||
-//			IMX335_RES_IS_BINNING_12BIT(			//new this will run 30fps binning
-//			    pstSensorImageMode->u16Width,
-//			    pstSensorImageMode->u16Height) ||				
-
-//			IMX335_RES_IS_1080P(			//new this will run 30fps binning
-//			    pstSensorImageMode->u16Width,
-//			    pstSensorImageMode->u16Height) ||				
 		    IMX335_RES_IS_4M_10BIT_LINEAR(
 			    pstSensorImageMode->u16Width,
-			    pstSensorImageMode->u16Height)) {			
-
+			    pstSensorImageMode->u16Height)) {
 			u8SensorImageMode = IMX335_5M_30FPS_12BIT_LINEAR_MODE;
 			g_astimx335State[ViPipe].u32BRL = 1984 * 2;
 			pstSnsState->u32FLStd =
