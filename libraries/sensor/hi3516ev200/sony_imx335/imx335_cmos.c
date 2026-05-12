@@ -61,6 +61,15 @@ static GK_U32 g_u32Imx335DGain[ISP_MAX_PIPE_NUM] = { [0 ...(ISP_MAX_PIPE_NUM -
 static GK_U32 g_au32Imx335CropW[ISP_MAX_PIPE_NUM] = {[0 ...(ISP_MAX_PIPE_NUM - 1)] = 1920};
 static GK_U32 g_au32Imx335CropH[ISP_MAX_PIPE_NUM] = {[0 ...(ISP_MAX_PIPE_NUM - 1)] = 1080};
 
+/* When set, cmos_slow_framerate_set forces the per-frame VMAX update to the
+ * datasheet minimum (vmax_min = (crop_h+20)*2 + 96) instead of accepting the
+ * AE library's chosen u32FullLines. Selected by Isp_SnsMode=5 in the sensor
+ * INI; pins the sensor at its theoretical max rate at the cost of shrinking
+ * AE max-integration-time to a few ms. Out-of-scope for IP-cam scenes that
+ * need long exposures; intended for FPV / machine-vision where the camera
+ * lives in daylight and motion rate is the priority. */
+static GK_BOOL g_abImx335FpsPriority[ISP_MAX_PIPE_NUM] = { 0 };
+
 GK_VOID IMX335_get_crop(VI_PIPE ViPipe, GK_U32 *pu32W, GK_U32 *pu32H)
 {
 	if (ViPipe < 0 || ViPipe >= ISP_MAX_PIPE_NUM) {
@@ -611,6 +620,20 @@ static GK_VOID cmos_slow_framerate_set(VI_PIPE ViPipe, GK_U32 u32FullLines,
 	CMOS_CHECK_POINTER_VOID(pstAeSnsDft);
 	IMX335_SENSOR_GET_CTX(ViPipe, pstSnsState);
 	CMOS_CHECK_POINTER_VOID(pstSnsState);
+
+	/* FPS-priority mode (Isp_SnsMode=5): clamp the AE-supplied u32FullLines
+	 * down to the datasheet vmax_min so the sensor stays at its theoretical
+	 * max rate. Without this clamp, AE-feedback in M7 picks larger VMAX and
+	 * pulls real fps to ~half theoretical at small crops. See
+	 * docs/imx335-v4-high-fps.md §8.5. */
+	if (IMX335_CROP_FLEX_LINEAR_MODE == pstSnsState->u8ImgMode &&
+	    ViPipe >= 0 && ViPipe < ISP_MAX_PIPE_NUM &&
+	    g_abImx335FpsPriority[ViPipe]) {
+		GK_U32 cw, ch, vmax_min;
+		IMX335_get_crop(ViPipe, &cw, &ch);
+		vmax_min = (ch + 20) * 2 + 96;
+		if (u32FullLines > vmax_min) u32FullLines = vmax_min;
+	}
 
 	if (WDR_MODE_2To1_LINE == pstSnsState->enWDRMode) {
 		if (IMX335_4M_30FPS_10BIT_WDR_MODE == pstSnsState->u8ImgMode) {
@@ -1794,8 +1817,16 @@ cmos_set_image_mode(VI_PIPE ViPipe,
 	 * W×H in stWndRect / stSnsSize → ISP_CMOS_SENSOR_IMAGE_MODE_S.u16Width/
 	 * u16Height. Driver applies WINMODE=4 with parameterized HTRIMMING_START
 	 * / HNUM / AREA3_ST_ADR_1 / AREA3_WIDTH_1 so users can pick arbitrary
-	 * crop sizes within the datasheet's all-pixel window-crop constraints. */
-	if (pstSensorImageMode->u8SnsMode == 4 &&
+	 * crop sizes within the datasheet's all-pixel window-crop constraints.
+	 *
+	 * Isp_SnsMode=5 is the same flex-crop dispatch + the AE-VMAX clamp
+	 * (cmos_slow_framerate_set forces VMAX = vmax_min so AE-feedback can't
+	 * drag the sensor below its theoretical max rate). Trade-off: max
+	 * integration time shrinks to (vmax_min - 8) lines (e.g. ~2.9 ms at
+	 * 480×352 with HMAX=0x0100). Use for FPV / machine-vision where
+	 * motion-rate is the priority and the camera lives in daylight. Not
+	 * appropriate for indoor IP-cam scenes that need longer exposures. */
+	if ((pstSensorImageMode->u8SnsMode == 4 || pstSensorImageMode->u8SnsMode == 5) &&
 	    WDR_MODE_NONE == pstSnsState->enWDRMode) {
 		u8SensorImageMode = IMX335_CROP_FLEX_LINEAR_MODE;
 		g_astimx335State[ViPipe].u32BRL = 1984 * 2;
@@ -1803,6 +1834,8 @@ cmos_set_image_mode(VI_PIPE ViPipe,
 		if (ViPipe >= 0 && ViPipe < ISP_MAX_PIPE_NUM) {
 			g_au32Imx335CropW[ViPipe] = pstSensorImageMode->u16Width  ?: 1920;
 			g_au32Imx335CropH[ViPipe] = pstSensorImageMode->u16Height ?: 1080;
+			g_abImx335FpsPriority[ViPipe] =
+				(pstSensorImageMode->u8SnsMode == 5) ? GK_TRUE : GK_FALSE;
 		}
 		goto img_mode_set;
 	}
