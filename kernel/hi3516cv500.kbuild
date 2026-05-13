@@ -90,6 +90,13 @@ $(PREFIX)rc-objs     := $(CV500_BLOB_DIR)/hi_rc.o      $(CV500_INIT_DIR)/rc_init
 $(PREFIX)rgn-objs    := $(CV500_BLOB_DIR)/hi_rgn.o     $(CV500_INIT_DIR)/rgn_init.o
 $(PREFIX)vgs-objs    := $(CV500_BLOB_DIR)/hi_vgs.o     $(CV500_INIT_DIR)/vgs_init.o
 $(PREFIX)ive-objs    := $(CV500_BLOB_DIR)/hi_ive.o     $(CV500_INIT_DIR)/ive_init.o
+
+# Clean-room IVE driver — ships alongside the vendor $(PREFIX)ive.o
+# above. Init scripts pick which one to insmod at runtime; both bind
+# to the "hisilicon,hisi-ive" device tree node but only one can probe
+# at a time. The cv500 build deliberately omits the XNN code path
+# (cv500 has a separate NNIE block — out of scope here).
+include $(src)/ive_neo/Kbuild
 $(PREFIX)chnl-objs   := $(CV500_BLOB_DIR)/hi_chnl.o    $(CV500_INIT_DIR)/chnl_init.o
 $(PREFIX)tde-objs    := $(CV500_BLOB_DIR)/hi_tde.o     $(CV500_INIT_DIR)/tde_init.o
 $(PREFIX)aio-objs    := $(CV500_BLOB_DIR)/hi_aio.o     $(CV500_INIT_DIR)/aio_init.o

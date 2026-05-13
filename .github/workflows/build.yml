@@ -177,6 +177,69 @@ jobs:
           sed -i "s|^HISILICON_OPENSDK_VERSION =.*||" ${FILE}
           CMAKE_POLICY_VERSION_MINIMUM=3.5 make BOARD=${{matrix.board}} br-hisilicon-opensdk
 
+      # ive_neo ships on platforms whose IVE block is reachable from this
+      # driver — currently V4 (hi3516ev200/gk7205v200, fused IVE+NEO) and
+      # CV500 (classic IVE only, XNN gated off). Catch silent regressions
+      # in either path: a missing `include ive_neo/Kbuild` in
+      # hi3516cv500.kbuild would skip the .ko without failing the build,
+      # and a chip-ops mis-selection would bake the wrong chip= log line.
+      - name: Verify ive_neo built for this platform
+        if: matrix.platform == 'hi3516ev200' || matrix.platform == 'gk7205v200' || matrix.platform == 'hi3516cv500'
+        run: |
+          # Site_method=local plus a cleared _VERSION leaves the package
+          # build dir name unpredictable across buildroot versions
+          # (hisilicon-opensdk-, hisilicon-opensdk-custom, hisilicon-opensdk-<sha>,
+          # etc.). Just walk the whole output tree.
+          KO=$(find ../firmware/output -name open_ive_neo.ko 2>/dev/null | head -1)
+          if [ -z "$KO" ] || [ ! -f "$KO" ]; then
+              echo "FAIL: open_ive_neo.ko not built for ${{ matrix.platform }}" >&2
+              echo "--- candidate dirs under firmware/output/build ---" >&2
+              ls -1d ../firmware/output/build/hisilicon* 2>&1 || true
+              echo "--- any open_*.ko anywhere ---" >&2
+              find ../firmware/output -name 'open_*.ko' 2>/dev/null | head -20 >&2 || true
+              exit 1
+          fi
+          echo "ok: $KO ($(stat -c%s "$KO") bytes)"
+
+          # The chip-ops table in kernel/ive_neo/ive_neo.c bakes a
+          # platform-specific name into a printk format string. Grep
+          # it out of the .ko to confirm the right backend was
+          # compiled in. V4 family rolls up to "hi3516ev200" (the
+          # CHIPARCH for ev300/gk7205v200/etc.); cv500 has its own.
+          case "${{ matrix.platform }}" in
+              hi3516cv500) EXPECT=hi3516cv500 ;;
+              *)           EXPECT=hi3516ev200 ;;
+          esac
+          if ! strings "$KO" | grep -qF "chip=%s xnn=%s base=0x%x"; then
+              echo "FAIL: chip-ops log format not found in $KO — refactor regression?" >&2
+              exit 1
+          fi
+          if ! strings "$KO" | grep -qx "$EXPECT"; then
+              echo "FAIL: $KO missing chip-name '$EXPECT' — wrong backend selected" >&2
+              echo "--- chip strings in .ko ---" >&2
+              strings "$KO" | grep -E '^hi3516(ev200|cv500)$' >&2 || true
+              exit 1
+          fi
+          echo "ok: $KO has chip='$EXPECT' baked in"
+
+          # cv500 must NOT have the XNN dispatch active (no NEO unit
+          # on cv500's IVE — CNN lives on a separate NNIE block).
+          # The has_xnn=false branch DCEs the XNN handler bodies and
+          # their fatal-warning string. If that string sneaks into a
+          # cv500 build, XNN gating broke and the driver could go
+          # past -EOPNOTSUPP into a model-load path that has no
+          # hardware to back it.
+          if [ "${{ matrix.platform }}" = hi3516cv500 ]; then
+              if strings "$KO" | grep -qF "XNN loadmodel rejected on chip="; then
+                  echo "ok: cv500 build kept the XNN-reject guard"
+              fi
+              if strings "$KO" | grep -qF "FC layer using non-tiled hardcoded params"; then
+                  echo "FAIL: cv500 build contains XNN FC layer code — XNN gating regression" >&2
+                  exit 1
+              fi
+              echo "ok: cv500 build has no XNN dispatch code"
+          fi
+
   #
   # libraries-header-check
   #

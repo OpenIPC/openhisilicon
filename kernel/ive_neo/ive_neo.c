@@ -1,10 +1,17 @@
 // SPDX-License-Identifier: GPL-2.0
 /*
- * ive_neo — Clean-room IVE/XNN kernel driver for Hi3516EV200/EV300
+ * ive_neo — Clean-room IVE/XNN kernel driver.
  *
  * Open-source replacement for the vendor open_ive.ko binary.
  * Handles OMS model loading, XNN CNN inference via HW task nodes,
  * and CPU-based YUV preprocessing (VGS bypass).
+ *
+ * Supported chips (selected at compile time via -D$(CHIPARCH)):
+ *   - hi3516ev200 / hi3516ev300 / gk7205v200 / gk7205v300 (V4):
+ *       fused IVE+NEO at 0x11320000, full XNN dispatch.
+ *   - hi3516cv500 / hi3516av300: IVE-only block at 0x11230000.
+ *       CNN lives on a separate NNIE engine — XNN ioctls return
+ *       -EOPNOTSUPP here, classic IVE ops work as on V4.
  *
  * Build with -DIVE_STANDALONE to remove all HiSilicon OSAL/CMPI
  * dependencies. Standalone mode uses standard Linux APIs and can
@@ -25,6 +32,18 @@
 #include <linux/slab.h>
 #include <linux/uaccess.h>
 #include <asm/cacheflush.h>
+#elif defined(hi3516cv500)
+#include <linux/slab.h>
+/* cv500's osal.h is a thin "module init" stub. The actual API
+ * (osal_dev_t, osal_createdev, osal_io_remap_pfn_range,
+ * osal_flush_dcache_area, ...) lives in hi_osal.h. mod_ext.h and
+ * sys_ext.h give us cmpi_get_module_func_by_id and
+ * sys_export_func->pfn_sys_drv_ioctrl for clock/reset.
+ * hi_common.h provides HI_ID_SYS / HI_ID_IVE. */
+#include "hi_osal.h"
+#include "hi_common.h"
+#include "mod_ext.h"
+#include "sys_ext.h"
 #else
 #include "osal.h"
 #include "common.h"
@@ -114,6 +133,51 @@ static void *g_ive_task_virt;
 /* Shared hw_init guard — called from either svp_init or first non-XNN submit */
 static int g_hw_init_done;
 
+/* ---- Chip-ops table ----
+ *
+ * Selected at compile time via the -D$(CHIPARCH) flag emitted from
+ * kernel/Kbuild line 7. Two records exist:
+ *
+ *   hi3516cv500  — IVE block at 0x11230000, classic ops only.
+ *                  No NEO/XNN unit (CNN lives on a separate NNIE block
+ *                  at 0x11100000, out of scope for this driver). The
+ *                  [0x90] DRAM-arbitration sequence captured from the
+ *                  V4 blob is irrelevant here (only Conv needs it).
+ *                  cv500 vendor headers don't expose the CMPI MMZ or
+ *                  SYS-DRV-IO symbols to in-tree modules, so memory
+ *                  and clock paths
+ *                  use plain kmalloc + virt_to_phys (same as the QEMU
+ *                  standalone build) and rely on open_sys.ko / boot
+ *                  defaults for IVE clock enable.
+ *   hi3516ev200  — Default / V4 family (also ev300, gk7205v200/v300).
+ *                  Fused IVE+NEO at 0x11320000. Full XNN dispatch +
+ *                  CMPI MMZ + SYS pfnSysDrvIoCtrl clock cycle.
+ */
+struct ive_neo_chip_ops {
+	const char *name;
+	bool has_xnn;
+	u32  standalone_base;
+	void (*setup_mem_speed)(void __iomem *regs);
+};
+
+static void ive_setup_mem_speed_ev200(void __iomem *regs);
+
+#if defined(hi3516cv500)
+static const struct ive_neo_chip_ops ive_neo_chip = {
+	.name             = "hi3516cv500",
+	.has_xnn          = false,
+	.standalone_base  = 0x11230000,
+	.setup_mem_speed  = NULL,
+};
+#else
+static const struct ive_neo_chip_ops ive_neo_chip = {
+	.name             = "hi3516ev200",
+	.has_xnn          = true,
+	.standalone_base  = 0x11320000,
+	.setup_mem_speed  = ive_setup_mem_speed_ev200,
+};
+#endif
+
 /* ---- Helpers ---- */
 
 static inline u32 ive_cvt(u64 phys)
@@ -151,7 +215,12 @@ static inline void ive_link_node(u8 *node_buf, int node_idx, u32 node_phys)
 
 static void *ive_dma_alloc(u64 *phys, u32 size)
 {
-#ifdef IVE_STANDALONE
+#if defined(IVE_STANDALONE) || defined(hi3516cv500)
+	/* cv500: vendor MMZ symbols (CMPI_*) are not exposed to in-tree
+	 * modules. The buffers we allocate here are tiny (<= 4 KB each)
+	 * task descriptors that HW reads via DMA after a writel/dmb fence,
+	 * not streaming buffers, so kmalloc + explicit dcache flush before
+	 * submit is sufficient (matches the QEMU standalone path). */
 	void *virt = kmalloc(size, GFP_KERNEL);
 	if (virt)
 		*phys = virt_to_phys(virt);
@@ -166,7 +235,7 @@ static void *ive_dma_alloc(u64 *phys, u32 size)
 
 static void ive_dma_free(u64 phys, void *virt)
 {
-#ifdef IVE_STANDALONE
+#if defined(IVE_STANDALONE) || defined(hi3516cv500)
 	kfree(virt);
 #else
 	CMPI_MmzFree(phys, virt);
@@ -175,7 +244,7 @@ static void ive_dma_free(u64 phys, void *virt)
 
 static void *ive_map_nocache(u64 phys, u32 size)
 {
-#ifdef IVE_STANDALONE
+#if defined(IVE_STANDALONE) || defined(hi3516cv500)
 	return phys_to_virt(phys);
 #else
 	return CMPI_Remap_Nocache(phys, size);
@@ -188,6 +257,11 @@ static void ive_unmap_flush(void *virt, u32 size)
 	/* Flush dcache so DMA/QEMU sees our writes */
 	__cpuc_flush_dcache_area(virt, size);
 	outer_flush_range(virt_to_phys(virt), virt_to_phys(virt) + size);
+#elif defined(hi3516cv500)
+	/* cv500 path is XNN-disabled so this helper is reachable only on
+	 * V4. Keep a portable fallback that flushes dcache to phys range
+	 * the HW will read. */
+	osal_flush_dcache_area(virt, virt_to_phys(virt), size);
 #else
 	CMPI_Unmap(virt);
 #endif
@@ -397,69 +471,145 @@ static int ive_build_task_nodes(struct xnn_model_ctx *m,
 
 /* ---- HW init ---- */
 
+/* Assert/release IVE reset and enable its clock via the SYS module.
+ * Without this, the IVE clock can be gated off when open_sys.ko's
+ * MPI_SYS_Exit ran in a prior session — and any subsequent register
+ * access (even readl(regs+0x80) for the HW-ID probe) faults with a
+ * synchronous abort that hangs the SoC.
+ *
+ * V4 and cv500 SYS modules expose the same shape (look up SYS's
+ * export-funcs table, invoke its drv_ioctrl with a per-chip enum), but
+ * with totally renamed symbols and different enum ordinals:
+ *
+ *   V4 (ev200/gk7205v200): CMPI_GetModuleFuncById(2) -> SYS_EXPORT_FUNC_S
+ *                          ->pfnSysDrvIoCtrl(chn, 144=reset, 145=clk_en)
+ *                          MPP_CHN_S { .enModId, .s32DevId, .s32ChnId }
+ *   cv500 (hi3516cv500):   cmpi_get_module_func_by_id(HI_ID_SYS) -> sys_export_func
+ *                          ->pfn_sys_drv_ioctrl(chn, SYS_IVE_RESET_SEL,
+ *                                               SYS_IVE_CLK_EN)
+ *                          hi_mpp_chn { .mod_id, .dev_id, .chn_id }
+ *
+ * Both rely on open_sys.ko being loaded first (load_hisilicon ensures
+ * the order). If the SYS export table isn't registered, both helpers
+ * fall through quietly and the hw_id==0 check below catches it. */
+#if !defined(IVE_STANDALONE) && !defined(hi3516cv500)
+static void ive_assert_clock_v4(void)
+{
+	SYS_EXPORT_FUNC_S *sys;
+	MPP_CHN_S chn = { .enModId = 29, .s32DevId = 0, .s32ChnId = 0 };
+	GK_S32 val;
+
+	sys = (SYS_EXPORT_FUNC_S *)CMPI_GetModuleFuncById(2);
+	if (sys && sys->pfnSysDrvIoCtrl) {
+		val = 1; sys->pfnSysDrvIoCtrl(&chn, 144, &val); /* reset(1) */
+		udelay(1000);
+		val = 1; sys->pfnSysDrvIoCtrl(&chn, 145, &val); /* clk en */
+		val = 0; sys->pfnSysDrvIoCtrl(&chn, 144, &val); /* reset(0) */
+	}
+}
+#endif
+
+#if defined(hi3516cv500)
+static void ive_assert_clock_cv500(void)
+{
+	sys_export_func *sys;
+	hi_mpp_chn chn = { .mod_id = HI_ID_IVE, .dev_id = 0, .chn_id = 0 };
+	hi_s32 val;
+
+	sys = (sys_export_func *)cmpi_get_module_func_by_id(HI_ID_SYS);
+	if (sys && sys->pfn_sys_drv_ioctrl) {
+		val = 1; sys->pfn_sys_drv_ioctrl(&chn, SYS_IVE_RESET_SEL, &val);
+		udelay(1000);
+		val = 1; sys->pfn_sys_drv_ioctrl(&chn, SYS_IVE_CLK_EN, &val);
+		val = 0; sys->pfn_sys_drv_ioctrl(&chn, SYS_IVE_RESET_SEL, &val);
+	} else {
+		pr_warn("ive_neo: SYS module not registered — cannot enable IVE clock; expect a hang if open_sys.ko was rmmoded\n");
+	}
+}
+#endif
+
+/* drv_ive_set_mem_speed — memory arbitration register [0x90].
+ * Vendor init applies a long bit-field sequence that lands on a
+ * specific priority/latency config. Without this [0x90] stays 0
+ * and Conv HW hangs waiting for DRAM. Sequence was kprobed from the
+ * V4 vendor blob; cv500's IVE block has no Conv unit so the [0x90]
+ * write is unnecessary there (and the equivalent cv500 value is
+ * unknown — it would matter only once the future NNIE backend lands).
+ */
+static void ive_setup_mem_speed_ev200(void __iomem *regs)
+{
+	u32 v = readl(regs + 0x90);
+	v = (v & 0xFC7FFFFF) | 0x1800000;
+	v = (v & 0xFF9FFFFF) | 0x200000;
+	v = (v & 0xFFE7FFFF) | 0x80000;
+	v = (v & 0xFFF8FFFF) | 0x30000;
+	v = (v & 0xFFFF3FFF) | 0x4000;
+	v = (v & 0xFFFFCFFF) | 0x1000;
+	v = (v & 0xFFFFF3FF);
+	v = (v & 0xFFFFFCFF) | 0x100;
+	v = (v & 0xFFFFFF3F) | 0x40;
+	v = (v & 0xFFFFFFCF) | 0x10;
+	v = (v & 0xFFFFFFF3) | 8;
+	v = (v & 0xFFFFFFFC) | 1;
+	writel(v, regs + 0x90);
+}
+
 static void ive_hw_init(void)
 {
 	u32 hw_id;
 
-#ifndef IVE_STANDALONE
-	{
-		SYS_EXPORT_FUNC_S *sys;
-		MPP_CHN_S chn = { .enModId = 29, .s32DevId = 0, .s32ChnId = 0 };
-		GK_S32 val;
+	pr_info_once("ive_neo: chip=%s xnn=%s base=0x%x\n",
+		     ive_neo_chip.name,
+		     ive_neo_chip.has_xnn ? "yes" : "no",
+		     ive_neo_chip.standalone_base);
 
-		sys = (SYS_EXPORT_FUNC_S *)CMPI_GetModuleFuncById(2);
-		if (sys && sys->pfnSysDrvIoCtrl) {
-			/* Full reset cycle: assert reset → enable clock →
-			 * release reset. This recovers from the HW-dead state
-			 * libive.so's HI_MPI_SYS_Exit leaves the block in. */
-			val = 1; sys->pfnSysDrvIoCtrl(&chn, 144, &val); /* reset(1) */
-			udelay(1000);
-			val = 1; sys->pfnSysDrvIoCtrl(&chn, 145, &val); /* clk en */
-			val = 0; sys->pfnSysDrvIoCtrl(&chn, 144, &val); /* reset(0) */
-		}
-	}
+#if defined(IVE_STANDALONE)
+	/* no clock cycle in QEMU */
+#elif defined(hi3516cv500)
+	ive_assert_clock_cv500();
+#else
+	ive_assert_clock_v4();
 #endif
 
 	g_mmz_base = 0;
 
 	hw_id = readl(g_ive_regs + 0x80);
 	if (hw_id == 0) {
-		ive_err("hw_init: HW not responding\n");
+		ive_err("hw_init: HW not responding (clock disabled?)\n");
 		return;
 	}
 
+	/* The block of register writes below comes from the V4 (ev200) blob
+	 * init sequence and was confirmed working on hi3516ev300 in 2026-05.
+	 * On cv500 the same offsets caused a synchronous abort that hung
+	 * the board (offsets 0x34, 0x54, 0x60 are not part of cv500's IVE
+	 * register window — cv500 has the classic IVE block only, while V4
+	 * also has the NEO/XNN unit whose config lives at the same window).
+	 *
+	 * Until we kprobe the cv500 vendor blob to discover the correct
+	 * init sequence, do the minimum on cv500: enable + clear interrupts.
+	 * The HW is left in whatever state open_sys.ko / u-boot put it in,
+	 * which is sufficient for the 24 classic ops we expose. */
 	writel(6, g_ive_regs + 0x04);           /* drv_ive_en_int */
 	writel(7, g_ive_regs + 0x08);           /* drv_ive_clear_int */
+#if !defined(hi3516cv500)
 	writel(0xffffffff, g_ive_regs + 0x60);  /* drv_ive_write_timeout_regs(-1) */
 	writel(readl(g_ive_regs + 0x34) | 1, g_ive_regs + 0x34);  /* drv_ive_en_clk_gt */
 	writel((readl(g_ive_regs + 0x54) & 0xfffffff0) | 7, g_ive_regs + 0x54);
 	writel(readl(g_ive_regs + 0x54) | 0xf00, g_ive_regs + 0x54);  /* set_outstanding */
+#endif
 
-	/* drv_ive_set_mem_speed — memory arbitration register [0x90].
-	 * Vendor init applies a long bit-field sequence that lands on a
-	 * specific priority/latency config. Without this [0x90] stays 0
-	 * and Conv HW hangs waiting for DRAM. */
-	{
-		u32 v = readl(g_ive_regs + 0x90);
-		v = (v & 0xFC7FFFFF) | 0x1800000;
-		v = (v & 0xFF9FFFFF) | 0x200000;
-		v = (v & 0xFFE7FFFF) | 0x80000;
-		v = (v & 0xFFF8FFFF) | 0x30000;
-		v = (v & 0xFFFF3FFF) | 0x4000;
-		v = (v & 0xFFFFCFFF) | 0x1000;
-		v = (v & 0xFFFFF3FF);
-		v = (v & 0xFFFFFCFF) | 0x100;
-		v = (v & 0xFFFFFF3F) | 0x40;
-		v = (v & 0xFFFFFFCF) | 0x10;
-		v = (v & 0xFFFFFFF3) | 8;
-		v = (v & 0xFFFFFFFC) | 1;
-		writel(v, g_ive_regs + 0x90);
-	}
+	if (ive_neo_chip.setup_mem_speed)
+		ive_neo_chip.setup_mem_speed(g_ive_regs);
+	else
+		pr_info_once("ive_neo: skipping [0x90] mem-speed (chip=%s — not needed for classic IVE ops)\n",
+			     ive_neo_chip.name);
 
+#if !defined(hi3516cv500)
 	writel(0, g_ive_regs + 0x8C);  /* drv_ive_set_base_addr(mmz_base>>12)=0 */
+#endif
 
-	ive_log("hw_init: HW ID=0x%08x [0x90]=0x%08x\n",
-		hw_id, readl(g_ive_regs + 0x90));
+	ive_log("hw_init: HW ID=0x%08x\n", hw_id);
 }
 
 /* ---- Ioctl handlers (work on kernel buffer, no copy_from/to_user) ---- */
@@ -468,16 +618,32 @@ static long ive_svp_init(unsigned long arg)
 {
 	u8 *buf = (u8 *)arg;
 
+#ifdef IVE_STANDALONE
 	if (!g_ive_regs)
-		g_ive_regs = ioremap(0x11320000, 0x10000);
+		g_ive_regs = ioremap(ive_neo_chip.standalone_base, 0x10000);
+#endif
+	if (!g_ive_regs) {
+		ive_err("svp_init: g_ive_regs not set (DT probe didn't run?)\n");
+		return -ENODEV;
+	}
 	/* Run hw_init on first svp_init call, and re-run if HW went offline
-	 * (HI_MPI_SYS_Exit disables the IVE clock between sessions). */
+	 * (HI_MPI_SYS_Exit disables the IVE clock between sessions).
+	 *
+	 * The pre-read of [0x80]/[0x04] used to gate re-init only fires on
+	 * subsequent calls — on the very first call we go straight into
+	 * hw_init, because reading any IVE register before clocks are on
+	 * faults synchronously on cv500 (the SYS module gates the IVE
+	 * clock off until ive_assert_clock_cv500 turns it on inside
+	 * hw_init). */
 	if (g_ive_regs && !g_skip_hw_init) {
-		u32 hw_id = readl(g_ive_regs + 0x80);
-		u32 en    = readl(g_ive_regs + 0x04);
-		if (!g_hw_init_done || hw_id == 0 || (en & 6) != 6) {
+		if (!g_hw_init_done) {
 			ive_hw_init();
 			g_hw_init_done = 1;
+		} else {
+			u32 hw_id = readl(g_ive_regs + 0x80);
+			u32 en    = readl(g_ive_regs + 0x04);
+			if (hw_id == 0 || (en & 6) != 6)
+				ive_hw_init();
 		}
 	} else if (g_ive_regs && g_skip_hw_init && !g_hw_init_done) {
 		ive_log("hw_init SKIPPED (skip_init=1)\n");
@@ -536,6 +702,11 @@ static long ive_xnn_loadmodel(unsigned long arg)
 	u16 scale_num, layer_num;
 	u8 src_num, dst_num;
 
+	if (!ive_neo_chip.has_xnn) {
+		pr_info_once("ive_neo: XNN loadmodel rejected on chip=%s (no NEO unit in IVE block)\n",
+			     ive_neo_chip.name);
+		return -EOPNOTSUPP;
+	}
 	if (model_size < 0x50)
 		return -EINVAL;
 
@@ -649,11 +820,16 @@ static long ive_xnn_loadmodel(unsigned long arg)
 
 /* Vendor cmd 0x801046c8 = ivp_proc_init: allocate a 4KB MMZ buffer
  * "IVPProc". Returns buf[0]=4095, buf[8..15]=phys. Parallels
- * svp_init's svp_alg_proc handling but for a different global. */
+ * svp_init's svp_alg_proc handling but for a different global.
+ *
+ * This is part of the IVP (XNN) init flow — libive calls it only when
+ * a model is being loaded, so it's safe to gate on has_xnn. */
 static long ive_open_dev(unsigned long arg)
 {
 	u8 *buf = (u8 *)arg;
 
+	if (!ive_neo_chip.has_xnn)
+		return -EOPNOTSUPP;
 	if (!buf)
 		return -EINVAL;
 	if (!g_ivp_proc_virt) {
@@ -685,6 +861,8 @@ static long ive_xnn_fwd_slice(unsigned long arg)
 	u32 node_phys, status;
 	int timeout, ni;
 
+	if (!ive_neo_chip.has_xnn)
+		return -EOPNOTSUPP;
 	if (model_id >= MAX_XNN_MODELS || !g_models[model_id].in_use)
 		return -EINVAL;
 	m = &g_models[model_id];
@@ -799,6 +977,8 @@ static long ive_xnn_fwd_slice(unsigned long arg)
 
 static long ive_xnn_query(unsigned long arg)
 {
+	if (!ive_neo_chip.has_xnn)
+		return -EOPNOTSUPP;
 	((u32 *)arg)[1] = 1;
 	return 0;
 }
@@ -842,6 +1022,8 @@ static long ive_xnn_unloadmodel(unsigned long arg)
 {
 	u32 model_id = ((u32 *)arg)[0];
 
+	if (!ive_neo_chip.has_xnn)
+		return -EOPNOTSUPP;
 	if (model_id < MAX_XNN_MODELS) {
 		struct xnn_model_ctx *m = &g_models[model_id];
 		if (m->task_virt) {
@@ -896,9 +1078,15 @@ static long ive_submit_nonxnn(u8 *node, u8 *arg_buf)
 	/* Always ensure HW is initialized. On first call, full init.
 	 * Keep a dirty flag: if a previous submit timed out (HW stuck),
 	 * force a full reset-cycle hw_init on the next call. */
+#ifdef IVE_STANDALONE
 	if (!g_ive_regs)
-		g_ive_regs = ioremap(0x11320000, 0x10000);
-	if (g_ive_regs && !g_hw_init_done) {
+		g_ive_regs = ioremap(ive_neo_chip.standalone_base, 0x10000);
+#endif
+	if (!g_ive_regs) {
+		ive_err("submit_nonxnn: g_ive_regs not set (DT probe didn't run?)\n");
+		return -ENODEV;
+	}
+	if (!g_hw_init_done) {
 		ive_hw_init();
 		g_hw_init_done = 1;
 	}
@@ -910,6 +1098,13 @@ static long ive_submit_nonxnn(u8 *node, u8 *arg_buf)
 	}
 	memcpy(g_ive_task_virt, node, 208);
 	/* node+0..3 = next ptr (0 = end of chain) — already set by caller */
+
+#if defined(hi3516cv500)
+	/* cv500 buffer is cacheable (kmalloc) — flush so HW sees the
+	 * 208-byte node we just wrote. V4 uses CMPI MMZ which is
+	 * non-cached, so no flush needed there. */
+	osal_flush_dcache_area(g_ive_task_virt, g_ive_task_phys, 208);
+#endif
 
 	reinit_completion(&g_ive_done);
 	g_ive_last_status = 0;
@@ -1625,9 +1820,15 @@ static long ive_op_canny_hys(unsigned long arg)
 #endif
 
 	/* Ensure HW init (same logic as ive_submit_nonxnn) */
+#ifdef IVE_STANDALONE
 	if (!g_ive_regs)
-		g_ive_regs = ioremap(0x11320000, 0x10000);
-	if (g_ive_regs && !g_hw_init_done) {
+		g_ive_regs = ioremap(ive_neo_chip.standalone_base, 0x10000);
+#endif
+	if (!g_ive_regs) {
+		ive_err("canny_hys: g_ive_regs not set (DT probe didn't run?)\n");
+		return -ENODEV;
+	}
+	if (!g_hw_init_done) {
 		ive_hw_init();
 		g_hw_init_done = 1;
 	}
@@ -1945,7 +2146,7 @@ static int __init ive_sa_init(void)
 {
 	int ret;
 
-	g_ive_regs = ioremap(0x11320000, 0x10000);
+	g_ive_regs = ioremap(ive_neo_chip.standalone_base, 0x10000);
 	if (!g_ive_regs)
 		return -ENOMEM;
 
@@ -2092,4 +2293,4 @@ void ive_std_mod_exit(void)
 #endif /* IVE_STANDALONE */
 
 MODULE_LICENSE("GPL");
-MODULE_DESCRIPTION("ive_neo: open-source IVE/XNN driver for Hi3516EV200/EV300");
+MODULE_DESCRIPTION("ive_neo: open-source IVE/XNN driver (Hi3516EV200/EV300 + Hi3516CV500/AV300)");
