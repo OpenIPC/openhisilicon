@@ -240,19 +240,19 @@ jobs:
               echo "ok: cv500 build has no XNN dispatch code"
 
               # PR #107: PerspTrans and Hog have real HW handlers on
-              # cv500. Each handler emits a distinctive log line on bad
-              # input; if those strings vanish, someone reverted the
-              # handler to the silent-stub or diag path. Grep for the
-              # validation message rather than the handler symbol name
-              # so the assertion stays meaningful even if the function
-              # gets renamed.
-              for needle in "PerspTrans bad roi_num" "Hog bad roi_num"; do
+              # cv500. PR for #110: NCC handler is now wired (was a
+              # silent stub before). Each handler emits a distinctive
+              # log line; if those strings vanish, someone reverted to
+              # the silent-stub or diag path. Grep for the validation
+              # / one-time log rather than the handler symbol name so
+              # the assertion stays meaningful across renames.
+              for needle in "PerspTrans bad roi_num" "Hog bad roi_num" "NCC handler wired"; do
                   if ! strings "$KO" | grep -qF "$needle"; then
                       echo "FAIL: cv500 .ko missing '$needle' — handler regressed to stub?" >&2
                       exit 1
                   fi
               done
-              echo "ok: cv500 build has PerspTrans + Hog HW handlers wired"
+              echo "ok: cv500 build has PerspTrans + Hog + NCC HW handlers wired"
 
               # The N-node chain submit helper is the shared HW kick
               # path for both new ops. Its timeout log is the only

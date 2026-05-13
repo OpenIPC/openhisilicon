@@ -338,14 +338,91 @@ cleanup:
     return g_failures - failures_before;
 }
 
+/* NCC = Normalized Cross-Correlation. HW writes a 32-byte
+ * IVE_NCC_DST_MEM_S: u64 numerator + u64 quadSum1 + u64 quadSum2 +
+ * 8 reserved bytes. When src1 == src2, numerator equals both
+ * quadSums (since NCC = numerator/sqrt(qs1*qs2) = 1.0 for identical
+ * inputs). Use that as a strong correctness signal. */
+static int test_ncc(void)
+{
+    IVE_IMAGE_S src1, src2;
+    IVE_DST_MEM_INFO_S dst;
+    IVE_HANDLE h = -1;
+    HI_S32 ret;
+    HI_U8 *y1, *y2;
+    HI_U64 *dst_u64;
+    const HI_U32 NCC_DST_SIZE = 32;
+    int i;
+    int failures_before;
+
+    printf("\n=== NCC identity (src1==src2) on %ux%u U8C1 ===\n", W, H);
+    failures_before = g_failures;
+    memset(&src1, 0, sizeof(src1));
+    memset(&src2, 0, sizeof(src2));
+    memset(&dst,  0, sizeof(dst));
+
+    if (alloc_image(&src1, W, H) != HI_SUCCESS) return 1;
+    if (alloc_image(&src2, W, H) != HI_SUCCESS) { free_image(&src1); return 1; }
+    if (alloc_mem_info(&dst, NCC_DST_SIZE) != HI_SUCCESS) {
+        free_image(&src1); free_image(&src2); return 1;
+    }
+    src1.enType = IVE_IMAGE_TYPE_U8C1;
+    src2.enType = IVE_IMAGE_TYPE_U8C1;
+
+    y1 = (HI_U8 *)(uintptr_t)src1.au64VirAddr[0];
+    y2 = (HI_U8 *)(uintptr_t)src2.au64VirAddr[0];
+    for (i = 0; i < Y_SIZE; i++) {
+        y1[i] = (HI_U8)((i * 17 + 3) & 0xff);
+        y2[i] = y1[i];                          /* identical to src1 */
+    }
+    HI_MPI_SYS_MmzFlushCache(src1.au64PhyAddr[0],
+                             (void *)(uintptr_t)src1.au64VirAddr[0], IMG_SIZE);
+    HI_MPI_SYS_MmzFlushCache(src2.au64PhyAddr[0],
+                             (void *)(uintptr_t)src2.au64VirAddr[0], IMG_SIZE);
+
+    dst_u64 = (HI_U64 *)(uintptr_t)dst.u64VirAddr;
+    memset(dst_u64, SENTINEL, NCC_DST_SIZE);
+    HI_MPI_SYS_MmzFlushCache(dst.u64PhyAddr,
+                             (void *)(uintptr_t)dst.u64VirAddr, NCC_DST_SIZE);
+
+    ret = HI_MPI_IVE_NCC(&h, &src1, &src2, &dst, HI_TRUE);
+    check(ret == HI_SUCCESS, "ioctl returned success");
+    if (ret != HI_SUCCESS) goto cleanup;
+
+    ret = wait_handle(h);
+    check(ret == HI_SUCCESS, "Query/wait completed");
+
+    HI_MPI_SYS_MmzFlushCache(dst.u64PhyAddr,
+                             (void *)(uintptr_t)dst.u64VirAddr, NCC_DST_SIZE);
+
+    printf("  numerator=0x%016llx quadSum1=0x%016llx quadSum2=0x%016llx\n",
+           (unsigned long long)dst_u64[0],
+           (unsigned long long)dst_u64[1],
+           (unsigned long long)dst_u64[2]);
+
+    check(dst_u64[0] != 0, "numerator non-zero (HW wrote)");
+    check(dst_u64[1] != 0, "quadSum1 non-zero");
+    check(dst_u64[2] != 0, "quadSum2 non-zero");
+    /* The strong correctness signal: identical inputs => all 3 equal. */
+    check(dst_u64[0] == dst_u64[1] && dst_u64[1] == dst_u64[2],
+          "numerator == quadSum1 == quadSum2 (identity correlation)");
+
+cleanup:
+    free_image(&src1);
+    free_image(&src2);
+    free_mem(&dst);
+    return g_failures - failures_before;
+}
+
 int main(int argc, char **argv)
 {
     int rc, total_failures = 0;
-    int skip_hog = 0;
+    int skip_hog = 0, skip_ncc = 0;
 
-    for (int i = 1; i < argc; i++)
-        if (!strcmp(argv[i], "--no-hog"))
-            skip_hog = 1;
+    for (int i = 1; i < argc; i++) {
+        if (!strcmp(argv[i], "--no-hog"))  skip_hog = 1;
+        if (!strcmp(argv[i], "--no-ncc"))  skip_ncc = 1;
+    }
 
     rc = HI_MPI_SYS_Init();
     if (rc != HI_SUCCESS) {
@@ -356,6 +433,8 @@ int main(int argc, char **argv)
     total_failures += test_persp_trans();
     if (!skip_hog)
         total_failures += test_hog();
+    if (!skip_ncc)
+        total_failures += test_ncc();
 
     HI_MPI_SYS_Exit();
 

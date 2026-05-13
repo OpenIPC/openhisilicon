@@ -2024,6 +2024,10 @@ static long ive_op_gmm2(unsigned long arg)
 }
 
 /* ---- NCC (op=?): arg = {handle(8), src1(72), src2(72), dst_mem(24+)} ---- */
+/* HI_MPI_IVE_NCC (ioctl 0xc0b84616) — Normalized Cross-Correlation.
+ * Field map decoded from cv500 vendor blob obj/hi3516cv500/hi_ive.o
+ * symbol ive_fill_ncc_task @0x86a0 (the previous handler guessed
+ * node[10]=18 from nr proximity; vendor actually uses 22). */
 static long ive_op_ncc(unsigned long arg)
 {
 	u8 *buf = (u8 *)arg;
@@ -2036,14 +2040,17 @@ static long ive_op_ncc(unsigned long arg)
 		return -EINVAL;
 
 	memset(node, 0, sizeof(node));
-	node[10] = 18; /* NCC op code (guessed from nr=0x15, nearby Hist=13) */
+	node[6]  = 0;
+	node[8]  = (u8) IMG_TYPE(src1);  /* approximation; vendor uses 12-entry LUT (issue #113) */
+	node[10] = 22;                   /* op = NCC */
 	*(u32 *)(node + 16) = IMG_PHYS(src1);
+	*(u32 *)(node + 20) = *(u32 *)dst_mem;  /* output mem phys */
 	*(u32 *)(node + 24) = IMG_PHYS(src2);
-	*(u32 *)(node + 20) = *(u32 *)dst_mem; /* output mem phys */
 	*(u16 *)(node + 40) = (u16)IMG_WIDTH(src1);
 	*(u16 *)(node + 42) = (u16)IMG_HEIGHT(src1);
 	*(u16 *)(node + 44) = (u16)IMG_STRIDE(src1);
 	*(u16 *)(node + 46) = (u16)IMG_STRIDE(src2);
+	pr_info_once("ive_neo: NCC handler wired (HW op 22)\n");
 	return ive_submit_nonxnn(node, buf);
 }
 
@@ -2504,7 +2511,7 @@ static long ive_dispatch(unsigned int cmd, unsigned long arg)
 	 * these with "ive can't support the func". Return 0 to keep
 	 * libive.so's handle check happy; output will be empty. */
 	case 0xc0a8461au:      return 0;  /* LBP */
-	case 0xc0b84616u:      return 0;  /* NCC */
+	case 0xc0b84616u:      return ive_op_ncc(arg);   /* NCC — vendor op 22 */
 	case 0xc0b8462au:      return 0;  /* EqualizeHist */
 	case 0xc0a04602u:      return 0;  /* CSC (VGS) */
 	case 0xc0c04603u:      return 0;  /* FilterAndCSC (VGS) */
