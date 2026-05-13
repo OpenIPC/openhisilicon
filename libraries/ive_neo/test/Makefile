@@ -1,12 +1,13 @@
 # Build the HW pixel-correctness round-trip test.
 #
-# Targets a cv500/av300 board. Links against libive_neo, libmpi_neo,
-# libpthread; libraries come from the per-build firmware staging area
-# at $(STAGING_DIR) unless overridden. Default CC matches the
-# OpenIPC cv500 toolchain (gnueabi); pass CC=... to override.
+# Opt-in only: the top-level libraries/Makefile recurses into every
+# subdir with a Makefile and runs `make all`; for this test that path
+# is wrong (cross-compile against a cv500 firmware staging tree, not
+# the in-package sensor build). So `all` is a no-op here, and the
+# test is built explicitly via `make test_persp_hog`.
 #
 # Typical usage:
-#   make -C libraries/ive_neo/test \
+#   make -C libraries/ive_neo/test test_persp_hog \
 #        STAGING=$HOME/git/firmware/output-cv500/build/hisilicon-opensdk-custom \
 #        CC=$HOME/git/firmware/output-cv500/host/bin/arm-openipc-linux-gnueabi-gcc
 #
@@ -28,10 +29,15 @@ LDFLAGS := -L$(STAGING)/libraries/ive_neo \
 
 LDLIBS  := -live_neo -lmpi_neo -lpthread
 
+# Default target is a no-op so the package-level recursive build
+# doesn't try to cross-compile us with the wrong toolchain config.
+all:
+	@:
+
 test_persp_hog: test_persp_hog.c
 	$(CC) $(CFLAGS) $(LDFLAGS) -o $@ $< $(LDLIBS)
 
 clean:
 	rm -f test_persp_hog
 
-.PHONY: clean
+.PHONY: all clean
