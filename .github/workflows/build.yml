@@ -246,7 +246,7 @@ jobs:
               # the silent-stub or diag path. Grep for the validation
               # / one-time log rather than the handler symbol name so
               # the assertion stays meaningful across renames.
-              for needle in "PerspTrans bad roi_num" "Hog bad roi_num" "NCC handler wired"; do
+              for needle in "PerspTrans bad roi_num" "Hog bad roi_num" "NCC handler wired" "LBP handler wired"; do
                   if ! strings "$KO" | grep -qF "$needle"; then
                       echo "FAIL: cv500 .ko missing '$needle' — handler regressed to stub?" >&2
                       exit 1

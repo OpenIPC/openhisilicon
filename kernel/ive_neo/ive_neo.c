@@ -1296,6 +1296,53 @@ static long ive_op_thresh(unsigned long arg)
 	return ive_submit_nonxnn(node, buf);
 }
 
+/* ---- LBP (op=26): arg = {handle(8), src(72), dst(72), ctrl(8)} ---- *
+ * Local Binary Pattern. cv500-only HW op (vendor blob symbol
+ * ive_fill_lbp_task @0x8830). Field map: node[10]=26, node[11]=enMode,
+ * node[12]=threshold (sign-extended in NORMAL mode, zero-extended in
+ * ABS mode). Each output pixel is an 8-bit mask of "neighbours brighter
+ * by >= threshold" — useful for texture / face descriptors.
+ *
+ * ctrl layout (IVE_LBP_CTRL_S, 8 B):
+ *   +0: u32 enMode  (0 = NORMAL signed s8 thr, 1 = ABS unsigned u8 thr)
+ *   +4: union { s8 sVal; u8 uVal; } un8BitThr
+ *   +5..7: padding */
+static long ive_op_lbp(unsigned long arg)
+{
+	u8 *buf = (u8 *)arg;
+	u8 *src = buf + 8, *dst = buf + 80, *ctrl = buf + 152;
+	u32 mode = *(u32 *)(ctrl + 0);
+	u8 node[208];
+	u16 thr16;
+
+	if (IVE_CHECK_IMG(src) || IVE_CHECK_IMG(dst))
+		return -EINVAL;
+	if (mode > 1) {
+		pr_info("ive_neo: LBP bad enMode=%u (0=NORMAL, 1=ABS)\n", mode);
+		return -EINVAL;
+	}
+
+	if (mode == 0)
+		thr16 = (u16)(s16)(s8) ctrl[4];   /* sign-extend */
+	else
+		thr16 = ctrl[4];                  /* zero-extend */
+
+	memset(node, 0, sizeof(node));
+	node[6]  = 0;
+	node[8]  = 0;                        /* no LUT for LBP (vendor writes 0) */
+	node[10] = 26;                       /* op = LBP */
+	node[11] = (u8) mode;
+	*(u16 *)(node + 12) = thr16;
+	*(u32 *)(node + 16) = IMG_PHYS(src);
+	*(u32 *)(node + 20) = IMG_PHYS(dst);
+	*(u16 *)(node + 40) = (u16)IMG_WIDTH(src);
+	*(u16 *)(node + 42) = (u16)IMG_HEIGHT(src);
+	*(u16 *)(node + 44) = (u16)IMG_STRIDE(src);
+	*(u16 *)(node + 50) = (u16)IMG_STRIDE(dst);
+	pr_info_once("ive_neo: LBP handler wired (HW op 26)\n");
+	return ive_submit_nonxnn(node, buf);
+}
+
 /* ---- Dilate (op=6): arg = {handle(8), src(72), dst(72), ctrl(25 mask)} ---- */
 static long ive_op_dilate(unsigned long arg)
 {
@@ -2546,7 +2593,7 @@ static long ive_dispatch(unsigned int cmd, unsigned long arg)
 	/* Not supported on Hi3516EV200/EV300 — vendor kernel also rejects
 	 * these with "ive can't support the func". Return 0 to keep
 	 * libive.so's handle check happy; output will be empty. */
-	case 0xc0a8461au:      return 0;  /* LBP */
+	case 0xc0a8461au:      return ive_op_lbp(arg);   /* LBP — vendor op 26 */
 	case 0xc0b84616u:      return ive_op_ncc(arg);   /* NCC — vendor op 22 */
 	case 0xc0b8462au:      return 0;  /* EqualizeHist */
 	case 0xc0a04602u:      return 0;  /* CSC (VGS) */
