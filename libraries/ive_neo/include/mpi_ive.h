@@ -351,6 +351,45 @@ HI_S32 HI_MPI_IVE_Hog(IVE_HANDLE *pIveHandle,
                       IVE_HOG_CTRL_S *pstHogCtrl,
                       HI_BOOL bInstant);
 
+/* KCF (Kernelized Correlation Filter) tracker — cv500-only family
+ * (10 entry points). Userland helpers do trig table precomputation,
+ * free-list management, and bbox/state-machine bookkeeping; only
+ * KCF_Process needs kernel HW dispatch.
+ *
+ * All 10 currently return HI_ERR_IVE_NOT_SUPPORT — see issue #109.
+ * Symbols are exported so callers compiled against the cv500 SDK
+ * headers can link, even though runtime calls will fail until the
+ * implementations land. */
+HI_S32 HI_MPI_IVE_KCF_GetMemSize(HI_U32 u32MaxObjNum, HI_U32 *pu32Size);
+HI_S32 HI_MPI_IVE_KCF_CreateObjList(IVE_MEM_INFO_S *pstMem, HI_U32 u32MaxObjNum,
+                                    IVE_KCF_OBJ_LIST_S *pstObjList);
+HI_S32 HI_MPI_IVE_KCF_DestroyObjList(IVE_KCF_OBJ_LIST_S *pstObjList);
+HI_S32 HI_MPI_IVE_KCF_CreateGaussPeak(HI_U3Q5 u3q5Padding,
+                                      IVE_DST_MEM_INFO_S *pstGaussPeak);
+HI_S32 HI_MPI_IVE_KCF_CreateCosWin(IVE_DST_MEM_INFO_S *pstCosWinX,
+                                   IVE_DST_MEM_INFO_S *pstCosWinY);
+HI_S32 HI_MPI_IVE_KCF_GetTrainObj(HI_U3Q5 u3q5Padding, IVE_ROI_INFO_S astRoiInfo[],
+                                  HI_U32 u32ObjNum,
+                                  IVE_MEM_INFO_S *pstCosWinX,
+                                  IVE_MEM_INFO_S *pstCosWinY,
+                                  IVE_MEM_INFO_S *pstGaussPeak,
+                                  IVE_KCF_OBJ_LIST_S *pstObjList);
+HI_S32 HI_MPI_IVE_KCF_Process(IVE_HANDLE *pIveHandle,
+                              IVE_SRC_IMAGE_S *pstSrc,
+                              IVE_KCF_OBJ_LIST_S *pstObjList,
+                              IVE_KCF_PRO_CTRL_S *pstKcfProCtrl,
+                              HI_BOOL bInstant);
+HI_S32 HI_MPI_IVE_KCF_GetObjBbox(IVE_KCF_OBJ_LIST_S *pstObjList,
+                                 IVE_KCF_BBOX_S astBbox[],
+                                 HI_U32 *pu32BboxObjNum,
+                                 IVE_KCF_BBOX_CTRL_S *pstKcfBboxCtrl);
+HI_S32 HI_MPI_IVE_KCF_JudgeObjBboxTrackState(IVE_ROI_INFO_S *pstRoiInfo,
+                                             IVE_KCF_BBOX_S *pstBbox,
+                                             HI_BOOL *pbTrackOk);
+HI_S32 HI_MPI_IVE_KCF_ObjUpdate(IVE_KCF_OBJ_LIST_S *pstObjList,
+                                IVE_KCF_BBOX_S astBbox[],
+                                HI_U32 u32BboxObjNum);
+
 #ifdef __cplusplus
 }
 #endif
