@@ -1057,6 +1057,26 @@ static long ive_xnn_unloadmodel(unsigned long arg)
 
 /* ==== Non-XNN IVE ops ==== */
 
+/* 12-entry src-format-to-HW-encoding LUT, used by node[8] of
+ * PerspTrans, Hog, and NCC handlers on cv500. Dumped from cv500
+ * vendor blob obj/hi3516cv500/hi_ive.o .rodata @0x560 (R_ARM_MOVW/MOVT
+ * relocations from ive_fill_persp_trans_task @0x95cc,
+ * ive_fill_hog_task @0x9a24, ive_fill_ncc_task @0x86cc all target the
+ * same anchor). en_type > 11 falls through to 7 — the "unknown" entry
+ * vendor encoders use as a catchall for unsupported formats.
+ *
+ * Always compiled in so NCC (which is chip-agnostic) can call it;
+ * V4 callers may want to bypass it since the V4 IVE block uses its
+ * own LUT (not yet dumped). */
+static const u8 cv500_src_fmt_lut[12] = {
+	0, 7, 1, 2, 7, 7, 7, 7, 7, 7, 3, 4,
+};
+
+static inline u8 cv500_src_fmt(u32 en_type)
+{
+	return en_type <= 11 ? cv500_src_fmt_lut[en_type] : 7;
+}
+
 /* IVE_IMAGE_S field offsets (72-byte struct):
  *   +0: u64 phys[3]  +24: u64 virt[3]  +48: u32 stride[3]
  *  +60: u32 width   +64: u32 height   +68: u32 enType
@@ -2041,7 +2061,11 @@ static long ive_op_ncc(unsigned long arg)
 
 	memset(node, 0, sizeof(node));
 	node[6]  = 0;
-	node[8]  = (u8) IMG_TYPE(src1);  /* approximation; vendor uses 12-entry LUT (issue #113) */
+#if defined(hi3516cv500)
+	node[8]  = cv500_src_fmt(IMG_TYPE(src1));   /* vendor LUT — issue #113 */
+#else
+	node[8]  = (u8) IMG_TYPE(src1);             /* V4 has its own LUT, not dumped */
+#endif
 	node[10] = 22;                   /* op = NCC */
 	*(u32 *)(node + 16) = IMG_PHYS(src1);
 	*(u32 *)(node + 20) = *(u32 *)dst_mem;  /* output mem phys */
@@ -2128,7 +2152,9 @@ static long ive_op_persp_trans_cv500(unsigned long arg)
 	u32 src_stride1 = *(u32 *)(src + 52);
 	u32 src_w = *(u32 *)(src + 60);
 	u32 src_h = *(u32 *)(src + 64);
+	u32 src_type = *(u32 *)(src + 68);
 	u8 nodes[IVE_PT_MAX_ROIS * 208];
+	u8 src_fmt;
 	u32 i;
 
 	if (!roi_num || roi_num > IVE_PT_MAX_ROIS) {
@@ -2143,6 +2169,15 @@ static long ive_op_persp_trans_cv500(unsigned long arg)
 	}
 	if (ive_check_buf(src_phys0, src_stride0, src_w, src_h))
 		return -EINVAL;
+
+	/* node[8] = LUT[src.enType], with a PerspTrans-specific override:
+	 * when csc=NONE and src is YUV420SP the encoding becomes 5 (the
+	 * dedicated "pass-through YUV" path the HW uses when no colour
+	 * conversion is requested). Decoded from vendor blob branch at
+	 * ive_fill_persp_trans_task @0x95d4. */
+	src_fmt = cv500_src_fmt(src_type);
+	if (csc_mode == 0 && src_type == 2)
+		src_fmt = 5;
 
 	memset(nodes, 0, sizeof(nodes));
 
@@ -2193,7 +2228,7 @@ static long ive_op_persp_trans_cv500(unsigned long arg)
 		}
 
 		node[6]  = 0;
-		node[8]  = (u8) csc_mode;      /* approximation; vendor uses 12-entry LUT */
+		node[8]  = src_fmt;            /* LUT[src.enType] + YUV420SP/CSC=NONE override */
 		node[9]  = node9;
 		node[10] = 0x35;               /* op = PerspTrans */
 		node[11] = 1;
@@ -2288,7 +2323,8 @@ static long ive_op_hog_cv500(unsigned long arg)
 	u8 nodes[IVE_HOG_MAX_ROIS * 208];
 	u32 i;
 
-	(void)src_type; /* used by node[8] in vendor LUT; we pass raw csc_mode */
+	/* node[8] = LUT[src.enType] (issue #113 fix). No PerspTrans-style
+	 * YUV420SP override in Hog — vendor blob just loads the LUT entry. */
 
 	if (!roi_num || roi_num > IVE_HOG_MAX_ROIS) {
 		pr_info("ive_neo: Hog bad roi_num=%u (max %u)\n",
@@ -2343,7 +2379,7 @@ static long ive_op_hog_cv500(unsigned long arg)
 		}
 
 		node[6]  = 0;
-		node[8]  = (u8) csc_mode;     /* approximation; vendor LUT */
+		node[8]  = cv500_src_fmt(src_type);
 		node[9]  = (u8) hog_mode;
 		node[10] = 0x34;              /* op = Hog */
 		node[11] = 2;
