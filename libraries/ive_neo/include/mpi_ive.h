@@ -326,12 +326,17 @@ HI_S32 HI_MPI_IVE_SVM_Predict(IVE_HANDLE *pIveHandle,
                               IVE_DST_MEM_INFO_S *pstDst,
                               HI_BOOL bInstant);
 
+/* Perspective transform — cv500-only HW op. Submits up to 8 ROIs in
+ * a single call; each ROI gets its own point-pair table and its own
+ * dst image. enAlgMode picks similarity / non-reflective-similarity /
+ * affine; enCscMode does an optional YUV→RGB conversion on the output.
+ * Returns 0 on success with the handle written to *pIveHandle. */
 HI_S32 HI_MPI_IVE_PerspTrans(IVE_HANDLE *pIveHandle,
                              IVE_SRC_IMAGE_S *pstSrc,
-                             IVE_ROI_INFO_S *pstRoi,
-                             IVE_DST_IMAGE_S *pstDst,
-                             IVE_SRC_MEM_INFO_S *pstPointPair,
-                             IVE_PERSP_TRANS_CTRL_S *pstCtrl,
+                             IVE_RECT_U32_S astRoi[],
+                             IVE_SRC_MEM_INFO_S astPointPair[],
+                             IVE_DST_IMAGE_S astDst[],
+                             IVE_PERSP_TRANS_CTRL_S *pstPerspTransCtrl,
                              HI_BOOL bInstant);
 
 HI_S32 HI_MPI_IVE_Hog(IVE_HANDLE *pIveHandle,
