@@ -1343,6 +1343,102 @@ static long ive_op_lbp(unsigned long arg)
 	return ive_submit_nonxnn(node, buf);
 }
 
+/* ---- CSC (op=2): arg = {handle(8), src(72), dst(72), ctrl(4), instant(4)} ---- *
+ * Color-Space Conversion. cv500-only HW op (vendor blob
+ * `ive_fill_csc_task` @0x78cc). 12 modes: BT601/BT709 × YUV2RGB /
+ * YUV2HSV / YUV2LAB / RGB2YUV.
+ *
+ * First cut covers 8 modes that need no on-chip table:
+ *   0..3 YUV2{RGB}, 8..11 RGB2{YUV}.
+ * HSV (modes 4..5) and LAB (modes 6..7) need rgb2hsv (0x800 B) /
+ * rgb2lab (0x1a00 B) tables copied into MMZ on first use (vendor does
+ * this in `ive_csc` before calling fill_task). Shipping table init is
+ * a follow-up — return -EOPNOTSUPP for those modes.
+ *
+ * Field map (decoded from `ive_fill_csc_task`):
+ *   node[10]=2 (op), node[11]=enMode
+ *   node[8]: src format byte — 1 YUV420SP, 2 YUV422SP, 3 U8C3_PKG, 4 U8C3_PLN
+ *   node[9]: dst format byte — 0 YUV420SP, 1 YUV422SP, 2 U8C3_PKG, 3 U8C3_PLN
+ *   node[40,42] = width, height
+ *   Plane phys / strides:
+ *     2-plane SP : node[16,44] = p0/s0, node[24,46] = p1/s1
+ *     1-plane PKG: node[16,44] = p0/s0
+ *     3-plane PLN: node[16,24,32] / [44,46,48]
+ *   Dst plane lanes shift +4: node[20,28,36] / [50,52,54].
+ */
+static long ive_op_csc_cv500(unsigned long arg)
+{
+	u8 *buf = (u8 *)arg;
+	u8 *src = buf + 8, *dst = buf + 80, *ctrl = buf + 152;
+	u32 mode = *(u32 *)(ctrl + 0);
+	u32 src_type = IMG_TYPE(src);
+	u32 dst_type = IMG_TYPE(dst);
+	u8  src_fmt, dst_fmt;
+	u8 node[208];
+
+	if (IVE_CHECK_IMG(src) || IVE_CHECK_IMG(dst))
+		return -EINVAL;
+
+	if (mode >= 12) {
+		pr_info("ive_neo: CSC bad enMode=%u (0..11)\n", mode);
+		return -EINVAL;
+	}
+	if (mode >= 4 && mode <= 7)
+		return -EOPNOTSUPP;          /* HSV/LAB — table init not yet implemented */
+
+	switch (src_type) {
+	case 2:  src_fmt = 1; break;          /* YUV420SP */
+	case 3:  src_fmt = 2; break;          /* YUV422SP */
+	case 10: src_fmt = 3; break;          /* U8C3_PACKAGE */
+	case 11: src_fmt = 4; break;          /* U8C3_PLANAR */
+	default:
+		pr_info("ive_neo: CSC bad src enType=%u\n", src_type);
+		return -EINVAL;
+	}
+	switch (dst_type) {
+	case 2:  dst_fmt = 0; break;
+	case 3:  dst_fmt = 1; break;
+	case 10: dst_fmt = 2; break;
+	case 11: dst_fmt = 3; break;
+	default:
+		pr_info("ive_neo: CSC bad dst enType=%u\n", dst_type);
+		return -EINVAL;
+	}
+
+	memset(node, 0, sizeof(node));
+	node[8]  = src_fmt;
+	node[9]  = dst_fmt;
+	node[10] = 2;                         /* op = CSC */
+	node[11] = (u8) mode;
+	*(u16 *)(node + 40) = (u16)IMG_WIDTH(src);
+	*(u16 *)(node + 42) = (u16)IMG_HEIGHT(src);
+
+	*(u32 *)(node + 16) = IMG_PHYS(src);
+	*(u16 *)(node + 44) = (u16)IMG_STRIDE(src);
+	if (src_type == 2 || src_type == 3 || src_type == 11) {
+		*(u32 *)(node + 24) = *(u32 *)(src + 8);
+		*(u16 *)(node + 46) = *(u16 *)(src + 52);
+	}
+	if (src_type == 11) {
+		*(u32 *)(node + 32) = *(u32 *)(src + 16);
+		*(u16 *)(node + 48) = *(u16 *)(src + 56);
+	}
+
+	*(u32 *)(node + 20) = IMG_PHYS(dst);
+	*(u16 *)(node + 50) = (u16)IMG_STRIDE(dst);
+	if (dst_type == 2 || dst_type == 3 || dst_type == 11) {
+		*(u32 *)(node + 28) = *(u32 *)(dst + 8);
+		*(u16 *)(node + 52) = *(u16 *)(dst + 52);
+	}
+	if (dst_type == 11) {
+		*(u32 *)(node + 36) = *(u32 *)(dst + 16);
+		*(u16 *)(node + 54) = *(u16 *)(dst + 56);
+	}
+
+	pr_info_once("ive_neo: CSC handler wired (HW op 2, modes 0..3 + 8..11)\n");
+	return ive_submit_nonxnn(node, buf);
+}
+
 /* ---- Dilate (op=6): arg = {handle(8), src(72), dst(72), ctrl(25 mask)} ---- */
 static long ive_op_dilate(unsigned long arg)
 {
@@ -2615,9 +2711,14 @@ static long ive_dispatch(unsigned int cmd, unsigned long arg)
 	/* (b) reuses ive_fill_hist_task with node[7]=0x61 + LUT remap. */
 	case 0xc0b8462au:      return 0;  /* EqualizeHist — issue #112 follow-up */
 
-	/* (a) cv500 has full HW path (ive_fill_csc_task @0x???? etc.) —
-	 * the "VGS" comment was wrong for cv500. Worth porting. */
-	case 0xc0a04602u:      return 0;  /* CSC — issue #112 follow-up */
+	case 0xc0a04602u:                /* CSC */
+#if defined(hi3516cv500)
+		/* HW dispatch — modes 0..3 (YUV2RGB) + 8..11 (RGB2YUV).
+		 * Modes 4..7 (YUV2HSV/LAB) return -EOPNOTSUPP. */
+		return ive_op_csc_cv500(arg);
+#else
+		return 0;
+#endif
 	case 0xc0c04603u:      return 0;  /* FilterAndCSC — issue #112 follow-up */
 	case 0xc008462eu:      return 0;  /* Resize — multi-N, issue #112 follow-up */
 	case 0xc2c0461cu:      return 0;  /* LKOpticalFlowPyr — has ive_lk_optical_flow_pyr + fill + check */

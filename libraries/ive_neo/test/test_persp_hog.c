@@ -482,15 +482,89 @@ static int test_lbp(void)
     return g_failures - failures_before;
 }
 
+/* CSC test allocates a U8C3_PACKAGE dst (W*H*3 bytes) — separate from
+ * the YUV420SP IMG_SIZE since the formats differ in size. */
+#define RGB_SIZE (W * H * 3)
+
+static HI_S32 alloc_image_rgb_pkg(IVE_IMAGE_S *img, HI_U32 w, HI_U32 h)
+{
+    HI_U64 phys;
+    HI_VOID *virt;
+    HI_S32 ret = HI_MPI_SYS_MmzAlloc(&phys, &virt, NULL, NULL, RGB_SIZE);
+    if (ret != HI_SUCCESS) return ret;
+    memset(img, 0, sizeof(*img));
+    img->enType = IVE_IMAGE_TYPE_U8C3_PACKAGE;
+    img->au64PhyAddr[0] = phys;
+    img->au64VirAddr[0] = (HI_U64)(uintptr_t)virt;
+    img->au32Stride[0] = w * 3;
+    img->u32Width = w;
+    img->u32Height = h;
+    return HI_SUCCESS;
+}
+
+static int test_csc(void)
+{
+    IVE_IMAGE_S src, dst;
+    IVE_CSC_CTRL_S ctrl;
+    IVE_HANDLE h = -1;
+    HI_S32 ret;
+    HI_U8 *src_y, *dst_rgb;
+    int non_sentinel, failures_before;
+
+    printf("\n=== CSC YUV420SP -> U8C3_PACKAGE on %ux%u (reachability) ===\n",
+           W, H);
+    failures_before = g_failures;
+    memset(&src, 0, sizeof(src));
+    memset(&dst, 0, sizeof(dst));
+
+    if (alloc_image(&src, W, H) != HI_SUCCESS) return 1;
+    if (alloc_image_rgb_pkg(&dst, W, H) != HI_SUCCESS) {
+        free_image(&src); return 1;
+    }
+    src_y   = (HI_U8 *)(uintptr_t)src.au64VirAddr[0];
+    dst_rgb = (HI_U8 *)(uintptr_t)dst.au64VirAddr[0];
+
+    /* Gradient Y, neutral chroma — mode 0 (BT601 video YUV2RGB) should
+     * produce a non-trivial RGB image (R~G~B~Y when U=V=128 → grayscale). */
+    for (int i = 0; i < Y_SIZE; i++) src_y[i] = (HI_U8)(i & 0xff);
+    memset(src_y + Y_SIZE, 0x80, UV_SIZE);
+    memset(dst_rgb, SENTINEL, RGB_SIZE);
+    HI_MPI_SYS_MmzFlushCache(src.au64PhyAddr[0], src_y, IMG_SIZE);
+    HI_MPI_SYS_MmzFlushCache(dst.au64PhyAddr[0], dst_rgb, RGB_SIZE);
+
+    ctrl.enMode = IVE_CSC_MODE_VIDEO_BT601_YUV2RGB;
+    ret = HI_MPI_IVE_CSC(&h, &src, &dst, &ctrl, HI_TRUE);
+    check(ret == HI_SUCCESS, "ioctl returned success");
+    if (ret == HI_SUCCESS) {
+        check(wait_handle(h) == HI_SUCCESS, "wait completed");
+        HI_MPI_SYS_MmzFlushCache(dst.au64PhyAddr[0], dst_rgb, RGB_SIZE);
+        non_sentinel = 0;
+        for (int i = 0; i < RGB_SIZE; i++)
+            if (dst_rgb[i] != SENTINEL) non_sentinel++;
+        printf("  HW wrote %d/%d dst bytes (replacing sentinel)\n",
+               non_sentinel, RGB_SIZE);
+        check(non_sentinel > RGB_SIZE / 2,
+              "HW wrote majority of dst (CSC reached HW)");
+        printf("  dst[0..23]: ");
+        for (int i = 0; i < 24; i++) printf("%02x ", dst_rgb[i]);
+        printf("\n");
+    }
+
+    free_image(&src);
+    free_image(&dst);
+    return g_failures - failures_before;
+}
+
 int main(int argc, char **argv)
 {
     int rc, total_failures = 0;
-    int skip_hog = 0, skip_ncc = 0, skip_lbp = 0;
+    int skip_hog = 0, skip_ncc = 0, skip_lbp = 0, skip_csc = 0;
 
     for (int i = 1; i < argc; i++) {
         if (!strcmp(argv[i], "--no-hog"))  skip_hog = 1;
         if (!strcmp(argv[i], "--no-ncc"))  skip_ncc = 1;
         if (!strcmp(argv[i], "--no-lbp"))  skip_lbp = 1;
+        if (!strcmp(argv[i], "--no-csc"))  skip_csc = 1;
     }
 
     rc = HI_MPI_SYS_Init();
@@ -506,6 +580,8 @@ int main(int argc, char **argv)
         total_failures += test_ncc();
     if (!skip_lbp)
         total_failures += test_lbp();
+    if (!skip_csc)
+        total_failures += test_csc();
 
     HI_MPI_SYS_Exit();
 
