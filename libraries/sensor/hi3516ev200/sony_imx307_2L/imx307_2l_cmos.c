@@ -106,10 +106,39 @@ extern int imx307_2l_read_register(VI_PIPE ViPipe, int addr);
 
 #define IMX307_VMAX_1080P30_LINEAR (1125 + IMX307_INCREASE_LINES)
 #define IMX307_VMAX_1080P60TO30_WDR (1125 + IMX307_INCREASE_LINES) // 10bit
+#define IMX307_VMAX_720P60_LINEAR  (750)
 
 // sensor fps mode
 #define IMX307_SENSOR_1080P_30FPS_LINEAR_MODE (1)
 #define IMX307_SENSOR_1080P_30FPS_2t1_WDR_MODE (2)
+#define IMX307_SENSOR_1080P_60FPS_LINEAR_MODE (3)
+#define IMX307_SENSOR_720P_60FPS_LINEAR_MODE  (4)
+#define IMX307_SENSOR_FLEX_CROP_LINEAR_MODE   (5)
+
+/* Crop window dimensions for FLEX_CROP mode (Isp_SnsMode=4). Set by
+ * cmos_set_image_mode from pstSensorImageMode->u16Width/u16Height,
+ * read by imx307_2l_flex_crop_init when programming WINMODE=4h +
+ * WINPH/WINPV/WINWH/WINWV. Mirrors the IMX335 g_au32Imx335CropW/H
+ * pattern from PR #99. */
+extern GK_U32 g_au32Imx307_2l_CropW[ISP_MAX_PIPE_NUM];
+extern GK_U32 g_au32Imx307_2l_CropH[ISP_MAX_PIPE_NUM];
+
+GK_U32 g_au32Imx307_2l_CropW[ISP_MAX_PIPE_NUM] = {
+	[0 ...(ISP_MAX_PIPE_NUM - 1)] = 1920
+};
+GK_U32 g_au32Imx307_2l_CropH[ISP_MAX_PIPE_NUM] = {
+	[0 ...(ISP_MAX_PIPE_NUM - 1)] = 1080
+};
+
+void imx307_2l_get_crop(VI_PIPE ViPipe, GK_U32 *pu32W, GK_U32 *pu32H)
+{
+	if (ViPipe < 0 || ViPipe >= ISP_MAX_PIPE_NUM)
+		return;
+	if (pu32W)
+		*pu32W = g_au32Imx307_2l_CropW[ViPipe];
+	if (pu32H)
+		*pu32H = g_au32Imx307_2l_CropH[ViPipe];
+}
 
 #define IMX307_RES_IS_1080P(w, h) ((w) <= 1920 && (h) <= 1080)
 
@@ -283,6 +312,53 @@ static GK_VOID cmos_fps_set(VI_PIPE ViPipe, GK_FLOAT f32Fps,
 				  IMX307_FULL_LINES_MAX :
 				  u32VMAX;
 		pstAeSnsDft->u32LinesPer500ms = IMX307_VMAX_1080P30_LINEAR * 15;
+		break;
+
+	case IMX307_SENSOR_1080P_60FPS_LINEAR_MODE:
+		if ((f32Fps <= 60) && (f32Fps >= 0.12)) {
+			u32VMAX = IMX307_VMAX_1080P30_LINEAR * 60 /
+				  DIV_0_TO_1_FLOAT(f32Fps);
+		} else {
+			ISP_TRACE(MODULE_DBG_ERR, "Not support Fps: %f\n",
+				  f32Fps);
+			return;
+		}
+		u32VMAX = (u32VMAX > IMX307_FULL_LINES_MAX) ?
+				  IMX307_FULL_LINES_MAX :
+				  u32VMAX;
+		pstAeSnsDft->u32LinesPer500ms = IMX307_VMAX_1080P30_LINEAR * 30;
+		break;
+
+	case IMX307_SENSOR_720P_60FPS_LINEAR_MODE:
+		if ((f32Fps <= 60) && (f32Fps >= 0.12)) {
+			u32VMAX = IMX307_VMAX_720P60_LINEAR * 60 /
+				  DIV_0_TO_1_FLOAT(f32Fps);
+		} else {
+			ISP_TRACE(MODULE_DBG_ERR, "Not support Fps: %f\n",
+				  f32Fps);
+			return;
+		}
+		u32VMAX = (u32VMAX > IMX307_FULL_LINES_MAX) ?
+				  IMX307_FULL_LINES_MAX :
+				  u32VMAX;
+		pstAeSnsDft->u32LinesPer500ms = IMX307_VMAX_720P60_LINEAR * 30;
+		break;
+
+	case IMX307_SENSOR_FLEX_CROP_LINEAR_MODE:
+		/* WINMODE=4h, HMAX=0x0898 locked → VMAX dominates fps.
+		 * Datasheet p.49 1H period at FRSEL=1h = 14.8 us =>
+		 * VMAX = 1 / (fps * 14.8e-6). Permit 0.12..240 fps. */
+		if ((f32Fps <= 240) && (f32Fps >= 0.12)) {
+			u32VMAX = (GK_U32)(67568 / DIV_0_TO_1_FLOAT(f32Fps));
+		} else {
+			ISP_TRACE(MODULE_DBG_ERR, "Not support Fps: %f\n",
+				  f32Fps);
+			return;
+		}
+		u32VMAX = (u32VMAX > IMX307_FULL_LINES_MAX) ?
+				  IMX307_FULL_LINES_MAX :
+				  u32VMAX;
+		pstAeSnsDft->u32LinesPer500ms = IMX307_VMAX_720P60_LINEAR * 30;
 		break;
 
 	default:
@@ -1214,6 +1290,33 @@ cmos_set_image_mode(VI_PIPE ViPipe,
 	u8SensorImageMode = pstSnsState->u8ImgMode;
 	pstSnsState->bSyncInit = GK_FALSE;
 
+	/* Explicit Isp_SnsMode dispatch (mirrors IMX335 PR #99 / IMX415 PR #97).
+	 * Isp_SnsMode=1: 720p sub-readout (WINMODE=1h), up to 60 fps.
+	 * Isp_SnsMode=4: flex window crop (WINMODE=4h), arbitrary W×H from
+	 *   pstSensorImageMode->u16Width/u16Height, up to ~200 fps for small
+	 *   crops (datasheet p.63 worked examples: VGA 640x480 @ 129.8,
+	 *   CIF 352x288 @ 205.8 at FRSEL=1h). */
+	if (pstSensorImageMode->u8SnsMode == 1 &&
+	    pstSnsState->enWDRMode == WDR_MODE_NONE) {
+		u8SensorImageMode = IMX307_SENSOR_720P_60FPS_LINEAR_MODE;
+		pstSnsState->u32FLStd = IMX307_VMAX_720P60_LINEAR;
+		g_astimx307_2l_State[ViPipe].u8Hcg = 0x2;
+		goto img_mode_set;
+	}
+	if (pstSensorImageMode->u8SnsMode == 4 &&
+	    pstSnsState->enWDRMode == WDR_MODE_NONE) {
+		u8SensorImageMode = IMX307_SENSOR_FLEX_CROP_LINEAR_MODE;
+		pstSnsState->u32FLStd = IMX307_VMAX_1080P30_LINEAR;
+		g_astimx307_2l_State[ViPipe].u8Hcg = 0x2;
+		if (ViPipe >= 0 && ViPipe < ISP_MAX_PIPE_NUM) {
+			g_au32Imx307_2l_CropW[ViPipe] =
+				pstSensorImageMode->u16Width ?: 1920;
+			g_au32Imx307_2l_CropH[ViPipe] =
+				pstSensorImageMode->u16Height ?: 1080;
+		}
+		goto img_mode_set;
+	}
+
 	if (pstSensorImageMode->f32Fps <= 30) {
 		if (pstSnsState->enWDRMode == WDR_MODE_NONE) {
 			if (IMX307_RES_IS_1080P(pstSensorImageMode->u16Width,
@@ -1247,8 +1350,19 @@ cmos_set_image_mode(VI_PIPE ViPipe,
 						 pstSnsState);
 			return GK_FAILURE;
 		}
+	} else if (pstSensorImageMode->f32Fps <= 60 &&
+		   pstSnsState->enWDRMode == WDR_MODE_NONE &&
+		   IMX307_RES_IS_1080P(pstSensorImageMode->u16Width,
+				       pstSensorImageMode->u16Height)) {
+		u8SensorImageMode = IMX307_SENSOR_1080P_60FPS_LINEAR_MODE;
+		pstSnsState->u32FLStd = IMX307_VMAX_1080P30_LINEAR;
+		g_astimx307_2l_State[ViPipe].u8Hcg = 0x2;
 	} else {
+		IMX307_2L_ERR_MODE_PRINT(pstSensorImageMode, pstSnsState);
+		return GK_FAILURE;
 	}
+
+img_mode_set:
 
 	if ((pstSnsState->bInit == GK_TRUE) &&
 	    (u8SensorImageMode == pstSnsState->u8ImgMode)) {
