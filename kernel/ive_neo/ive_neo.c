@@ -2216,6 +2216,159 @@ static long ive_op_persp_trans_cv500(unsigned long arg)
 	 * next-ptr = 0 (end of chain). */
 	return ive_submit_chain(nodes, roi_num, buf);
 }
+
+/* ---- cv500 Hog (HW op 0x34, ioctl 0xd0684634) ----
+ *
+ * Computes Histogram-of-Oriented-Gradients descriptors over 1..8 ROIs,
+ * writing per-ROI feature blobs into the IVE_DST_BLOB_S array. Each
+ * ROI emits one HW task node; chained submission via ive_submit_chain.
+ *
+ * Arg buffer layout (4200 B, from cv500 vendor blob symbols
+ * ive_check_hog_param + ive_fill_hog_task + ive_hog_proc):
+ *   +0:      IVE_HANDLE return slot                       8 B
+ *   +8:      IVE_SRC_IMAGE_S src                         72 B
+ *   +80:     IVE_RECT_U32_S astRoi[64]                1024 B  (16 B each)
+ *   +1104:   IVE_DST_BLOB_S astDst[64]                3072 B  (48 B each)
+ *   +4176:   IVE_HOG_CTRL_S ctrl                        20 B
+ *       +0:  u32 enCscMode
+ *       +4:  u32 enHogMode (1=vertical, 2=horizontal)
+ *       +8:  u32 u32RoiNum (1..64)
+ *      +12:  u16 u4q12TrancAlfa
+ *      +14:  u8  au8Rsv[2]
+ *   +4196..4199: bInstant
+ *
+ * IVE_DST_BLOB_S (48 B) layout from hi_comm_ive.h:
+ *   +0:  u32 enType
+ *   +4:  u32 u32Stride
+ *   +8:  u64 u64VirAddr
+ *  +16:  u64 u64PhyAddr
+ *  +24:  u32 u32Num
+ *  +28:  u32 width/height/chn union + padding
+ */
+#define IVE_HOG_MAX_ROIS 8
+#define IVE_HOG_CELL_LIMIT 136
+
+/* Magic-divide helper for the cell-grid scale field used by HW. The
+ * vendor blob does umullhi(roi_w<<11, 0xf0f0f0f1) and extracts bits
+ * [22:7] when roi > IVE_HOG_CELL_LIMIT; otherwise the cell-grid scale
+ * is the fixed default 0x800. */
+static u32 ive_hog_cell_scale(u32 roi_dim)
+{
+	if (roi_dim <= IVE_HOG_CELL_LIMIT)
+		return 0x800;
+	{
+		u64 mul = ((u64)(roi_dim << 11)) * 0xf0f0f0f1ULL;
+		return (u32)((mul >> 32) >> 7) & 0xffff;
+	}
+}
+
+static long ive_op_hog_cv500(unsigned long arg)
+{
+	u8 *buf  = (u8 *)arg;
+	u8 *src  = buf + 8;
+	u8 *ctrl = buf + 0x1050;
+	u32 csc_mode = *(u32 *)(ctrl + 0);
+	u32 hog_mode = *(u32 *)(ctrl + 4);
+	u32 roi_num  = *(u32 *)(ctrl + 8);
+	u16 trunc    = *(u16 *)(ctrl + 12);
+	u32 src_phys0 = *(u32 *)(src + 0);
+	u32 src_phys1 = *(u32 *)(src + 8);
+	u32 src_stride0 = *(u32 *)(src + 48);
+	u32 src_stride1 = *(u32 *)(src + 52);
+	u32 src_w = *(u32 *)(src + 60);
+	u32 src_h = *(u32 *)(src + 64);
+	u32 src_type = *(u32 *)(src + 68);
+	u8 nodes[IVE_HOG_MAX_ROIS * 208];
+	u32 i;
+
+	(void)src_type; /* used by node[8] in vendor LUT; we pass raw csc_mode */
+
+	if (!roi_num || roi_num > IVE_HOG_MAX_ROIS) {
+		pr_info("ive_neo: Hog bad roi_num=%u (max %u)\n",
+			roi_num, IVE_HOG_MAX_ROIS);
+		return -EINVAL;
+	}
+	if (hog_mode != 1 && hog_mode != 2) {
+		pr_info("ive_neo: Hog bad enHogMode=%u (1=vert, 2=horiz)\n",
+			hog_mode);
+		return -EINVAL;
+	}
+	if (ive_check_buf(src_phys0, src_stride0, src_w, src_h))
+		return -EINVAL;
+
+	memset(nodes, 0, sizeof(nodes));
+
+	for (i = 0; i < roi_num; i++) {
+		u8 *roi  = buf + 80 + i * 16;
+		u8 *dst  = buf + 1104 + i * 48;
+		u8 *node = nodes + i * 208;
+		u32 roi_x = *(u32 *)(roi + 0);
+		u32 roi_y = *(u32 *)(roi + 4);
+		u32 roi_w = *(u32 *)(roi + 8);
+		u32 roi_h = *(u32 *)(roi + 12);
+		u32 dst_stride = *(u32 *)(dst + 4);
+		u32 dst_phys = *(u32 *)(dst + 16);          /* u64 PhyAddr LO */
+		u32 capped_w_cells = (roi_w < IVE_HOG_CELL_LIMIT ? roi_w : IVE_HOG_CELL_LIMIT) / 4;
+		u32 capped_h_cells = (roi_h < IVE_HOG_CELL_LIMIT ? roi_h : IVE_HOG_CELL_LIMIT) / 4;
+		u32 scale_w = ive_hog_cell_scale(roi_w);
+		u32 scale_h = ive_hog_cell_scale(roi_h);
+
+		/* Cell count needs at least 2 cells per axis (vendor does
+		 * (capped_dim/4) - 2 unsigned, would wrap if dim < 8). */
+		if (capped_w_cells < 2 || capped_h_cells < 2) {
+			pr_info("ive_neo: Hog roi[%u] too small w=%u h=%u (need ≥8 each)\n",
+				i, roi_w, roi_h);
+			return -EINVAL;
+		}
+		capped_w_cells -= 2;
+		capped_h_cells -= 2;
+
+		if (!dst_phys || (dst_phys & 0xf)) {
+			pr_info("ive_neo: Hog dst[%u] phys=0x%x invalid\n",
+				i, dst_phys);
+			return -EINVAL;
+		}
+		if (!roi_w || !roi_h ||
+		    roi_x + roi_w > src_w || roi_y + roi_h > src_h) {
+			pr_info("ive_neo: Hog roi[%u] x=%u y=%u w=%u h=%u out of src %ux%u\n",
+				i, roi_x, roi_y, roi_w, roi_h, src_w, src_h);
+			return -EINVAL;
+		}
+
+		node[6]  = 0;
+		node[8]  = (u8) csc_mode;     /* approximation; vendor LUT */
+		node[9]  = (u8) hog_mode;
+		node[10] = 0x34;              /* op = Hog */
+		node[11] = 2;
+		*(u32 *)(node + 16) = src_phys0;
+		*(u32 *)(node + 24) = src_phys1;
+		*(u16 *)(node + 40) = (u16) src_w;
+		*(u16 *)(node + 42) = (u16) src_h;
+		*(u16 *)(node + 44) = (u16) src_stride0;
+		*(u16 *)(node + 46) = (u16) src_stride1;
+		if (hog_mode == 1) {
+			*(u16 *)(node + 50) = (u16)(dst_stride << 1);
+			*(u16 *)(node + 52) = (u16)((dst_stride << 1) * capped_h_cells);
+		} else {
+			*(u16 *)(node + 54) = (u16)((dst_stride << 1) * capped_w_cells);
+		}
+		*(u16 *)(node + 102) = trunc;
+		*(u32 *)(node + 124) = dst_phys;
+		*(u32 *)(node + 128) = dst_phys;
+		*(u32 *)(node + 148) = roi_x << 8;
+		*(u32 *)(node + 152) = roi_y << 8;
+		*(u32 *)(node + 156) = roi_w;
+		*(u32 *)(node + 160) = roi_h;
+		*(u32 *)(node + 164) = scale_w;
+		*(u32 *)(node + 168) = scale_h;
+		node[176] = (u8) csc_mode;
+		node[177] = 4;
+		*(u16 *)(node + 192) = (u16) capped_w_cells;
+		*(u16 *)(node + 194) = (u16) capped_h_cells;
+	}
+
+	return ive_submit_chain(nodes, roi_num, buf);
+}
 #endif
 
 #ifndef IVE_STANDALONE
@@ -2377,12 +2530,14 @@ static long ive_dispatch(unsigned int cmd, unsigned long arg)
 		return 0;
 #endif
 	case 0xd0684634u:      /* HI_MPI_IVE_Hog (cv500 op 0x34, arg 4200 B) */
-		/* HW dispatch not yet implemented (the field map has a
-		 * cell-grid math path that needs more RE). Until then, the
-		 * enable_cv500_extras param can flip Hog into diagnostic
-		 * logging — keeps the silent-stub default while letting us
-		 * capture real-world call patterns from libive when needed. */
-		return ive_diag_cv500_extras("Hog", arg, _IOC_SIZE(cmd));
+#if defined(hi3516cv500)
+		/* HW dispatch — builds 1..8 chained nodes (one per ROI),
+		 * submits, waits for IRQ. Field map from ive_fill_hog_task
+		 * with the cell-grid scale magic-divide replicated. */
+		return ive_op_hog_cv500(arg);
+#else
+		return 0;
+#endif
 #endif
 	default:               return 0;
 	}
