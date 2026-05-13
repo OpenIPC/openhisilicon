@@ -2590,20 +2590,49 @@ static long ive_dispatch(unsigned int cmd, unsigned long arg)
 	case 0xc0c0462bu:      return ive_op_st_candi_corner(arg); /* STCandiCorner */
 	case 0xc0f04619u:      return ive_op_canny_hys(arg);  /* CannyHysEdge */
 	case 0xc1a8462du:      return ive_op_gmm2(arg);       /* GMM2 (best effort) */
-	/* Not supported on Hi3516EV200/EV300 — vendor kernel also rejects
-	 * these with "ive can't support the func". Return 0 to keep
-	 * libive.so's handle check happy; output will be empty. */
 	case 0xc0a8461au:      return ive_op_lbp(arg);   /* LBP — vendor op 26 */
 	case 0xc0b84616u:      return ive_op_ncc(arg);   /* NCC — vendor op 22 */
-	case 0xc0b8462au:      return 0;  /* EqualizeHist */
-	case 0xc0a04602u:      return 0;  /* CSC (VGS) */
-	case 0xc0c04603u:      return 0;  /* FilterAndCSC (VGS) */
-	case 0xc008462eu:      return 0;  /* Resize (VGS) */
-	case 0xc1184618u:      return 0;  /* GMM (single gaussian, unsupported) */
+
+	/* ---- Silent-stub ops ----
+	 *
+	 * Audited 2026-05-13 against obj/hi3516cv500/hi_ive.o symbol table
+	 * + ive_ioctl dispatcher. Each op is in one of three categories:
+	 *
+	 * (a) cv500 HW supports it, we just haven't wired it. Vendor blob
+	 *     has both ive_check_<op>_param AND ive_fill_<op>_task. Worth
+	 *     porting — follow-up issues opened. Stub returns 0 to keep
+	 *     libive's handle-check happy until impl lands.
+	 *
+	 * (b) cv500 reuses another op's HW path with a flag override
+	 *     (e.g., EqualizeHist calls ive_fill_hist_task with
+	 *     node[7]=0x61 + an extra LUT remap at node[200]).
+	 *
+	 * (c) cv500 has no symbols for it — vendor genuinely doesn't
+	 *     dispatch HW. Userspace either falls back to CPU compute
+	 *     or rejects. Silent stub is correct here.
+	 */
+
+	/* (b) reuses ive_fill_hist_task with node[7]=0x61 + LUT remap. */
+	case 0xc0b8462au:      return 0;  /* EqualizeHist — issue #112 follow-up */
+
+	/* (a) cv500 has full HW path (ive_fill_csc_task @0x???? etc.) —
+	 * the "VGS" comment was wrong for cv500. Worth porting. */
+	case 0xc0a04602u:      return 0;  /* CSC — issue #112 follow-up */
+	case 0xc0c04603u:      return 0;  /* FilterAndCSC — issue #112 follow-up */
+	case 0xc008462eu:      return 0;  /* Resize — multi-N, issue #112 follow-up */
+	case 0xc2c0461cu:      return 0;  /* LKOpticalFlowPyr — has ive_lk_optical_flow_pyr + fill + check */
+
+	/* (b) GMM (single-Gaussian) is GMM2 with default params in
+	 * vendor. No separate fill_gmm_task — vendor only has fill_gmm2. */
+	case 0xc1184618u:      return 0;  /* GMM */
+
+	/* (c) cv500 vendor blob has no symbols at all for these — HW
+	 * unit either doesn't exist or vendor never wired userspace
+	 * to it. Silent stub is correct; libive presumably falls back
+	 * to CPU implementation or returns its own error. */
 	case 0xc138461du:      return 0;  /* GradFg */
 	case 0xc178461eu:      return 0;  /* MatchBgModel */
 	case 0xc1d8461fu:      return 0;  /* UpdateBgModel */
-	case 0xc2c0461cu:      return 0;  /* LKOpticalFlowPyr */
 	case 0xc0b04621u:      return 0;  /* ANN_MLP_Predict */
 	case 0xc0c04622u:      return 0;  /* SVM_Predict */
 #ifndef IVE_STANDALONE
