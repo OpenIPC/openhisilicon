@@ -753,6 +753,79 @@ typedef struct hiIVE_HOG_CTRL_S {
     HI_U8          au8Rsv[2];
 } IVE_HOG_CTRL_S;
 
+/* --- KCF (Kernelized Correlation Filter tracker) — cv500-only ---
+ * Structs match the cv500 SDK header (Hi3516CV500_SDK_V2.0.2.1). The
+ * 10 HI_MPI_IVE_KCF_* userland funcs in libive_neo currently ship as
+ * stubs returning HI_ERR_IVE_NOT_SUPPORT — see issue #109. The kernel
+ * has no KCF dispatch yet either; KCF_Process needs HW node build,
+ * the other nine are CPU-side helpers (trig tables, list mgmt, bbox
+ * math). */
+
+typedef struct hiIVE_KCF_PRO_CTRL_S {
+    IVE_CSC_MODE_E enCscMode;
+    IVE_MEM_INFO_S stTmpBuf;
+    HI_U1Q15       u1q15InterFactor; /* Blend coefficient, [0, 32768] */
+    HI_U0Q16       u0q16Lamda;       /* Regularization coefficient, [0, 65535] */
+    HI_U4Q12       u4q12TrancAlfa;   /* Normalization thresh, [0, 4095] */
+    HI_U0Q8        u0q8Sigma;        /* Gaussian kernel bandwidth, [0, 255] */
+    HI_U8          u8RespThr;
+} IVE_KCF_PRO_CTRL_S;
+
+typedef struct hiIVE_KCF_OBJ_S {
+    IVE_ROI_INFO_S stRoiInfo;
+    IVE_MEM_INFO_S stCosWinX;
+    IVE_MEM_INFO_S stCosWinY;
+    IVE_MEM_INFO_S stGaussPeak;
+    IVE_MEM_INFO_S stHogFeature;
+    IVE_MEM_INFO_S stAlpha;
+    IVE_MEM_INFO_S stDst;
+    HI_U3Q5        u3q5Padding;      /* Padding multiplier on ROI dimensions [48, 160] */
+    HI_U8          au8Reserved[3];
+} IVE_KCF_OBJ_S;
+
+typedef struct hiIVE_LIST_HEAD_S {
+    struct hiIVE_LIST_HEAD_S *pstNext, *pstPrev;
+} IVE_LIST_HEAD_S;
+
+typedef struct hiIVE_KCF_OBJ_NODE_S {
+    IVE_LIST_HEAD_S stList;
+    IVE_KCF_OBJ_S   stKcfObj;
+} IVE_KCF_OBJ_NODE_S;
+
+typedef enum hiIVE_KCF_LIST_STATE_E {
+    IVE_KCF_LIST_STATE_CREATE  = 0x1,
+    IVE_KCF_LIST_STATE_DESTORY = 0x2,
+    IVE_KCF_LIST_STATE_BUTT
+} IVE_KCF_LIST_STATE_E;
+
+typedef struct hiIVE_KCF_OBJ_LIST_S {
+    IVE_KCF_OBJ_NODE_S   *pstObjNodeBuf;
+    IVE_LIST_HEAD_S       stFreeObjList;
+    IVE_LIST_HEAD_S       stTrainObjList;
+    IVE_LIST_HEAD_S       stTrackObjList;
+    HI_U32                u32FreeObjNum;
+    HI_U32                u32TrainObjNum;
+    HI_U32                u32TrackObjNum;
+    HI_U32                u32MaxObjNum;
+    IVE_KCF_LIST_STATE_E  enListState;
+    HI_U8                *pu8TmpBuf;
+    HI_U32                u32Width;
+    HI_U32                u32Height;
+} IVE_KCF_OBJ_LIST_S;
+
+typedef struct hiIVE_KCF_BBOX_S {
+    IVE_KCF_OBJ_NODE_S *pstNode;
+    HI_S32              s32Response;
+    IVE_ROI_INFO_S      stRoiInfo;
+    HI_BOOL             bTrackOk;
+    HI_BOOL             bRoiRefresh;
+} IVE_KCF_BBOX_S;
+
+typedef struct hiIVE_KCF_BBOX_CTRL_S {
+    HI_U32 u32MaxBboxNum;
+    HI_S32 s32RespThr;
+} IVE_KCF_BBOX_CTRL_S;
+
 #ifdef __cplusplus
 }
 #endif

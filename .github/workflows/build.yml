@@ -388,6 +388,18 @@ jobs:
           for sym in HI_MPI_IVE_PerspTrans HI_MPI_IVE_Hog; do
               check libraries/ive_neo/libive_neo.so $sym
           done
+          # KCF tracker family — 10 stubs added per issue #109. Real
+          # impls land in follow-ups; this assertion is purely
+          # link-surface (symbols must exist) so callers compiled
+          # against cv500 SDK headers can load the library.
+          for sym in \
+              HI_MPI_IVE_KCF_GetMemSize HI_MPI_IVE_KCF_CreateObjList \
+              HI_MPI_IVE_KCF_DestroyObjList HI_MPI_IVE_KCF_CreateGaussPeak \
+              HI_MPI_IVE_KCF_CreateCosWin HI_MPI_IVE_KCF_GetTrainObj \
+              HI_MPI_IVE_KCF_Process HI_MPI_IVE_KCF_GetObjBbox \
+              HI_MPI_IVE_KCF_JudgeObjBboxTrackState HI_MPI_IVE_KCF_ObjUpdate; do
+              check libraries/ive_neo/libive_neo.so $sym
+          done
           for sym in hi_ivp_init hi_ivp_deinit hi_ivp_process_ex hi_ivp_load_resource_from_memory hi_ivp_set_ctrl_attr; do
               check libraries/ivp_neo/libivp_neo.so $sym
           done

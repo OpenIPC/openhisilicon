@@ -1064,3 +1064,101 @@ HI_S32 HI_MPI_IVE_CNN_GetResult(IVE_SRC_DATA_S *pstSrc, IVE_DST_MEM_INFO_S *pstD
     (void)pstSrc; (void)pstDst; (void)pstCnnModel; (void)pstCnnCtrl;
     return HI_ERR_IVE_NOT_SUPPORT;
 }
+
+/* ===================================================================
+ * KCF tracker family — cv500-only HW. All 10 stubs for issue #109.
+ *
+ * Symbols are exported so callers compiled against the cv500 SDK
+ * headers can link against libive_neo.so even though runtime calls
+ * fail with HI_ERR_IVE_NOT_SUPPORT. Real implementations land in
+ * follow-up PRs:
+ *   - 9 userspace helpers (trig tables, list mgmt, bbox math)
+ *   - KCF_Process needs kernel HW dispatch (vendor blob symbol
+ *     ive_fill_kcf_task @0x9718 in obj/hi3516cv500/hi_ive.o)
+ * =================================================================== */
+
+HI_S32 HI_MPI_IVE_KCF_GetMemSize(HI_U32 u32MaxObjNum, HI_U32 *pu32Size)
+{
+    (void)u32MaxObjNum;
+    if (pu32Size) *pu32Size = 0;
+    return HI_ERR_IVE_NOT_SUPPORT;
+}
+
+HI_S32 HI_MPI_IVE_KCF_CreateObjList(IVE_MEM_INFO_S *pstMem, HI_U32 u32MaxObjNum,
+                                    IVE_KCF_OBJ_LIST_S *pstObjList)
+{
+    (void)pstMem; (void)u32MaxObjNum;
+    if (pstObjList)
+        memset(pstObjList, 0, sizeof(*pstObjList));
+    return HI_ERR_IVE_NOT_SUPPORT;
+}
+
+HI_S32 HI_MPI_IVE_KCF_DestroyObjList(IVE_KCF_OBJ_LIST_S *pstObjList)
+{
+    (void)pstObjList;
+    return HI_SUCCESS;
+}
+
+HI_S32 HI_MPI_IVE_KCF_CreateGaussPeak(HI_U3Q5 u3q5Padding,
+                                      IVE_DST_MEM_INFO_S *pstGaussPeak)
+{
+    (void)u3q5Padding; (void)pstGaussPeak;
+    return HI_ERR_IVE_NOT_SUPPORT;
+}
+
+HI_S32 HI_MPI_IVE_KCF_CreateCosWin(IVE_DST_MEM_INFO_S *pstCosWinX,
+                                   IVE_DST_MEM_INFO_S *pstCosWinY)
+{
+    (void)pstCosWinX; (void)pstCosWinY;
+    return HI_ERR_IVE_NOT_SUPPORT;
+}
+
+HI_S32 HI_MPI_IVE_KCF_GetTrainObj(HI_U3Q5 u3q5Padding, IVE_ROI_INFO_S astRoiInfo[],
+                                  HI_U32 u32ObjNum,
+                                  IVE_MEM_INFO_S *pstCosWinX,
+                                  IVE_MEM_INFO_S *pstCosWinY,
+                                  IVE_MEM_INFO_S *pstGaussPeak,
+                                  IVE_KCF_OBJ_LIST_S *pstObjList)
+{
+    (void)u3q5Padding; (void)astRoiInfo; (void)u32ObjNum;
+    (void)pstCosWinX; (void)pstCosWinY; (void)pstGaussPeak; (void)pstObjList;
+    return HI_ERR_IVE_NOT_SUPPORT;
+}
+
+HI_S32 HI_MPI_IVE_KCF_Process(IVE_HANDLE *pIveHandle,
+                              IVE_SRC_IMAGE_S *pstSrc,
+                              IVE_KCF_OBJ_LIST_S *pstObjList,
+                              IVE_KCF_PRO_CTRL_S *pstKcfProCtrl,
+                              HI_BOOL bInstant)
+{
+    (void)pstSrc; (void)pstObjList; (void)pstKcfProCtrl; (void)bInstant;
+    if (pIveHandle) *pIveHandle = -1;
+    return HI_ERR_IVE_NOT_SUPPORT;
+}
+
+HI_S32 HI_MPI_IVE_KCF_GetObjBbox(IVE_KCF_OBJ_LIST_S *pstObjList,
+                                 IVE_KCF_BBOX_S astBbox[],
+                                 HI_U32 *pu32BboxObjNum,
+                                 IVE_KCF_BBOX_CTRL_S *pstKcfBboxCtrl)
+{
+    (void)pstObjList; (void)astBbox; (void)pstKcfBboxCtrl;
+    if (pu32BboxObjNum) *pu32BboxObjNum = 0;
+    return HI_ERR_IVE_NOT_SUPPORT;
+}
+
+HI_S32 HI_MPI_IVE_KCF_JudgeObjBboxTrackState(IVE_ROI_INFO_S *pstRoiInfo,
+                                             IVE_KCF_BBOX_S *pstBbox,
+                                             HI_BOOL *pbTrackOk)
+{
+    (void)pstRoiInfo; (void)pstBbox;
+    if (pbTrackOk) *pbTrackOk = HI_FALSE;
+    return HI_ERR_IVE_NOT_SUPPORT;
+}
+
+HI_S32 HI_MPI_IVE_KCF_ObjUpdate(IVE_KCF_OBJ_LIST_S *pstObjList,
+                                IVE_KCF_BBOX_S astBbox[],
+                                HI_U32 u32BboxObjNum)
+{
+    (void)pstObjList; (void)astBbox; (void)u32BboxObjNum;
+    return HI_ERR_IVE_NOT_SUPPORT;
+}
