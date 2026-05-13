@@ -11,6 +11,11 @@
 #include <linux/string.h>
 #include <linux/io.h>
 #include <linux/i2c.h>
+#include <linux/workqueue.h>
+#include <linux/spinlock.h>
+#include <linux/interrupt.h>
+#include <linux/preempt.h>
+#include <linux/printk.h>
 
 #include "../../../compat/kernel_compat.h"
 
@@ -30,6 +35,107 @@ static struct i2c_board_info g_hi_info = {
 #endif
 
 static struct i2c_client *g_sensor_client[I2C_MAX_NUM] = { HI_NULL };
+
+#ifndef __HuaweiLite__
+/*
+ * The cv500 ISP vendor blob calls hi_sensor_i2c_write() from its IRQ
+ * bottom-half (isp_drv_int_bottom_half) for per-frame AE/AGC reconfig.
+ * i2c_master_send() acquires the adapter's rt_mutex, which trips WARN_ON
+ * in atomic context on 4.9 kernels and then the controller logs
+ * "wait idle abort" for the failed transfer. Defer such writes to a
+ * per-bus ordered workqueue so the actual i2c transfer runs in process
+ * context, while process-context callers (sensor init, MPI ioctls) keep
+ * the original synchronous fast path.
+ */
+#define SENSOR_I2C_DEFER_RING 64
+struct sensor_i2c_defer_entry {
+    unsigned char  dev_addr;
+    unsigned int   reg_addr;
+    unsigned int   reg_addr_num;
+    unsigned int   data;
+    unsigned int   data_byte_num;
+};
+struct sensor_i2c_bus_defer {
+    struct workqueue_struct *wq;
+    struct work_struct       work;
+    spinlock_t               lock;
+    struct sensor_i2c_defer_entry ring[SENSOR_I2C_DEFER_RING];
+    unsigned int head;
+    unsigned int tail;
+    unsigned int drops;
+};
+static struct sensor_i2c_bus_defer g_defer[I2C_MAX_NUM];
+
+static int do_sensor_i2c_write_sync(unsigned char i2c_dev, unsigned char dev_addr,
+                                    unsigned int reg_addr, unsigned int reg_addr_num,
+                                    unsigned int data, unsigned int data_byte_num);
+
+static void sensor_i2c_defer_worker(struct work_struct *w)
+{
+    struct sensor_i2c_bus_defer *bd = container_of(w, struct sensor_i2c_bus_defer, work);
+    unsigned int bus = bd - g_defer;
+    struct sensor_i2c_defer_entry e;
+    unsigned long flags;
+    int ret;
+
+    while (1) {
+        spin_lock_irqsave(&bd->lock, flags);
+        if (bd->head == bd->tail) {
+            spin_unlock_irqrestore(&bd->lock, flags);
+            break;
+        }
+        e = bd->ring[bd->tail & (SENSOR_I2C_DEFER_RING - 1)];
+        bd->tail++;
+        spin_unlock_irqrestore(&bd->lock, flags);
+
+        ret = do_sensor_i2c_write_sync((unsigned char)bus, e.dev_addr,
+                                       e.reg_addr, e.reg_addr_num,
+                                       e.data, e.data_byte_num);
+        if (ret != 0) {
+            printk_ratelimited(KERN_WARNING
+                "open_sensor_i2c: deferred write bus=%u dev=0x%02x reg=0x%x failed (%d)\n",
+                bus, e.dev_addr, e.reg_addr, ret);
+        }
+    }
+}
+
+static int sensor_i2c_enqueue_defer(unsigned char i2c_dev, unsigned char dev_addr,
+                                    unsigned int reg_addr, unsigned int reg_addr_num,
+                                    unsigned int data, unsigned int data_byte_num)
+{
+    struct sensor_i2c_bus_defer *bd = &g_defer[i2c_dev];
+    unsigned long flags;
+    unsigned int used;
+
+    if (bd->wq == HI_NULL) {
+        return -ENODEV;
+    }
+
+    spin_lock_irqsave(&bd->lock, flags);
+    used = bd->head - bd->tail;
+    if (used >= SENSOR_I2C_DEFER_RING) {
+        bd->drops++;
+        spin_unlock_irqrestore(&bd->lock, flags);
+        printk_ratelimited(KERN_WARNING
+            "open_sensor_i2c: defer ring full on bus %u (drops=%u)\n",
+            i2c_dev, bd->drops);
+        return -EBUSY;
+    }
+    bd->ring[bd->head & (SENSOR_I2C_DEFER_RING - 1)] =
+        (struct sensor_i2c_defer_entry){
+            .dev_addr      = dev_addr,
+            .reg_addr      = reg_addr,
+            .reg_addr_num  = reg_addr_num,
+            .data          = data,
+            .data_byte_num = data_byte_num,
+        };
+    bd->head++;
+    spin_unlock_irqrestore(&bd->lock, flags);
+
+    queue_work(bd->wq, &bd->work);
+    return 0;
+}
+#endif /* !__HuaweiLite__ */
 
 #ifdef __HuaweiLite__
 static int hi_sensor_i2c_write(unsigned char i2c_dev, unsigned char dev_addr, unsigned int reg_addr,
@@ -91,8 +197,9 @@ static int hi_sensor_i2c_write(unsigned char i2c_dev, unsigned char dev_addr, un
     return 0;
 }
 #else
-static int hi_sensor_i2c_write(unsigned char i2c_dev, unsigned char dev_addr, unsigned int reg_addr,
-                               unsigned int reg_addr_num, unsigned int data, unsigned int data_byte_num)
+static int do_sensor_i2c_write_sync(unsigned char i2c_dev, unsigned char dev_addr,
+                                    unsigned int reg_addr, unsigned int reg_addr_num,
+                                    unsigned int data, unsigned int data_byte_num)
 {
     unsigned char tmp_buf[8]; /* tmp buf size 8 */
     int ret;
@@ -144,6 +251,28 @@ static int hi_sensor_i2c_write(unsigned char i2c_dev, unsigned char dev_addr, un
     }
 
     return 0;
+}
+
+static int hi_sensor_i2c_write(unsigned char i2c_dev, unsigned char dev_addr, unsigned int reg_addr,
+                               unsigned int reg_addr_num, unsigned int data, unsigned int data_byte_num)
+{
+    if (i2c_dev >= I2C_MAX_NUM) {
+        return HI_FAILURE;
+    }
+
+    if (in_interrupt() || in_atomic() || irqs_disabled()) {
+        int qret = sensor_i2c_enqueue_defer(i2c_dev, dev_addr, reg_addr,
+                                            reg_addr_num, data, data_byte_num);
+        if (qret == 0) {
+            return 0;
+        }
+        /* Workqueue not initialised or ring full -- fall through to the
+         * synchronous path so the write still attempts to land. The
+         * legacy WARN may fire in that fallback case. */
+    }
+
+    return do_sensor_i2c_write_sync(i2c_dev, dev_addr, reg_addr,
+                                    reg_addr_num, data, data_byte_num);
 }
 #endif
 
@@ -214,6 +343,13 @@ static int __init hi_dev_init(void)
             g_sensor_client[i] = i2c_new_client_device(i2c_adap, &g_hi_info);
 
             i2c_put_adapter(i2c_adap);
+
+            spin_lock_init(&g_defer[i].lock);
+            INIT_WORK(&g_defer[i].work, sensor_i2c_defer_worker);
+            g_defer[i].wq = alloc_ordered_workqueue("sensor_i2c_%d", WQ_MEM_RECLAIM, i);
+            if (g_defer[i].wq == HI_NULL) {
+                osal_printk("open_sensor_i2c: alloc_ordered_workqueue bus %d failed\n", i);
+            }
         } else {
             osal_printk("i2c:%d get adapter error!\n", i);
         }
@@ -228,6 +364,11 @@ static void __exit hi_dev_exit(void)
     int i;
 
     for (i = 0; i < I2C_MAX_NUM; i++) {
+        if (g_defer[i].wq != HI_NULL) {
+            cancel_work_sync(&g_defer[i].work);
+            destroy_workqueue(g_defer[i].wq);
+            g_defer[i].wq = HI_NULL;
+        }
         if (g_sensor_client[i] != HI_NULL) {
             i2c_unregister_device(g_sensor_client[i]);
         }
