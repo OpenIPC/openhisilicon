@@ -865,24 +865,128 @@ HI_S32 HI_MPI_IVE_Resize(IVE_HANDLE *h, IVE_SRC_IMAGE_S src[], IVE_DST_IMAGE_S d
     return ret;
 }
 
-HI_S32 HI_MPI_IVE_PerspTrans(IVE_HANDLE *h, IVE_SRC_IMAGE_S *src, IVE_ROI_INFO_S *roi,
-                             IVE_DST_IMAGE_S *dst, IVE_SRC_MEM_INFO_S *pts,
-                             IVE_PERSP_TRANS_CTRL_S *c, HI_BOOL inst)
+/* cv500-only HW op (ev200/V4 has no PerspTrans unit). Marshals 1..8
+ * ROIs into the kernel's 7264-byte arg buffer at the documented
+ * offsets and issues the ioctl. The kernel side
+ * (kernel/ive_neo/ive_neo.c::ive_op_persp_trans_cv500) builds an
+ * N-node HW task chain and waits for completion.
+ *
+ * Note the API signature: `roi`, `pts`, `dst` are arrays (length =
+ * ctrl->u16RoiNum, capped at 8). The original stub declared them as
+ * single pointers, which was a translation bug — the cv500 SDK
+ * header has these as `astRoi[]` / `astPointPair[]` / `astDst[]`. */
+#define PT_OFF_SRC      8
+#define PT_OFF_ROI      80
+#define PT_OFF_PP       1104
+#define PT_OFF_DST      2640
+#define PT_OFF_CTRL     0x1c50
+#define PT_ARG_SIZE     7264
+#define PT_MAX_ROIS     8
+#define PT_CMD          0xdc604635u  /* _IOWR('F', 0x35, 7264) */
+
+HI_S32 HI_MPI_IVE_PerspTrans(IVE_HANDLE *h, IVE_SRC_IMAGE_S *src,
+                             IVE_RECT_U32_S astRoi[],
+                             IVE_SRC_MEM_INFO_S astPointPair[],
+                             IVE_DST_IMAGE_S astDst[],
+                             IVE_PERSP_TRANS_CTRL_S *ctrl, HI_BOOL bInstant)
 {
-    /* Not implemented in ive_neo kernel — return NOT_SUPPORT directly. */
-    (void)src; (void)roi; (void)dst; (void)pts; (void)c; (void)inst;
-    if (h) *h = -1;
-    return HI_ERR_IVE_NOT_SUPPORT;
+    uint8_t buf[PT_ARG_SIZE];
+    HI_S32 ret;
+    HI_U16 i, n;
+
+    IVE_CHECK_NULL("HI_MPI_IVE_PerspTrans", h,         "pIveHandle");
+    IVE_CHECK_NULL("HI_MPI_IVE_PerspTrans", src,       "pstSrc");
+    IVE_CHECK_NULL("HI_MPI_IVE_PerspTrans", astRoi,    "astRoi");
+    IVE_CHECK_NULL("HI_MPI_IVE_PerspTrans", astPointPair, "astPointPair");
+    IVE_CHECK_NULL("HI_MPI_IVE_PerspTrans", astDst,    "astDst");
+    IVE_CHECK_NULL("HI_MPI_IVE_PerspTrans", ctrl,      "pstPerspTransCtrl");
+
+    n = ctrl->u16RoiNum;
+    if (!n || n > PT_MAX_ROIS) {
+        IVE_LOG("HI_MPI_IVE_PerspTrans", "u16RoiNum(%u) must be 1..%u",
+                n, PT_MAX_ROIS);
+        return HI_ERR_IVE_ILLEGAL_PARAM;
+    }
+
+    if (ive_open_fd() != HI_SUCCESS)
+        return HI_FAILURE;
+
+    memset(buf, 0, sizeof(buf));
+    memcpy(buf + PT_OFF_SRC, src, SZ_IMG);
+    for (i = 0; i < n; i++) {
+        memcpy(buf + PT_OFF_ROI + i * sizeof(IVE_RECT_U32_S),
+               &astRoi[i], sizeof(IVE_RECT_U32_S));
+        memcpy(buf + PT_OFF_PP + i * SZ_MEM,
+               &astPointPair[i], SZ_MEM);
+        memcpy(buf + PT_OFF_DST + i * SZ_IMG,
+               &astDst[i], SZ_IMG);
+    }
+    memcpy(buf + PT_OFF_CTRL, ctrl, sizeof(IVE_PERSP_TRANS_CTRL_S));
+    put_u32(buf, PT_ARG_SIZE - 4, (uint32_t)bInstant);
+
+    ret = ioctl(g_ive_fd, PT_CMD, buf);
+    *h = (ret == 0) ? (IVE_HANDLE)get_u32(buf, 0) : -1;
+    return ret;
 }
 
-HI_S32 HI_MPI_IVE_Hog(IVE_HANDLE *h, IVE_SRC_IMAGE_S *src, IVE_DST_IMAGE_S *mag,
-                      IVE_DST_IMAGE_S *ang, IVE_DST_MEM_INFO_S *feat,
-                      IVE_SRC_MEM_INFO_S *roi, IVE_HOG_CTRL_S *c, HI_BOOL inst)
+/* cv500-only HW op (ev200/V4 has no HOG unit). Marshals 1..8 ROIs
+ * into the kernel's 4200-byte arg buffer; kernel handler
+ * (kernel/ive_neo/ive_neo.c::ive_op_hog_cv500) builds an N-node HW
+ * task chain.
+ *
+ * Note the signature: `astRoi` and `astDst` are arrays (length =
+ * ctrl->u32RoiNum, capped at 8). The original stub had
+ * Mag/Ang/Feature/Roi as single pointers — translation bug from
+ * the original RE; the cv500 SDK header has the array-based shape
+ * used here. */
+#define HOG_OFF_SRC     8
+#define HOG_OFF_ROI     80
+#define HOG_OFF_DST     1104
+#define HOG_OFF_CTRL    0x1050
+#define HOG_ARG_SIZE    4200
+#define HOG_MAX_ROIS    8
+#define HOG_CMD         0xd0684634u  /* _IOWR('F', 0x34, 4200) */
+#define SZ_BLOB         48           /* sizeof(IVE_BLOB_S) on cv500 */
+
+HI_S32 HI_MPI_IVE_Hog(IVE_HANDLE *h, IVE_SRC_IMAGE_S *src,
+                      IVE_RECT_U32_S astRoi[],
+                      IVE_DST_BLOB_S astDst[],
+                      IVE_HOG_CTRL_S *ctrl, HI_BOOL bInstant)
 {
-    /* Not implemented in ive_neo kernel — return NOT_SUPPORT. */
-    (void)src; (void)mag; (void)ang; (void)feat; (void)roi; (void)c; (void)inst;
-    if (h) *h = -1;
-    return HI_ERR_IVE_NOT_SUPPORT;
+    uint8_t buf[HOG_ARG_SIZE];
+    HI_S32 ret;
+    HI_U32 i, n;
+
+    IVE_CHECK_NULL("HI_MPI_IVE_Hog", h,      "pIveHandle");
+    IVE_CHECK_NULL("HI_MPI_IVE_Hog", src,    "pstSrc");
+    IVE_CHECK_NULL("HI_MPI_IVE_Hog", astRoi, "astRoi");
+    IVE_CHECK_NULL("HI_MPI_IVE_Hog", astDst, "astDst");
+    IVE_CHECK_NULL("HI_MPI_IVE_Hog", ctrl,   "pstHogCtrl");
+
+    n = ctrl->u32RoiNum;
+    if (!n || n > HOG_MAX_ROIS) {
+        IVE_LOG("HI_MPI_IVE_Hog", "u32RoiNum(%u) must be 1..%u",
+                n, HOG_MAX_ROIS);
+        return HI_ERR_IVE_ILLEGAL_PARAM;
+    }
+
+    if (ive_open_fd() != HI_SUCCESS)
+        return HI_FAILURE;
+
+    memset(buf, 0, sizeof(buf));
+    memcpy(buf + HOG_OFF_SRC, src, SZ_IMG);
+    for (i = 0; i < n; i++) {
+        memcpy(buf + HOG_OFF_ROI + i * sizeof(IVE_RECT_U32_S),
+               &astRoi[i], sizeof(IVE_RECT_U32_S));
+        memcpy(buf + HOG_OFF_DST + i * SZ_BLOB,
+               &astDst[i], SZ_BLOB);
+    }
+    memcpy(buf + HOG_OFF_CTRL, ctrl, sizeof(IVE_HOG_CTRL_S));
+    put_u32(buf, HOG_ARG_SIZE - 4, (uint32_t)bInstant);
+
+    ret = ioctl(g_ive_fd, HOG_CMD, buf);
+    *h = (ret == 0) ? (IVE_HANDLE)get_u32(buf, 0) : -1;
+    return ret;
 }
 
 /* ===================================================================

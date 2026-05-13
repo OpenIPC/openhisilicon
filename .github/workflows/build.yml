@@ -238,6 +238,31 @@ jobs:
                   exit 1
               fi
               echo "ok: cv500 build has no XNN dispatch code"
+
+              # PR #107: PerspTrans and Hog have real HW handlers on
+              # cv500. Each handler emits a distinctive log line on bad
+              # input; if those strings vanish, someone reverted the
+              # handler to the silent-stub or diag path. Grep for the
+              # validation message rather than the handler symbol name
+              # so the assertion stays meaningful even if the function
+              # gets renamed.
+              for needle in "PerspTrans bad roi_num" "Hog bad roi_num"; do
+                  if ! strings "$KO" | grep -qF "$needle"; then
+                      echo "FAIL: cv500 .ko missing '$needle' — handler regressed to stub?" >&2
+                      exit 1
+                  fi
+              done
+              echo "ok: cv500 build has PerspTrans + Hog HW handlers wired"
+
+              # The N-node chain submit helper is the shared HW kick
+              # path for both new ops. Its timeout log is the only
+              # string unique to it; absence means the dispatcher is
+              # going through some other (likely wrong) submit path.
+              if ! strings "$KO" | grep -qF "submit_chain: timeout"; then
+                  echo "FAIL: cv500 .ko missing ive_submit_chain — chain dispatch regression" >&2
+                  exit 1
+              fi
+              echo "ok: cv500 build has ive_submit_chain helper"
           fi
 
   #
@@ -281,6 +306,19 @@ jobs:
           _Static_assert(sizeof(IVE_CCBLOB_S)            == 3052, "IVE_CCBLOB_S size");
           _Static_assert(sizeof(IVE_CNN_MODEL_S)         == 232,  "IVE_CNN_MODEL_S size");
           _Static_assert(sizeof(IVE_GMM2_CTRL_S)         == 28,   "IVE_GMM2_CTRL_S size");
+
+          /* cv500-only ops (PerspTrans + Hog). The userspace marshalling
+           * code in libraries/ive_neo/src/ive_ops.c packs these structs
+           * into 7264-byte / 4200-byte ioctl arg buffers at fixed offsets;
+           * a single byte of drift would corrupt the kernel's read. The
+           * IVE_BLOB_S size (used by Hog's astDst[] array, stride 48 in
+           * the kernel) is checked indirectly via the marshalling test
+           * below — assert it explicitly here so the symptom is caught
+           * at "make" time rather than as a runtime EFAULT. */
+          _Static_assert(sizeof(IVE_RECT_U32_S)          == 16,   "IVE_RECT_U32_S size");
+          _Static_assert(sizeof(IVE_PERSP_TRANS_CTRL_S)  == 12,   "IVE_PERSP_TRANS_CTRL_S size");
+          _Static_assert(sizeof(IVE_HOG_CTRL_S)          == 16,   "IVE_HOG_CTRL_S size");
+          _Static_assert(sizeof(IVE_BLOB_S)              == 48,   "IVE_BLOB_S size");
 
           int main(void) { return 0; }
           EOF
@@ -340,6 +378,14 @@ jobs:
               check libraries/mpi_neo/libmpi_neo.so $sym
           done
           for sym in HI_MPI_IVE_Query HI_MPI_IVE_Thresh HI_MPI_IVE_CCL HI_MPI_IVE_SAD HI_MPI_IVE_Dilate HI_MPI_IVE_Erode HI_MPI_IVE_Sobel mpi_ive_xnn_loadmodel mpi_ive_xnn_forward_slice mp_ive_svp_alg_proc_init; do
+              check libraries/ive_neo/libive_neo.so $sym
+          done
+          # cv500-only ops added in PR #107. The previous stubs returned
+          # HI_ERR_IVE_NOT_SUPPORT directly; the marshalling versions in
+          # ive_ops.c pack the arg buffer and ioctl through to the kernel.
+          # If someone reverts to the stub or renames the symbol, this
+          # catches it.
+          for sym in HI_MPI_IVE_PerspTrans HI_MPI_IVE_Hog; do
               check libraries/ive_neo/libive_neo.so $sym
           done
           for sym in hi_ivp_init hi_ivp_deinit hi_ivp_process_ex hi_ivp_load_resource_from_memory hi_ivp_set_ctrl_attr; do

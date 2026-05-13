@@ -694,6 +694,8 @@ typedef struct hiIVE_SVM_MODEL_S {
 } IVE_SVM_MODEL_S;
 
 /* --- PerspTrans --- */
+/* IVE_RECT_U32_S (used by astRoi[] in PerspTrans / Hog) is defined in
+ * hi_comm_ive.h. */
 
 typedef enum hiIVE_PERSP_TRANS_ALG_MODE_E {
     IVE_PERSP_TRANS_ALG_MODE_NR_SIM = 0x0,

@@ -88,6 +88,26 @@ unsigned int g_vendor_task_phys;
 unsigned char g_skip_hw_init;
 module_param_named(vendor_task, g_vendor_task_phys, uint, S_IRUGO | S_IWUSR);
 module_param_named(skip_init, g_skip_hw_init, byte, S_IRUGO);
+
+/* cv500-only IVE ops that the V4-family driver code never implemented
+ * (HOG descriptor, PerspTrans perspective warp — and eventually KCF
+ * tracker). The cv500 IVE block supports them in hardware but the HW
+ * task-node layout is RE-only ground we're still building out.
+ *
+ * Phase A (default, enable_cv500_extras=0): the dispatcher returns
+ * 0 for these ioctls so libive.so's handle check stays happy and
+ * userland sees the same "silently-stubbed" behaviour we apply to
+ * the other unsupported ops. No HW writes — zero risk of board hang.
+ *
+ * Phase B (enable_cv500_extras=1, set via modprobe or sysfs): we
+ * log the userspace arg buffer (first 256 B hexdump, plus header)
+ * and return -EOPNOTSUPP. Used to capture real-world call patterns
+ * from libive on hardware so we can validate the static RE before
+ * starting to write HW task nodes. Still no HW writes from the
+ * driver — the param only unlocks diagnostic logging. */
+static unsigned char g_enable_cv500_extras;
+module_param_named(enable_cv500_extras, g_enable_cv500_extras, byte,
+		   S_IRUGO | S_IWUSR);
 #endif
 
 /* ---- Model context ---- */
@@ -1070,6 +1090,87 @@ static inline int ive_check_buf(u32 phys, u32 stride, u32 width, u32 height)
 #define IVE_CHECK_IMG(img) \
 	ive_check_buf(IMG_PHYS(img), IMG_STRIDE(img), IMG_WIDTH(img), IMG_HEIGHT(img))
 
+/* Submit a chain of N pre-filled 208-byte HW task nodes. Each node's
+ * [0..3] (next-pointer) field is patched to point at the next node's
+ * phys address; the last node's next-pointer is left as 0 to mark end
+ * of chain. HW auto-advances through the chain after we kick the head
+ * at reg[0x10]+reg[0x00].
+ *
+ * Used by ops that produce per-ROI outputs (PerspTrans, Hog, …): each
+ * ROI emits one HW node, and the IVE block executes them in sequence
+ * raising a single completion IRQ at the end.
+ *
+ * `nodes` is a contiguous u8 array of size node_count*208, where each
+ * 208-byte slot has been filled by the per-op field-map. `arg_buf[0..3]`
+ * receives the handle (0 = "already done", matching libive semantics).
+ * Returns 0 on success, -ENODEV / -ENOMEM on infrastructure failure. */
+static long ive_submit_chain(u8 *nodes, u32 node_count, u8 *arg_buf)
+{
+	u32 i;
+	u32 total_bytes;
+
+	if (!node_count)
+		return -EINVAL;
+	if (node_count * 208 > 4096)            /* MMZ task buffer is 4 KB */
+		return -EINVAL;
+
+#ifdef IVE_STANDALONE
+	if (!g_ive_regs)
+		g_ive_regs = ioremap(ive_neo_chip.standalone_base, 0x10000);
+#endif
+	if (!g_ive_regs) {
+		ive_err("submit_chain: g_ive_regs not set (DT probe didn't run?)\n");
+		return -ENODEV;
+	}
+	if (!g_hw_init_done) {
+		ive_hw_init();
+		g_hw_init_done = 1;
+	}
+
+	if (!g_ive_task_virt) {
+		g_ive_task_virt = ive_dma_alloc(&g_ive_task_phys, 4096);
+		if (!g_ive_task_virt)
+			return -ENOMEM;
+	}
+
+	/* Patch next-ptr in each node to point at the next slot. Last
+	 * node's next-ptr stays at 0 (already memset'd by caller, but
+	 * write it explicitly for clarity). */
+	for (i = 0; i + 1 < node_count; i++)
+		*(u32 *)(nodes + i * 208) =
+			(u32)g_ive_task_phys + (i + 1) * 208;
+	*(u32 *)(nodes + (node_count - 1) * 208) = 0;
+
+	total_bytes = node_count * 208;
+	memcpy(g_ive_task_virt, nodes, total_bytes);
+
+#if defined(hi3516cv500)
+	osal_flush_dcache_area(g_ive_task_virt, g_ive_task_phys, total_bytes);
+#endif
+
+	reinit_completion(&g_ive_done);
+	g_ive_last_status = 0;
+	writel(6, g_ive_regs + 0x04);
+	writel(7, g_ive_regs + 0x08);
+	writel((u32)g_ive_task_phys, g_ive_regs + 0x10);
+	isb(); dsb(); dmb();
+	writel(1, g_ive_regs + 0x00);
+
+	{
+		unsigned long to = wait_for_completion_timeout(
+			&g_ive_done, msecs_to_jiffies(100));
+		if (to == 0) {
+			ive_err("submit_chain: timeout (%u nodes); marking HW dirty\n",
+				node_count);
+			g_hw_init_done = 0;
+		}
+	}
+
+	if (arg_buf)
+		*(u32 *)arg_buf = 0;
+	return 0;
+}
+
 /* Submit a pre-filled 208-byte non-XNN task node. Copies the
  * stack-local node to the pre-allocated MMZ task buffer, kicks HW,
  * and waits briefly for the completion IRQ. Returns 0. */
@@ -1976,6 +2077,338 @@ static long ive_op_ccl(unsigned long arg)
 	return ive_submit_nonxnn(node, buf);
 }
 
+#if defined(hi3516cv500) && !defined(IVE_STANDALONE)
+
+/* PerspTrans userspace API caps roi_num at 8 (matches the SDK header
+ * array slot count). The kernel arg buffer reserves 64 slots, but our
+ * MMZ task buffer is 4 KB which only fits floor(4096/208) = 19 nodes.
+ * Keep the cap at 8 to match userland expectations. */
+#define IVE_PT_MAX_ROIS 8
+
+/* ---- cv500 PerspTrans (HW op 0x35, ioctl 0xdc604635) ----
+ *
+ * Builds a chain of N HW task nodes (N = ctrl.u16RoiNum, 1..8) and
+ * submits the head; HW auto-advances via each node's next-ptr at
+ * node[0..3]. Returns 0 with the handle slot at arg[0..3] cleared
+ * to match libive's "already-done" semantics.
+ *
+ * Arg buffer layout (7264 B, decoded from cv500 vendor blob symbols
+ * ive_check_persp_trans_param @0x139e8 and ive_fill_persp_trans_task
+ * @0x9584):
+ *   +0:      IVE_HANDLE return slot                    8 B
+ *   +8:      IVE_SRC_IMAGE_S src                      72 B
+ *   +80:     IVE_RECT_U32_S astRoi[64]              1024 B  (16 B each)
+ *   +1104:   IVE_SRC_MEM_INFO_S astPointPair[64]    1536 B  (24 B each)
+ *   +2640:   IVE_DST_IMAGE_S astDst[64]             4608 B  (72 B each)
+ *   +7248:   IVE_PERSP_TRANS_CTRL_S ctrl              12 B
+ *       +0: u32 enAlgMode (0..2)
+ *       +4: u32 enCscMode (0..4)
+ *       +8: u16 u16RoiNum
+ *      +10: u16 u16PointPairNum
+ */
+static long ive_op_persp_trans_cv500(unsigned long arg)
+{
+	u8 *buf  = (u8 *)arg;
+	u8 *src  = buf + 8;
+	u8 *ctrl = buf + 0x1c50;
+	u32 alg_mode = *(u32 *)(ctrl + 0);
+	u32 csc_mode = *(u32 *)(ctrl + 4);
+	u16 roi_num  = *(u16 *)(ctrl + 8);
+	u16 pp_num   = *(u16 *)(ctrl + 10);
+	u32 src_phys0 = *(u32 *)(src + 0);
+	u32 src_phys1 = *(u32 *)(src + 8);
+	u32 src_stride0 = *(u32 *)(src + 48);
+	u32 src_stride1 = *(u32 *)(src + 52);
+	u32 src_w = *(u32 *)(src + 60);
+	u32 src_h = *(u32 *)(src + 64);
+	u8 nodes[IVE_PT_MAX_ROIS * 208];
+	u32 i;
+
+	if (!roi_num || roi_num > IVE_PT_MAX_ROIS) {
+		pr_info("ive_neo: PerspTrans bad roi_num=%u (max %u)\n",
+			roi_num, IVE_PT_MAX_ROIS);
+		return -EINVAL;
+	}
+	if (alg_mode > 2 || csc_mode > 4) {
+		pr_info("ive_neo: PerspTrans bad ctrl alg=%u csc=%u\n",
+			alg_mode, csc_mode);
+		return -EINVAL;
+	}
+	if (ive_check_buf(src_phys0, src_stride0, src_w, src_h))
+		return -EINVAL;
+
+	memset(nodes, 0, sizeof(nodes));
+
+	for (i = 0; i < roi_num; i++) {
+		u8 *roi  = buf + 80 + i * 16;
+		u8 *pp   = buf + 1104 + i * 24;
+		u8 *dst  = buf + 2640 + i * 72;
+		u8 *node = nodes + i * 208;
+		u32 roi_x = *(u32 *)(roi + 0);
+		u32 roi_y = *(u32 *)(roi + 4);
+		u32 roi_w = *(u32 *)(roi + 8);
+		u32 roi_h = *(u32 *)(roi + 12);
+		u32 pp_phys = *(u32 *)(pp + 0);
+		u32 dst_phys0 = *(u32 *)(dst + 0);
+		u32 dst_phys1 = *(u32 *)(dst + 8);
+		u32 dst_stride0 = *(u32 *)(dst + 48);
+		u32 dst_stride1 = *(u32 *)(dst + 52);
+		u32 dst_w = *(u32 *)(dst + 60);
+		u32 dst_h = *(u32 *)(dst + 64);
+		u32 dst_type = *(u32 *)(dst + 68);
+		u8 node9;
+
+		if (ive_check_buf(dst_phys0, dst_stride0, dst_w, dst_h)) {
+			pr_info("ive_neo: PerspTrans dst[%u] check failed\n", i);
+			return -EINVAL;
+		}
+		if (!pp_phys || (pp_phys & 0xf)) {
+			pr_info("ive_neo: PerspTrans pp[%u] phys=0x%x invalid\n",
+				i, pp_phys);
+			return -EINVAL;
+		}
+		if (!roi_w || !roi_h ||
+		    roi_x + roi_w > src_w || roi_y + roi_h > src_h) {
+			pr_info("ive_neo: PerspTrans roi[%u] x=%u y=%u w=%u h=%u out of src %ux%u\n",
+				i, roi_x, roi_y, roi_w, roi_h, src_w, src_h);
+			return -EINVAL;
+		}
+
+		/* node[9] mirrors the vendor's switch on astDst[i].enType:
+		 *   0 (U8C1) → 0, 2 (YUV420SP) → 1, 10 (U8C3_PACKAGE) → 2.
+		 * Other formats fall through to 0 — same default the vendor
+		 * blob leaves in the memset'd node. */
+		switch (dst_type) {
+		case 0:  node9 = 0; break;
+		case 2:  node9 = 1; break;
+		case 10: node9 = 2; break;
+		default: node9 = 0; break;
+		}
+
+		node[6]  = 0;
+		node[8]  = (u8) csc_mode;      /* approximation; vendor uses 12-entry LUT */
+		node[9]  = node9;
+		node[10] = 0x35;               /* op = PerspTrans */
+		node[11] = 1;
+		*(u32 *)(node + 16) = pp_phys;
+		*(u32 *)(node + 20) = dst_phys0;
+		*(u32 *)(node + 24) = src_phys0;
+		*(u32 *)(node + 28) = dst_phys1;
+		*(u32 *)(node + 32) = src_phys1;
+		*(u16 *)(node + 40) = (u16) roi_w;
+		*(u16 *)(node + 42) = (u16) roi_h;
+		*(u16 *)(node + 46) = (u16) src_stride0;
+		*(u16 *)(node + 48) = (u16) src_stride1;
+		*(u16 *)(node + 50) = (u16) dst_stride0;
+		*(u16 *)(node + 52) = (u16) dst_stride1;
+		node[176] = csc_mode ? (u8)(csc_mode - 1) : 0;
+		node[177] = (u8) alg_mode;
+		node[180] = (u8) pp_num;
+		*(u16 *)(node + 188) = (u16) roi_x;
+		*(u16 *)(node + 190) = (u16) roi_y;
+		*(u16 *)(node + 192) = (u16) dst_w;
+		*(u16 *)(node + 194) = (u16) dst_h;
+	}
+
+	/* Chain via node[0..3] = phys-of-next. The submit helper copies
+	 * `nodes` into g_ive_task_virt at offset 0, so each subsequent
+	 * node lives at g_ive_task_phys + i*208. Last node leaves
+	 * next-ptr = 0 (end of chain). */
+	return ive_submit_chain(nodes, roi_num, buf);
+}
+
+/* ---- cv500 Hog (HW op 0x34, ioctl 0xd0684634) ----
+ *
+ * Computes Histogram-of-Oriented-Gradients descriptors over 1..8 ROIs,
+ * writing per-ROI feature blobs into the IVE_DST_BLOB_S array. Each
+ * ROI emits one HW task node; chained submission via ive_submit_chain.
+ *
+ * Arg buffer layout (4200 B, from cv500 vendor blob symbols
+ * ive_check_hog_param + ive_fill_hog_task + ive_hog_proc):
+ *   +0:      IVE_HANDLE return slot                       8 B
+ *   +8:      IVE_SRC_IMAGE_S src                         72 B
+ *   +80:     IVE_RECT_U32_S astRoi[64]                1024 B  (16 B each)
+ *   +1104:   IVE_DST_BLOB_S astDst[64]                3072 B  (48 B each)
+ *   +4176:   IVE_HOG_CTRL_S ctrl                        20 B
+ *       +0:  u32 enCscMode
+ *       +4:  u32 enHogMode (1=vertical, 2=horizontal)
+ *       +8:  u32 u32RoiNum (1..64)
+ *      +12:  u16 u4q12TrancAlfa
+ *      +14:  u8  au8Rsv[2]
+ *   +4196..4199: bInstant
+ *
+ * IVE_DST_BLOB_S (48 B) layout from hi_comm_ive.h:
+ *   +0:  u32 enType
+ *   +4:  u32 u32Stride
+ *   +8:  u64 u64VirAddr
+ *  +16:  u64 u64PhyAddr
+ *  +24:  u32 u32Num
+ *  +28:  u32 width/height/chn union + padding
+ */
+#define IVE_HOG_MAX_ROIS 8
+#define IVE_HOG_CELL_LIMIT 136
+
+/* Magic-divide helper for the cell-grid scale field used by HW. The
+ * vendor blob does umullhi(roi_w<<11, 0xf0f0f0f1) and extracts bits
+ * [22:7] when roi > IVE_HOG_CELL_LIMIT; otherwise the cell-grid scale
+ * is the fixed default 0x800. */
+static u32 ive_hog_cell_scale(u32 roi_dim)
+{
+	if (roi_dim <= IVE_HOG_CELL_LIMIT)
+		return 0x800;
+	{
+		u64 mul = ((u64)(roi_dim << 11)) * 0xf0f0f0f1ULL;
+		return (u32)((mul >> 32) >> 7) & 0xffff;
+	}
+}
+
+static long ive_op_hog_cv500(unsigned long arg)
+{
+	u8 *buf  = (u8 *)arg;
+	u8 *src  = buf + 8;
+	u8 *ctrl = buf + 0x1050;
+	u32 csc_mode = *(u32 *)(ctrl + 0);
+	u32 hog_mode = *(u32 *)(ctrl + 4);
+	u32 roi_num  = *(u32 *)(ctrl + 8);
+	u16 trunc    = *(u16 *)(ctrl + 12);
+	u32 src_phys0 = *(u32 *)(src + 0);
+	u32 src_phys1 = *(u32 *)(src + 8);
+	u32 src_stride0 = *(u32 *)(src + 48);
+	u32 src_stride1 = *(u32 *)(src + 52);
+	u32 src_w = *(u32 *)(src + 60);
+	u32 src_h = *(u32 *)(src + 64);
+	u32 src_type = *(u32 *)(src + 68);
+	u8 nodes[IVE_HOG_MAX_ROIS * 208];
+	u32 i;
+
+	(void)src_type; /* used by node[8] in vendor LUT; we pass raw csc_mode */
+
+	if (!roi_num || roi_num > IVE_HOG_MAX_ROIS) {
+		pr_info("ive_neo: Hog bad roi_num=%u (max %u)\n",
+			roi_num, IVE_HOG_MAX_ROIS);
+		return -EINVAL;
+	}
+	if (hog_mode != 1 && hog_mode != 2) {
+		pr_info("ive_neo: Hog bad enHogMode=%u (1=vert, 2=horiz)\n",
+			hog_mode);
+		return -EINVAL;
+	}
+	if (ive_check_buf(src_phys0, src_stride0, src_w, src_h))
+		return -EINVAL;
+
+	memset(nodes, 0, sizeof(nodes));
+
+	for (i = 0; i < roi_num; i++) {
+		u8 *roi  = buf + 80 + i * 16;
+		u8 *dst  = buf + 1104 + i * 48;
+		u8 *node = nodes + i * 208;
+		u32 roi_x = *(u32 *)(roi + 0);
+		u32 roi_y = *(u32 *)(roi + 4);
+		u32 roi_w = *(u32 *)(roi + 8);
+		u32 roi_h = *(u32 *)(roi + 12);
+		u32 dst_stride = *(u32 *)(dst + 4);
+		u32 dst_phys = *(u32 *)(dst + 16);          /* u64 PhyAddr LO */
+		u32 capped_w_cells = (roi_w < IVE_HOG_CELL_LIMIT ? roi_w : IVE_HOG_CELL_LIMIT) / 4;
+		u32 capped_h_cells = (roi_h < IVE_HOG_CELL_LIMIT ? roi_h : IVE_HOG_CELL_LIMIT) / 4;
+		u32 scale_w = ive_hog_cell_scale(roi_w);
+		u32 scale_h = ive_hog_cell_scale(roi_h);
+
+		/* Cell count needs at least 2 cells per axis (vendor does
+		 * (capped_dim/4) - 2 unsigned, would wrap if dim < 8). */
+		if (capped_w_cells < 2 || capped_h_cells < 2) {
+			pr_info("ive_neo: Hog roi[%u] too small w=%u h=%u (need ≥8 each)\n",
+				i, roi_w, roi_h);
+			return -EINVAL;
+		}
+		capped_w_cells -= 2;
+		capped_h_cells -= 2;
+
+		if (!dst_phys || (dst_phys & 0xf)) {
+			pr_info("ive_neo: Hog dst[%u] phys=0x%x invalid\n",
+				i, dst_phys);
+			return -EINVAL;
+		}
+		if (!roi_w || !roi_h ||
+		    roi_x + roi_w > src_w || roi_y + roi_h > src_h) {
+			pr_info("ive_neo: Hog roi[%u] x=%u y=%u w=%u h=%u out of src %ux%u\n",
+				i, roi_x, roi_y, roi_w, roi_h, src_w, src_h);
+			return -EINVAL;
+		}
+
+		node[6]  = 0;
+		node[8]  = (u8) csc_mode;     /* approximation; vendor LUT */
+		node[9]  = (u8) hog_mode;
+		node[10] = 0x34;              /* op = Hog */
+		node[11] = 2;
+		*(u32 *)(node + 16) = src_phys0;
+		*(u32 *)(node + 24) = src_phys1;
+		*(u16 *)(node + 40) = (u16) src_w;
+		*(u16 *)(node + 42) = (u16) src_h;
+		*(u16 *)(node + 44) = (u16) src_stride0;
+		*(u16 *)(node + 46) = (u16) src_stride1;
+		if (hog_mode == 1) {
+			*(u16 *)(node + 50) = (u16)(dst_stride << 1);
+			*(u16 *)(node + 52) = (u16)((dst_stride << 1) * capped_h_cells);
+		} else {
+			*(u16 *)(node + 54) = (u16)((dst_stride << 1) * capped_w_cells);
+		}
+		*(u16 *)(node + 102) = trunc;
+		*(u32 *)(node + 124) = dst_phys;
+		*(u32 *)(node + 128) = dst_phys;
+		*(u32 *)(node + 148) = roi_x << 8;
+		*(u32 *)(node + 152) = roi_y << 8;
+		*(u32 *)(node + 156) = roi_w;
+		*(u32 *)(node + 160) = roi_h;
+		*(u32 *)(node + 164) = scale_w;
+		*(u32 *)(node + 168) = scale_h;
+		node[176] = (u8) csc_mode;
+		node[177] = 4;
+		*(u16 *)(node + 192) = (u16) capped_w_cells;
+		*(u16 *)(node + 194) = (u16) capped_h_cells;
+	}
+
+	return ive_submit_chain(nodes, roi_num, buf);
+}
+#endif
+
+#ifndef IVE_STANDALONE
+/* Diagnostic logger for cv500-only IVE ops we don't (yet) implement.
+ *
+ * Two modes, selected by the enable_cv500_extras module param:
+ *
+ *   0 (default): return 0 so libive.so's IVE_HANDLE check stays happy
+ *                and userland sees the same "silent stub" behaviour we
+ *                already apply to LBP/NCC/EqualizeHist/etc. Zero HW
+ *                writes. Safe to leave on in production while a real
+ *                implementation is in progress.
+ *
+ *   1:           log the chip name, ioctl size, and a 256-byte hex
+ *                dump of the userspace arg buffer, then return
+ *                -EOPNOTSUPP. Used to capture real-world call patterns
+ *                (struct layouts, ROI counts, ctrl-field values) from
+ *                hardware before we start writing HW task nodes. Still
+ *                zero HW writes from the driver — only printk traffic.
+ *
+ * The buffer is already kernel-side at this point: the OSAL ioctl path
+ * copies _IOC_WRITE-direction ioctl args into a kernel buffer before
+ * dispatch (and the standalone wrapper does the same via copy_from_user),
+ * so we can hexdump it directly. */
+static long ive_diag_cv500_extras(const char *op, unsigned long arg,
+				  unsigned int sz)
+{
+	unsigned int dump = sz < 256 ? sz : 256;
+
+	if (!g_enable_cv500_extras)
+		return 0;
+
+	pr_info("ive_neo: %s ioctl on chip=%s arg=%lu bytes (dumping first %u)\n",
+		op, ive_neo_chip.name, (unsigned long)sz, dump);
+	print_hex_dump(KERN_INFO, "ive_neo: ", DUMP_PREFIX_OFFSET,
+		       32, 4, (const void *)arg, dump, true);
+	return -EOPNOTSUPP;
+}
+#endif
+
 /* ---- Ioctl dispatch (on kernel buffer — OSAL or our wrapper pre-copied) ---- */
 
 /* ---- ALLOC_BUF / FREE_BUF (standalone only) ---- */
@@ -2083,6 +2516,29 @@ static long ive_dispatch(unsigned int cmd, unsigned long arg)
 	case 0xc2c0461cu:      return 0;  /* LKOpticalFlowPyr */
 	case 0xc0b04621u:      return 0;  /* ANN_MLP_Predict */
 	case 0xc0c04622u:      return 0;  /* SVM_Predict */
+#ifndef IVE_STANDALONE
+	/* cv500-only IVE ops. Wire numbers + HW op codes captured from
+	 * cv500's libive.so + vendor hi_ive.o blob (2026-05). */
+	case 0xdc604635u:      /* HI_MPI_IVE_PerspTrans (cv500 op 0x35, arg 7264 B) */
+#if defined(hi3516cv500)
+		/* Real HW dispatch — builds 1..8 chained nodes, submits,
+		 * waits for IRQ. Field map from ive_fill_persp_trans_task. */
+		return ive_op_persp_trans_cv500(arg);
+#else
+		/* V4 family doesn't have this op in HW — silently stub so
+		 * any libive that happens to call it gets a "no error" path. */
+		return 0;
+#endif
+	case 0xd0684634u:      /* HI_MPI_IVE_Hog (cv500 op 0x34, arg 4200 B) */
+#if defined(hi3516cv500)
+		/* HW dispatch — builds 1..8 chained nodes (one per ROI),
+		 * submits, waits for IRQ. Field map from ive_fill_hog_task
+		 * with the cell-grid scale magic-divide replicated. */
+		return ive_op_hog_cv500(arg);
+#else
+		return 0;
+#endif
+#endif
 	default:               return 0;
 	}
 }
