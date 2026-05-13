@@ -1,13 +1,31 @@
+// SPDX-License-Identifier: GPL-2.0
+/*
+ * Platform-device wrapper for ive_neo. Resolves the IVE register
+ * window and IRQ from the "hisilicon,hisi-ive" device tree node and
+ * hands off to ive_std_mod_init().
+ *
+ * The vendor V4 and cv500 ive_init.c files differ only in how they
+ * spell their OSAL header (osal.h vs hi_osal.h) and in whether they
+ * use the gk_ or hi_ type-alias families. This open implementation
+ * uses plain Linux kernel types throughout and picks the OSAL header
+ * per CHIPARCH so the same source tree builds for both families.
+ */
 #include <linux/module.h>
 #include <linux/kernel.h>
 #include <linux/printk.h>
 #include <linux/version.h>
+#include <linux/of_platform.h>
 
-#include "common.h"
-#include "osal.h"
+#if defined(hi3516cv500)
+#  include "hi_common.h"
+#  include "hi_osal.h"
+#else
+#  include "common.h"
+#  include "osal.h"
+#endif
 
-extern u8 g_ive_power_save_en;
-extern u16 g_ive_node_num;
+extern unsigned char g_ive_power_save_en;
+extern unsigned short g_ive_node_num;
 
 extern int ive_std_mod_init(void);
 extern void ive_std_mod_exit(void);
@@ -15,7 +33,6 @@ extern void ive_std_mod_exit(void);
 module_param_named(save_power, g_ive_power_save_en, byte, S_IRUGO);
 module_param_named(max_node_num, g_ive_node_num, ushort, S_IRUGO);
 
-#include <linux/of_platform.h>
 #define HI_IVE_DEV_NAME_LENGTH 10
 extern void *g_ive_regs;
 extern unsigned int g_ive_irq;
@@ -23,8 +40,8 @@ extern unsigned int g_ive_irq;
 static int hi35xx_ive_probe(struct platform_device *pf_dev)
 {
 	struct resource *mem = NULL;
-	gk_char dev_name[HI_IVE_DEV_NAME_LENGTH] = { "ive" };
-	gk_s32 irq;
+	char dev_name[HI_IVE_DEV_NAME_LENGTH] = { "ive" };
+	int irq;
 
 	mem = osal_platform_get_resource_byname(pf_dev, IORESOURCE_MEM,
 						dev_name);
@@ -38,7 +55,7 @@ static int hi35xx_ive_probe(struct platform_device *pf_dev)
 		dev_err(&pf_dev->dev, "cannot find ive IRQ\n");
 		printk("cannot find ive IRQ\n");
 	}
-	g_ive_irq = (gk_u32)irq;
+	g_ive_irq = (unsigned int)irq;
 
 	return ive_std_mod_init();
 }
