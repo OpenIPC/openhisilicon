@@ -186,9 +186,17 @@ jobs:
       - name: Verify ive_neo built for this platform
         if: matrix.platform == 'hi3516ev200' || matrix.platform == 'gk7205v200' || matrix.platform == 'hi3516cv500'
         run: |
-          KO=$(find ../firmware/output/build/hisilicon-opensdk-* -name open_ive_neo.ko 2>/dev/null | head -1)
+          # Site_method=local plus a cleared _VERSION leaves the package
+          # build dir name unpredictable across buildroot versions
+          # (hisilicon-opensdk-, hisilicon-opensdk-custom, hisilicon-opensdk-<sha>,
+          # etc.). Just walk the whole output tree.
+          KO=$(find ../firmware/output -name open_ive_neo.ko 2>/dev/null | head -1)
           if [ -z "$KO" ] || [ ! -f "$KO" ]; then
               echo "FAIL: open_ive_neo.ko not built for ${{ matrix.platform }}" >&2
+              echo "--- candidate dirs under firmware/output/build ---" >&2
+              ls -1d ../firmware/output/build/hisilicon* 2>&1 || true
+              echo "--- any open_*.ko anywhere ---" >&2
+              find ../firmware/output -name 'open_*.ko' 2>/dev/null | head -20 >&2 || true
               exit 1
           fi
           echo "ok: $KO ($(stat -c%s "$KO") bytes)"
