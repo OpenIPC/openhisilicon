@@ -1996,6 +1996,131 @@ static long ive_op_ccl(unsigned long arg)
 	return ive_submit_nonxnn(node, buf);
 }
 
+#if defined(hi3516cv500) && !defined(IVE_STANDALONE)
+/* ---- cv500 PerspTrans (HW op 0x35, ioctl 0xdc604635) ----
+ *
+ * Single-ROI Phase B implementation. The vendor blob's
+ * ive_persp_trans/ive_fill_persp_trans_task at 0x5524/0x9584 of
+ * obj/hi3516cv500/hi_ive.o handles up to 64 ROIs by chaining one HW
+ * task node per ROI; we only do the first ROI here and reject n>1
+ * with -EINVAL. Multi-ROI dispatch is a separate follow-up.
+ *
+ * Arg buffer layout (7264 B total, decoded from the validator at
+ * 0x139e8 and the field-map at 0x9584):
+ *   +0:      IVE_HANDLE return slot                    8 B
+ *   +8:      IVE_SRC_IMAGE_S src                      72 B
+ *   +80:     IVE_RECT_U32_S astRoi[64]              1024 B  (16 B each)
+ *   +1104:   IVE_SRC_MEM_INFO_S astPointPair[64]    1536 B  (24 B each)
+ *   +2640:   IVE_DST_IMAGE_S astDst[64]             4608 B  (72 B each)
+ *   +7248:   IVE_PERSP_TRANS_CTRL_S ctrl              12 B
+ *       +0: u32 enAlgMode (0..2 valid)
+ *       +4: u32 enCscMode (0..4 valid)
+ *       +8: u16 u16RoiNum (1..64 valid; we cap at 1)
+ *      +10: u16 u16PointPairNum
+ *   +7260..7263: pad / bInstant
+ */
+static long ive_op_persp_trans_cv500(unsigned long arg)
+{
+	u8 *buf  = (u8 *)arg;
+	u8 *src  = buf + 8;
+	u8 *roi0 = buf + 80;
+	u8 *pp0  = buf + 1104;
+	u8 *dst0 = buf + 2640;
+	u8 *ctrl = buf + 0x1c50;
+	u32 alg_mode = *(u32 *)(ctrl + 0);
+	u32 csc_mode = *(u32 *)(ctrl + 4);
+	u16 roi_num  = *(u16 *)(ctrl + 8);
+	u16 pp_num   = *(u16 *)(ctrl + 10);
+	u32 src_phys0 = *(u32 *)(src + 0);
+	u32 src_phys1 = *(u32 *)(src + 8);
+	u32 src_stride0 = *(u32 *)(src + 48);
+	u32 src_stride1 = *(u32 *)(src + 52);
+	u32 src_w = *(u32 *)(src + 60);
+	u32 src_h = *(u32 *)(src + 64);
+	u32 roi_x = *(u32 *)(roi0 + 0);
+	u32 roi_y = *(u32 *)(roi0 + 4);
+	u32 roi_w = *(u32 *)(roi0 + 8);
+	u32 roi_h = *(u32 *)(roi0 + 12);
+	u32 pp_phys = *(u32 *)(pp0 + 0);
+	u32 dst_phys0 = *(u32 *)(dst0 + 0);
+	u32 dst_phys1 = *(u32 *)(dst0 + 8);
+	u32 dst_stride0 = *(u32 *)(dst0 + 48);
+	u32 dst_stride1 = *(u32 *)(dst0 + 52);
+	u32 dst_w = *(u32 *)(dst0 + 60);
+	u32 dst_h = *(u32 *)(dst0 + 64);
+	u32 dst_type = *(u32 *)(dst0 + 68);
+	u8 node[208];
+	u8 node9;
+
+	if (roi_num != 1) {
+		pr_info("ive_neo: PerspTrans multi-ROI (n=%u) not implemented (Phase B = single-ROI only)\n",
+			roi_num);
+		return -EINVAL;
+	}
+	if (alg_mode > 2 || csc_mode > 4) {
+		pr_info("ive_neo: PerspTrans bad ctrl alg=%u csc=%u\n",
+			alg_mode, csc_mode);
+		return -EINVAL;
+	}
+	if (ive_check_buf(src_phys0, src_stride0, src_w, src_h) ||
+	    ive_check_buf(dst_phys0, dst_stride0, dst_w, dst_h))
+		return -EINVAL;
+	if (!pp_phys || (pp_phys & 0xf))
+		return -EINVAL;
+	if (!roi_w || !roi_h ||
+	    roi_x + roi_w > src_w || roi_y + roi_h > src_h) {
+		pr_info("ive_neo: PerspTrans bad ROI x=%u y=%u w=%u h=%u (src %ux%u)\n",
+			roi_x, roi_y, roi_w, roi_h, src_w, src_h);
+		return -EINVAL;
+	}
+
+	/* node[9] mirrors the vendor's switch on astDst[i].enType (read
+	 * at dst+68): 0/U8C1→0, 2/YUV420SP→1, 10/U8C3_PACKAGE→2. Other
+	 * formats fall through to 0 — the same default the vendor blob
+	 * leaves in the memset'd node when none of the cases match. */
+	switch (dst_type) {
+	case 0:  node9 = 0; break;
+	case 2:  node9 = 1; break;
+	case 10: node9 = 2; break;
+	default: node9 = 0; break;
+	}
+
+	memset(node, 0, sizeof(node));
+	/* node[0..3] = next-ptr = 0 (single-node chain) */
+	node[6]  = 0;
+	node[8]  = (u8) csc_mode;       /* approximation — vendor maps via 12-entry LUT */
+	node[9]  = node9;
+	node[10] = 0x35;                /* op = PerspTrans */
+	node[11] = 1;
+	*(u32 *)(node + 16) = pp_phys;             /* point-pair coeffs phys */
+	*(u32 *)(node + 20) = dst_phys0;           /* dst luma */
+	*(u32 *)(node + 24) = src_phys0;           /* src luma */
+	*(u32 *)(node + 28) = dst_phys1;           /* dst chroma (YUV) */
+	*(u32 *)(node + 32) = src_phys1;           /* src chroma (YUV) */
+	*(u16 *)(node + 40) = (u16) roi_w;
+	*(u16 *)(node + 42) = (u16) roi_h;
+	*(u16 *)(node + 46) = (u16) src_stride0;
+	*(u16 *)(node + 48) = (u16) src_stride1;
+	*(u16 *)(node + 50) = (u16) dst_stride0;
+	*(u16 *)(node + 52) = (u16) dst_stride1;
+	node[176] = csc_mode ? (u8)(csc_mode - 1) : 0;
+	node[177] = (u8) alg_mode;
+	node[180] = (u8) pp_num;
+	*(u16 *)(node + 188) = (u16) roi_x;
+	*(u16 *)(node + 190) = (u16) roi_y;
+	*(u16 *)(node + 192) = (u16) dst_w;
+	*(u16 *)(node + 194) = (u16) dst_h;
+
+	pr_info("ive_neo: PerspTrans submit src=0x%x->0x%x (w=%u h=%u stride=%u) roi[%u,%u %ux%u] dst=0x%x (w=%u h=%u stride=%u) alg=%u csc=%u pp=%u\n",
+		src_phys0, dst_phys0, src_w, src_h, src_stride0,
+		roi_x, roi_y, roi_w, roi_h,
+		dst_phys0, dst_w, dst_h, dst_stride0,
+		alg_mode, csc_mode, pp_num);
+
+	return ive_submit_nonxnn(node, buf);
+}
+#endif
+
 #ifndef IVE_STANDALONE
 /* Diagnostic logger for cv500-only IVE ops we don't (yet) implement.
  *
@@ -2143,12 +2268,19 @@ static long ive_dispatch(unsigned int cmd, unsigned long arg)
 	case 0xc0c04622u:      return 0;  /* SVM_Predict */
 #ifndef IVE_STANDALONE
 	/* cv500-only IVE ops. Wire numbers + HW op codes captured from
-	 * cv500's libive.so + vendor hi_ive.o blob (2026-05). Behaviour
-	 * is gated by the enable_cv500_extras module param: default 0
-	 * keeps the existing silent-stub semantics; setting to 1 enables
-	 * diagnostic logging of the userspace arg buffer (still no HW
-	 * writes — Phase A only). */
+	 * cv500's libive.so + vendor hi_ive.o blob (2026-05). Each is
+	 * gated by the enable_cv500_extras module param:
+	 *   0 (default): return 0 — silent stub, libive's handle check
+	 *                stays happy.
+	 *   1:           on cv500 with a real handler (PerspTrans),
+	 *                dispatch to HW. Other ops still fall through
+	 *                to the diagnostic logger (-EOPNOTSUPP + hex
+	 *                dump) until their HW dispatch lands. */
 	case 0xdc604635u:      /* HI_MPI_IVE_PerspTrans (cv500 op 0x35, arg 7264 B) */
+#if defined(hi3516cv500)
+		if (g_enable_cv500_extras)
+			return ive_op_persp_trans_cv500(arg);
+#endif
 		return ive_diag_cv500_extras("PerspTrans", arg, _IOC_SIZE(cmd));
 	case 0xd0684634u:      /* HI_MPI_IVE_Hog (cv500 op 0x34, arg 4200 B) */
 		return ive_diag_cv500_extras("Hog", arg, _IOC_SIZE(cmd));
