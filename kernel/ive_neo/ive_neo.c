@@ -88,6 +88,26 @@ unsigned int g_vendor_task_phys;
 unsigned char g_skip_hw_init;
 module_param_named(vendor_task, g_vendor_task_phys, uint, S_IRUGO | S_IWUSR);
 module_param_named(skip_init, g_skip_hw_init, byte, S_IRUGO);
+
+/* cv500-only IVE ops that the V4-family driver code never implemented
+ * (HOG descriptor, PerspTrans perspective warp — and eventually KCF
+ * tracker). The cv500 IVE block supports them in hardware but the HW
+ * task-node layout is RE-only ground we're still building out.
+ *
+ * Phase A (default, enable_cv500_extras=0): the dispatcher returns
+ * 0 for these ioctls so libive.so's handle check stays happy and
+ * userland sees the same "silently-stubbed" behaviour we apply to
+ * the other unsupported ops. No HW writes — zero risk of board hang.
+ *
+ * Phase B (enable_cv500_extras=1, set via modprobe or sysfs): we
+ * log the userspace arg buffer (first 256 B hexdump, plus header)
+ * and return -EOPNOTSUPP. Used to capture real-world call patterns
+ * from libive on hardware so we can validate the static RE before
+ * starting to write HW task nodes. Still no HW writes from the
+ * driver — the param only unlocks diagnostic logging. */
+static unsigned char g_enable_cv500_extras;
+module_param_named(enable_cv500_extras, g_enable_cv500_extras, byte,
+		   S_IRUGO | S_IWUSR);
 #endif
 
 /* ---- Model context ---- */
@@ -1976,6 +1996,44 @@ static long ive_op_ccl(unsigned long arg)
 	return ive_submit_nonxnn(node, buf);
 }
 
+#ifndef IVE_STANDALONE
+/* Diagnostic logger for cv500-only IVE ops we don't (yet) implement.
+ *
+ * Two modes, selected by the enable_cv500_extras module param:
+ *
+ *   0 (default): return 0 so libive.so's IVE_HANDLE check stays happy
+ *                and userland sees the same "silent stub" behaviour we
+ *                already apply to LBP/NCC/EqualizeHist/etc. Zero HW
+ *                writes. Safe to leave on in production while a real
+ *                implementation is in progress.
+ *
+ *   1:           log the chip name, ioctl size, and a 256-byte hex
+ *                dump of the userspace arg buffer, then return
+ *                -EOPNOTSUPP. Used to capture real-world call patterns
+ *                (struct layouts, ROI counts, ctrl-field values) from
+ *                hardware before we start writing HW task nodes. Still
+ *                zero HW writes from the driver — only printk traffic.
+ *
+ * The buffer is already kernel-side at this point: the OSAL ioctl path
+ * copies _IOC_WRITE-direction ioctl args into a kernel buffer before
+ * dispatch (and the standalone wrapper does the same via copy_from_user),
+ * so we can hexdump it directly. */
+static long ive_diag_cv500_extras(const char *op, unsigned long arg,
+				  unsigned int sz)
+{
+	unsigned int dump = sz < 256 ? sz : 256;
+
+	if (!g_enable_cv500_extras)
+		return 0;
+
+	pr_info("ive_neo: %s ioctl on chip=%s arg=%lu bytes (dumping first %u)\n",
+		op, ive_neo_chip.name, (unsigned long)sz, dump);
+	print_hex_dump(KERN_INFO, "ive_neo: ", DUMP_PREFIX_OFFSET,
+		       32, 4, (const void *)arg, dump, true);
+	return -EOPNOTSUPP;
+}
+#endif
+
 /* ---- Ioctl dispatch (on kernel buffer — OSAL or our wrapper pre-copied) ---- */
 
 /* ---- ALLOC_BUF / FREE_BUF (standalone only) ---- */
@@ -2083,6 +2141,18 @@ static long ive_dispatch(unsigned int cmd, unsigned long arg)
 	case 0xc2c0461cu:      return 0;  /* LKOpticalFlowPyr */
 	case 0xc0b04621u:      return 0;  /* ANN_MLP_Predict */
 	case 0xc0c04622u:      return 0;  /* SVM_Predict */
+#ifndef IVE_STANDALONE
+	/* cv500-only IVE ops. Wire numbers + HW op codes captured from
+	 * cv500's libive.so + vendor hi_ive.o blob (2026-05). Behaviour
+	 * is gated by the enable_cv500_extras module param: default 0
+	 * keeps the existing silent-stub semantics; setting to 1 enables
+	 * diagnostic logging of the userspace arg buffer (still no HW
+	 * writes — Phase A only). */
+	case 0xdc604635u:      /* HI_MPI_IVE_PerspTrans (cv500 op 0x35, arg 7264 B) */
+		return ive_diag_cv500_extras("PerspTrans", arg, _IOC_SIZE(cmd));
+	case 0xd0684634u:      /* HI_MPI_IVE_Hog (cv500 op 0x34, arg 4200 B) */
+		return ive_diag_cv500_extras("Hog", arg, _IOC_SIZE(cmd));
+#endif
 	default:               return 0;
 	}
 }
