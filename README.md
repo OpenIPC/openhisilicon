@@ -270,6 +270,38 @@ Flexible-crop ceiling rises as crop shrinks; per-size points measured:
 Set `Isp_FrameRate` in the sensor INI to request a target rate; the driver
 clamps to the per-mode sensor ceiling.
 
+### IMX307 high-framerate modes (hi3516ev200 / gk7205v200)
+
+Wire fps from VENC `Send` counter (5 s window, h.265 @ 4 Mbps wire) on
+`openipc-gk7205v200` with the `sony_imx307_2L` driver (2-lane MIPI
+CSI-2). `Isp_SnsMode` dispatch follows the same IMX335 PR #99 pattern
+(`u8SnsMode=4` → window crop, programmable W×H). Register values
+verified against Sony IMX307LQD-C datasheet pp.49 / 54-58 / 60-65 /
+66-68. The 4-lane variant (`sony_imx307`) carries the same dispatch
+infrastructure with MIPI D-PHY timings from the datasheet's "4-Lane"
+columns — not yet validated on real hardware.
+
+| Mode | Sensor crop | Wire fps | Encoder ceiling | Selected by |
+|------|-------------|----------|------------------|-------------|
+| Stock 1080p | 1920×1080 | 30 fps | — | (default) |
+| 1080p60 boost | 1920×1080 | 44 fps | **44** (encoder-bound) | `Isp_FrameRate=60` |
+| 720p60 sub-readout | 1280×720 | 60 fps | 60 (sensor PHY tier) | `Isp_SnsMode=1` |
+| 720p flex | 1280×720 | up to **91 fps** | 91 (encoder-bound) | `Isp_SnsMode=4` + `Isp_W=1280 Isp_H=720` |
+| VGA flex | 640×480 | up to **130 fps** | 130 (encoder-bound) | `Isp_SnsMode=4` + `Isp_W=640 Isp_H=480` |
+| CIF flex | 368×304 | up to **200 fps** | 200-219 (encoder-bound) | `Isp_SnsMode=4` + `Isp_W=368 Isp_H=304` |
+
+Lower bound on flex-crop dimensions is 368×304 (datasheet WINMODE=4h
+constraint: WINWH ≥ 368 mult-of-4, WINWV ≥ 304). At 1080p the encoder
+caps wire fps regardless of sensor rate; sub-1080p resolutions lift
+the ceiling roughly with the reciprocal of pixel count, until either
+the encoder hits a per-frame budget or the sensor reaches its own
+VMAX-floor at the requested crop.
+
+gk7205v200 requires `clock=37.125MHz` in the INI's `[mode]` section
+(vendor blob defaults to 27 MHz INCK; without the override the
+delivered rate is ~73% of nominal). Same gotcha applies to IMX335
+high-fps presets on the gk side.
+
 ## Kernel modules
 
 All modules are prefixed `open_` to distinguish from vendor SDK modules. The set of modules varies by platform generation:

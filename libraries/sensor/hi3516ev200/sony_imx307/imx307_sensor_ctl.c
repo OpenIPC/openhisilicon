@@ -147,9 +147,17 @@ void imx307_restart(VI_PIPE ViPipe)
 
 #define IMX307_SENSOR_1080P_30FPS_LINEAR_MODE (1)
 #define IMX307_SENSOR_1080P_30FPS_2t1_WDR_MODE (2)
+#define IMX307_SENSOR_1080P_60FPS_LINEAR_MODE (3)
+#define IMX307_SENSOR_720P_60FPS_LINEAR_MODE  (4)
+#define IMX307_SENSOR_FLEX_CROP_LINEAR_MODE   (5)
+
+extern void imx307_get_crop(VI_PIPE ViPipe, GK_U32 *pu32W, GK_U32 *pu32H);
 
 void imx307_wdr_1080p30_2to1_init(VI_PIPE ViPipe);
 void imx307_linear_1080p30_init(VI_PIPE ViPipe);
+void imx307_linear_1080p60_init(VI_PIPE ViPipe);
+void imx307_linear_720p60_init(VI_PIPE ViPipe);
+void imx307_flex_crop_init(VI_PIPE ViPipe);
 void imx307_default_reg_init(VI_PIPE ViPipe)
 {
 	GK_U32 i;
@@ -183,6 +191,12 @@ void imx307_init(VI_PIPE ViPipe)
 			imx307_wdr_1080p30_2to1_init(ViPipe);
 		} else {
 		}
+	} else if (IMX307_SENSOR_1080P_60FPS_LINEAR_MODE == u8ImgMode) {
+		imx307_linear_1080p60_init(ViPipe);
+	} else if (IMX307_SENSOR_720P_60FPS_LINEAR_MODE == u8ImgMode) {
+		imx307_linear_720p60_init(ViPipe);
+	} else if (IMX307_SENSOR_FLEX_CROP_LINEAR_MODE == u8ImgMode) {
+		imx307_flex_crop_init(ViPipe);
 	} else {
 		imx307_linear_1080p30_init(ViPipe);
 	}
@@ -258,6 +272,293 @@ void imx307_linear_1080p30_init(VI_PIPE ViPipe)
 	printf("==============================================================\n");
 	printf("===Sony imx307 sensor 1080P30fps(MIPI) init success!=====\n");
 	printf("==============================================================\n");
+	return;
+}
+
+/* 1080P60 linear, 4-lane MIPI CSI-2. FRSEL=1h → 445.5 Mbps/lane
+ * (datasheet p.48 / p.62 column "60/50 fps 4-Lane"). HMAX=0x0898,
+ * VMAX=0x0465. MIPI D-PHY HS timings match the 445.5 Mbps/lane tier
+ * (same byte-clock as 2-Lane 30 fps, hence the values that the
+ * existing 4-lane WDR init at FRSEL=1h already uses). Built from
+ * datasheet but NOT yet verified on real hardware — exercise with
+ * a 4-lane IMX307 board and validate before declaring production-ready.
+ */
+void imx307_linear_1080p60_init(VI_PIPE ViPipe)
+{
+	imx307_write_register(ViPipe, 0x3000, 0x01); // Standby
+	imx307_write_register(ViPipe, 0x3002, 0x01); // Master mode stop
+
+	imx307_write_register(ViPipe, 0x3005, 0x01);
+	imx307_write_register(ViPipe, 0x3007, 0x00); // WINMODE=0h
+	imx307_write_register(ViPipe, 0x3009, 0x01); // FRSEL=1h (60fps, 445.5 Mbps/lane)
+	imx307_write_register(ViPipe, 0x300c, 0x00);
+	imx307_write_register(ViPipe, 0x3010, 0x21);
+	imx307_write_register(ViPipe, 0x3011, 0x0a);
+	imx307_write_register(ViPipe, 0x3014, 0x00);
+	imx307_write_register(ViPipe, 0x3018, 0x65); // VMAX[7:0]
+	imx307_write_register(ViPipe, 0x3019, 0x04); // VMAX[15:8]
+	imx307_write_register(ViPipe, 0x301c, 0x98); // HMAX=0x0898
+	imx307_write_register(ViPipe, 0x301d, 0x08);
+	imx307_write_register(ViPipe, 0x3046, 0x01); // MIPI
+	imx307_write_register(ViPipe, 0x305c, 0x18); // INCKSEL1 37.125 MHz
+	imx307_write_register(ViPipe, 0x305d, 0x03);
+	imx307_write_register(ViPipe, 0x305e, 0x20);
+	imx307_write_register(ViPipe, 0x305f, 0x01);
+	imx307_write_register(ViPipe, 0x309e, 0x4a);
+	imx307_write_register(ViPipe, 0x309f, 0x4a);
+	imx307_write_register(ViPipe, 0x3106, 0x00);
+	imx307_write_register(ViPipe, 0x311c, 0x0e);
+	imx307_write_register(ViPipe, 0x3128, 0x04);
+	imx307_write_register(ViPipe, 0x3129, 0x1D); // ADBIT1 (10-bit)
+	imx307_write_register(ViPipe, 0x313b, 0x41);
+	imx307_write_register(ViPipe, 0x315e, 0x1a); // INCKSEL5
+	imx307_write_register(ViPipe, 0x3164, 0x1a);
+	imx307_write_register(ViPipe, 0x317c, 0x12); // ADBIT2 (10-bit)
+	imx307_write_register(ViPipe, 0x31ec, 0x37); // ADBIT3 (10-bit)
+
+	imx307_write_register(ViPipe, 0x3405, 0x10); // REPETITION (FRSEL=1h 4-lane)
+	imx307_write_register(ViPipe, 0x3407, 0x03); // PHYSICAL_LANE_NUM (4-lane)
+	imx307_write_register(ViPipe, 0x3414, 0x0A);
+	imx307_write_register(ViPipe, 0x3418, 0x49); // Y_OUT_SIZE 0x0449 = 1097
+	imx307_write_register(ViPipe, 0x3419, 0x04);
+	imx307_write_register(ViPipe, 0x3441, 0x0A);
+	imx307_write_register(ViPipe, 0x3442, 0x0A);
+	imx307_write_register(ViPipe, 0x3443, 0x03); // CSI_LANE_MODE (4-lane)
+	imx307_write_register(ViPipe, 0x3444, 0x20); // EXTCK_FREQ
+	imx307_write_register(ViPipe, 0x3445, 0x25);
+	/* MIPI D-PHY HS timings for 445.5 Mbps/lane (datasheet p.62 column
+	 * "60/50 fps 4-Lane"); matches the 4-lane WDR init at FRSEL=1h. */
+	imx307_write_register(ViPipe, 0x3446, 0x57); // TCLKPOST
+	imx307_write_register(ViPipe, 0x3447, 0x00);
+	imx307_write_register(ViPipe, 0x3448, 0x37); // THSZERO
+	imx307_write_register(ViPipe, 0x3449, 0x00);
+	imx307_write_register(ViPipe, 0x344A, 0x1F); // THSPREPARE
+	imx307_write_register(ViPipe, 0x344B, 0x00);
+	imx307_write_register(ViPipe, 0x344C, 0x1F); // TCLKTRAIL
+	imx307_write_register(ViPipe, 0x344D, 0x00);
+	imx307_write_register(ViPipe, 0x344E, 0x1F); // THSTRAIL
+	imx307_write_register(ViPipe, 0x344F, 0x00);
+	imx307_write_register(ViPipe, 0x3450, 0x77); // TCLKZERO
+	imx307_write_register(ViPipe, 0x3451, 0x00);
+	imx307_write_register(ViPipe, 0x3452, 0x1F); // TCLKPREPARE
+	imx307_write_register(ViPipe, 0x3453, 0x00);
+	imx307_write_register(ViPipe, 0x3454, 0x17); // TLPX
+	imx307_write_register(ViPipe, 0x3455, 0x00);
+	imx307_write_register(ViPipe, 0x3472, 0x9C); // X_OUT_SIZE 0x079C = 1948
+	imx307_write_register(ViPipe, 0x3473, 0x07);
+	imx307_write_register(ViPipe, 0x3480, 0x49); // INCKSEL7
+
+	imx307_default_reg_init(ViPipe);
+	imx307_write_register(ViPipe, 0x3000, 0x00); // standby
+	usleep(20000);
+	imx307_write_register(ViPipe, 0x3002, 0x00);
+	imx307_write_register(ViPipe, 0x304B, 0x0a);
+	usleep(20000);
+
+	printf("==============================================================\n");
+	printf("===Sony imx307 sensor 1080P60fps(MIPI 4-lane) init success!===\n");
+	printf("==============================================================\n");
+	return;
+}
+
+/* HD 720p sub-readout, 4-lane CSI-2, WINMODE=1h, FRSEL=1h. Per
+ * datasheet pp.66-68 "All-pixel HD720p" + p.68 column "720p60 4-Lane":
+ * 297 Mbps/lane. HMAX=0x0CE4 (same pixel-clock structure as 2-Lane),
+ * VMAX=0x02EE=750. MIPI D-PHY timings use the 297 Mbps/lane tier
+ * (matches the 2-Lane "720p30" column since both are 297 Mbps/lane).
+ */
+void imx307_linear_720p60_init(VI_PIPE ViPipe)
+{
+	imx307_write_register(ViPipe, 0x3000, 0x01);
+	imx307_write_register(ViPipe, 0x3002, 0x01);
+	imx307_write_register(ViPipe, 0x3005, 0x01);
+	imx307_write_register(ViPipe, 0x3007, 0x10); // WINMODE=1h (HD720p)
+	imx307_write_register(ViPipe, 0x3009, 0x01); // FRSEL=1h
+	imx307_write_register(ViPipe, 0x300c, 0x00);
+	imx307_write_register(ViPipe, 0x3010, 0x21);
+	imx307_write_register(ViPipe, 0x3011, 0x0a);
+	imx307_write_register(ViPipe, 0x3018, 0xEE); // VMAX 0x02EE = 750
+	imx307_write_register(ViPipe, 0x3019, 0x02);
+	imx307_write_register(ViPipe, 0x301c, 0xE4); // HMAX 0x0CE4 = 3300
+	imx307_write_register(ViPipe, 0x301d, 0x0C);
+	imx307_write_register(ViPipe, 0x3046, 0x01);
+	imx307_write_register(ViPipe, 0x305c, 0x18);
+	imx307_write_register(ViPipe, 0x305d, 0x03);
+	imx307_write_register(ViPipe, 0x305e, 0x20);
+	imx307_write_register(ViPipe, 0x305f, 0x01);
+	imx307_write_register(ViPipe, 0x309e, 0x4a);
+	imx307_write_register(ViPipe, 0x309f, 0x4a);
+	imx307_write_register(ViPipe, 0x311c, 0x0e);
+	imx307_write_register(ViPipe, 0x3128, 0x04);
+	imx307_write_register(ViPipe, 0x3129, 0x1D);
+	imx307_write_register(ViPipe, 0x313b, 0x41);
+	imx307_write_register(ViPipe, 0x315e, 0x1a);
+	imx307_write_register(ViPipe, 0x3164, 0x1a);
+	imx307_write_register(ViPipe, 0x317c, 0x12);
+	imx307_write_register(ViPipe, 0x31ec, 0x37);
+
+	imx307_write_register(ViPipe, 0x3405, 0x10);
+	imx307_write_register(ViPipe, 0x3407, 0x03); // 4-lane
+	imx307_write_register(ViPipe, 0x3414, 0x04); // OPB_SIZE_V (720p)
+	imx307_write_register(ViPipe, 0x3418, 0xD9); // Y_OUT_SIZE 0x02D9 = 729
+	imx307_write_register(ViPipe, 0x3419, 0x02);
+	imx307_write_register(ViPipe, 0x3441, 0x0A);
+	imx307_write_register(ViPipe, 0x3442, 0x0A);
+	imx307_write_register(ViPipe, 0x3443, 0x03);
+	imx307_write_register(ViPipe, 0x3444, 0x20);
+	imx307_write_register(ViPipe, 0x3445, 0x25);
+	/* MIPI D-PHY HS timings for 297 Mbps/lane (datasheet p.68
+	 * column "720p60 4-Lane" = 2-Lane "720p30" 297 Mbps tier). */
+	imx307_write_register(ViPipe, 0x3446, 0x4F);
+	imx307_write_register(ViPipe, 0x3447, 0x00);
+	imx307_write_register(ViPipe, 0x3448, 0x2F);
+	imx307_write_register(ViPipe, 0x3449, 0x00);
+	imx307_write_register(ViPipe, 0x344A, 0x17);
+	imx307_write_register(ViPipe, 0x344B, 0x00);
+	imx307_write_register(ViPipe, 0x344C, 0x17);
+	imx307_write_register(ViPipe, 0x344D, 0x00);
+	imx307_write_register(ViPipe, 0x344E, 0x17);
+	imx307_write_register(ViPipe, 0x344F, 0x00);
+	imx307_write_register(ViPipe, 0x3450, 0x57);
+	imx307_write_register(ViPipe, 0x3451, 0x00);
+	imx307_write_register(ViPipe, 0x3452, 0x17);
+	imx307_write_register(ViPipe, 0x3453, 0x00);
+	imx307_write_register(ViPipe, 0x3454, 0x17);
+	imx307_write_register(ViPipe, 0x3455, 0x00);
+	imx307_write_register(ViPipe, 0x3472, 0x1C); // X_OUT_SIZE 0x051C = 1308
+	imx307_write_register(ViPipe, 0x3473, 0x05);
+	imx307_write_register(ViPipe, 0x3480, 0x49);
+
+	imx307_default_reg_init(ViPipe);
+	imx307_write_register(ViPipe, 0x3000, 0x00);
+	usleep(20000);
+	imx307_write_register(ViPipe, 0x3002, 0x00);
+	imx307_write_register(ViPipe, 0x304B, 0x0a);
+	usleep(20000);
+
+	printf("==============================================================\n");
+	printf("===Sony imx307 sensor 720P60fps(MIPI 4-lane) init success!====\n");
+	printf("==============================================================\n");
+	return;
+}
+
+/* Flex window-crop, 4-lane CSI-2, WINMODE=4h, FRSEL=1h locked
+ * (HMAX=0x0898, 445.5 Mbps/lane on 4-lane = same as 1080p60). Crop
+ * W×H from g_au32Imx307_CropW/H (populated by cmos_set_image_mode
+ * when Isp_SnsMode=4). Datasheet p.63 worked examples: VGA 640×480
+ * and CIF 352×288 land in this tier with HMAX=0x0898 + VMAX scaled
+ * by cmos_fps_set. NOT yet verified on real hardware. */
+void imx307_flex_crop_init(VI_PIPE ViPipe)
+{
+	GK_U32 crop_w = 1920, crop_h = 1080;
+	imx307_get_crop(ViPipe, &crop_w, &crop_h);
+
+	crop_w = (crop_w / 4) * 4;
+	if (crop_w < 368)
+		crop_w = 368;
+	if (crop_w > 1920)
+		crop_w = 1920;
+	crop_h = (crop_h / 2) * 2;
+	if (crop_h < 304)
+		crop_h = 304;
+	if (crop_h > 1080)
+		crop_h = 1080;
+
+	GK_U32 winph    = ((1944 - crop_w) / 2) & ~0x3U;
+	GK_U32 winpv    = ((1096 - crop_h) / 2) & ~0x1U;
+	GK_U32 winwh    = crop_w;
+	GK_U32 winwv    = crop_h;
+	GK_U32 winwv_ob = 2;
+
+	GK_U32 y_out_size = winwv + winwv_ob;
+	GK_U32 x_out_size = winwh + 8;
+
+	GK_U32 vmax = 1126;
+	if (vmax < y_out_size + 10)
+		vmax = y_out_size + 10;
+
+	imx307_write_register(ViPipe, 0x3000, 0x01);
+	imx307_write_register(ViPipe, 0x3002, 0x01);
+	imx307_write_register(ViPipe, 0x3005, 0x01);
+	imx307_write_register(ViPipe, 0x3007, 0x40); // WINMODE=4h
+	imx307_write_register(ViPipe, 0x3009, 0x01); // FRSEL=1h
+	imx307_write_register(ViPipe, 0x300c, 0x00);
+	imx307_write_register(ViPipe, 0x3010, 0x21);
+	imx307_write_register(ViPipe, 0x3011, 0x0a);
+
+	imx307_write_register(ViPipe, 0x3018, vmax & 0xFF);
+	imx307_write_register(ViPipe, 0x3019, (vmax >> 8) & 0xFF);
+	imx307_write_register(ViPipe, 0x301A, (vmax >> 16) & 0x03);
+	imx307_write_register(ViPipe, 0x301c, 0x98); // HMAX=0x0898
+	imx307_write_register(ViPipe, 0x301d, 0x08);
+
+	imx307_write_register(ViPipe, 0x303A, winwv_ob & 0x0F);
+	imx307_write_register(ViPipe, 0x303C, winpv & 0xFF);
+	imx307_write_register(ViPipe, 0x303D, (winpv >> 8) & 0x07);
+	imx307_write_register(ViPipe, 0x303E, winwv & 0xFF);
+	imx307_write_register(ViPipe, 0x303F, (winwv >> 8) & 0x07);
+	imx307_write_register(ViPipe, 0x3040, winph & 0xFF);
+	imx307_write_register(ViPipe, 0x3041, (winph >> 8) & 0x07);
+	imx307_write_register(ViPipe, 0x3042, winwh & 0xFF);
+	imx307_write_register(ViPipe, 0x3043, (winwh >> 8) & 0x07);
+
+	imx307_write_register(ViPipe, 0x3046, 0x01);
+	imx307_write_register(ViPipe, 0x305c, 0x18);
+	imx307_write_register(ViPipe, 0x305d, 0x03);
+	imx307_write_register(ViPipe, 0x305e, 0x20);
+	imx307_write_register(ViPipe, 0x305f, 0x01);
+	imx307_write_register(ViPipe, 0x309e, 0x4a);
+	imx307_write_register(ViPipe, 0x309f, 0x4a);
+	imx307_write_register(ViPipe, 0x311c, 0x0e);
+	imx307_write_register(ViPipe, 0x3128, 0x04);
+	imx307_write_register(ViPipe, 0x3129, 0x1D);
+	imx307_write_register(ViPipe, 0x313b, 0x41);
+	imx307_write_register(ViPipe, 0x315e, 0x1a);
+	imx307_write_register(ViPipe, 0x3164, 0x1a);
+	imx307_write_register(ViPipe, 0x317c, 0x12);
+	imx307_write_register(ViPipe, 0x31ec, 0x37);
+
+	imx307_write_register(ViPipe, 0x3405, 0x10);
+	imx307_write_register(ViPipe, 0x3407, 0x03);
+	imx307_write_register(ViPipe, 0x3414, 0x0A);
+	imx307_write_register(ViPipe, 0x3418, y_out_size & 0xFF);
+	imx307_write_register(ViPipe, 0x3419, (y_out_size >> 8) & 0x1F);
+	imx307_write_register(ViPipe, 0x3441, 0x0A);
+	imx307_write_register(ViPipe, 0x3442, 0x0A);
+	imx307_write_register(ViPipe, 0x3443, 0x03);
+	imx307_write_register(ViPipe, 0x3444, 0x20);
+	imx307_write_register(ViPipe, 0x3445, 0x25);
+	/* MIPI D-PHY HS timings for 445.5 Mbps/lane (FRSEL=1h 4-lane). */
+	imx307_write_register(ViPipe, 0x3446, 0x57);
+	imx307_write_register(ViPipe, 0x3447, 0x00);
+	imx307_write_register(ViPipe, 0x3448, 0x37);
+	imx307_write_register(ViPipe, 0x3449, 0x00);
+	imx307_write_register(ViPipe, 0x344A, 0x1F);
+	imx307_write_register(ViPipe, 0x344B, 0x00);
+	imx307_write_register(ViPipe, 0x344C, 0x1F);
+	imx307_write_register(ViPipe, 0x344D, 0x00);
+	imx307_write_register(ViPipe, 0x344E, 0x1F);
+	imx307_write_register(ViPipe, 0x344F, 0x00);
+	imx307_write_register(ViPipe, 0x3450, 0x77);
+	imx307_write_register(ViPipe, 0x3451, 0x00);
+	imx307_write_register(ViPipe, 0x3452, 0x1F);
+	imx307_write_register(ViPipe, 0x3453, 0x00);
+	imx307_write_register(ViPipe, 0x3454, 0x17);
+	imx307_write_register(ViPipe, 0x3455, 0x00);
+	imx307_write_register(ViPipe, 0x3472, x_out_size & 0xFF);
+	imx307_write_register(ViPipe, 0x3473, (x_out_size >> 8) & 0x1F);
+	imx307_write_register(ViPipe, 0x3480, 0x49);
+
+	imx307_default_reg_init(ViPipe);
+	imx307_write_register(ViPipe, 0x3000, 0x00);
+	usleep(20000);
+	imx307_write_register(ViPipe, 0x3002, 0x00);
+	imx307_write_register(ViPipe, 0x304B, 0x0a);
+	usleep(20000);
+
+	printf("=== Sony imx307 FLEX_CROP (4-lane) init: %ux%u (WINPH=%u "
+	       "WINWH=%u WINPV=%u WINWV=%u VMAX=%u HMAX=0x0898) ===\n",
+	       crop_w, crop_h, winph, winwh, winpv, winwv, vmax);
 	return;
 }
 
