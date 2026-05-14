@@ -2925,3 +2925,110 @@ fail:
     free_chunk((unsigned)hash_ctx);
     return -1;
 }
+
+/*
+ * ---- klad_setup — SHA message-padding wrapper ----
+ *
+ * Surprising finding from reversal: this is NOT key loading. The function
+ * appends standard SHA padding to the source buffer in-place, computes
+ * the digest, then RESTORES the original buffer bytes — making the
+ * modification transparent to the caller.
+ *
+ * Steps:
+ *   1. alloc_chunk(120) — saved-state buffer
+ *   2. memcpy(saved, src+size, 120) — snapshot 120 bytes AFTER the
+ *      message (the bytes that padding will overwrite)
+ *   3. alloc_chunk(64) — SHA working context, zeroed
+ *   4. sha_init (0x40006e0) — hardware SHA bring-up via SPACC
+ *   5. If src != NULL: append SHA padding bytes in-place at src+size:
+ *        - 0x80 marker
+ *        - zero pad to (size mod 64) <= 56
+ *        - big-endian 64-bit bit-length (size << 3)
+ *   6. sha_compute (0x4000654) — drive SPACC over the padded buffer
+ *   7. write_sha_output (0x4003bcc) — emit digest to caller-supplied
+ *      output area (the third arg, originally the hash_ctx pointer)
+ *   8. memcpy(src+size, saved, 120) — restore the trampled 120 bytes
+ *   9. Free both chunks, return 0 on success / -1 on any failure
+ *
+ * Key reverse-engineering insight: the bootrom hashes whatever range
+ * the caller passes, but does so non-destructively. Because the 120-byte
+ * snapshot covers the SHA-2 padding region (which is at most 64+8=72
+ * bytes), this works correctly for SHA-1, SHA-224, and SHA-256.
+ *
+ * For src == NULL the function takes a special "hash empty / digest-only"
+ * path that skips the in-place padding — used by callers that want a
+ * digest of a pre-formed buffer.
+ */
+extern int  sha_init(void *ctx);                            /* 0x40006e0 */
+extern int  sha_compute(void *src);                         /* 0x4000654 */
+extern void sha_write_output(void *dst_ctx);                /* 0x4003bcc */
+
+int klad_setup(void *src, unsigned size, void *hash_ctx_out)  /* 0x400072c */
+{
+    u8 *saved;
+    u8 *sha_ctx;
+    u8 *p;
+    u8 *end_ptr;
+    unsigned mod;
+    unsigned pad_len;
+    int rc;
+
+    saved = (u8 *)alloc_chunk(120);
+    if (saved == 0)
+        return -1;
+
+    end_ptr = (u8 *)src + size;
+    memcpy(saved, end_ptr, 120);
+
+    sha_ctx = (u8 *)alloc_chunk(64);
+    if (sha_ctx == 0) {
+        free_chunk((unsigned)saved);
+        return -1;
+    }
+    memset(sha_ctx, 0, 64);
+
+    if (sha_init(sha_ctx) != 0) {
+        free_chunk((unsigned)sha_ctx);
+        free_chunk((unsigned)saved);
+        return -1;
+    }
+
+    if (src != 0) {
+        p = (u8 *)src;
+        mod = size & 63;
+        pad_len = (mod <= 55) ? (56 - mod) : (120 - mod);
+
+        p[size] = 0x80;                  /* SHA padding marker */
+        memset(p + size + 1, 0, pad_len - 1);
+
+        /* Big-endian 64-bit bit-length at end of the padded block.
+         * For source sizes that fit in 32 bits, the upper 3 bytes
+         * stay zero and the low 5 bytes encode size << 3. */
+        {
+            u8 *t = p + size + pad_len + 8;
+            t[-9] = 0;
+            t[-8] = 0;
+            t[-7] = 0;
+            t[-6] = (u8)(size >> 29);
+            t[-5] = (u8)(size >> 21);
+            t[-4] = (u8)(size >> 13);
+            t[-3] = (u8)(size >> 5);
+            t[-2] = (u8)(size << 3);
+        }
+    }
+
+    rc = sha_compute(src);
+    if (rc != 0) {
+        free_chunk((unsigned)sha_ctx);
+        free_chunk((unsigned)saved);
+        return -1;
+    }
+
+    sha_write_output(hash_ctx_out);
+
+    /* Restore the 120 bytes that padding may have trampled. */
+    memcpy(end_ptr, saved, 120);
+    free_chunk((unsigned)sha_ctx);
+    free_chunk((unsigned)saved);
+    return 0;
+}

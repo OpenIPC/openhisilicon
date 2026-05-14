@@ -32,9 +32,11 @@ int  media_sub_b_setup(void *desc)                  { (void)desc; return 0; }  /
 /* KLAD/RSA crypto-driver primitives — the deepest hardware-driver
  * layer. klad_dispatch_sig calls these in sequence; reversing them
  * means tracing the exact RSA0 register dance vs SPACC accelerator
- * register dance. */
-int  klad_setup(void *ctx, unsigned arg, void *src)
-    { (void)ctx; (void)arg; (void)src; return 0; }                        /* 0x400072c */
+ * register dance. (klad_setup itself is reversed in bootloader.c —
+ * the three SHA leaves it calls remain as stubs.) */
+int  sha_init(void *ctx)                            { (void)ctx; return 0; }  /* 0x40006e0 */
+int  sha_compute(void *src)                         { (void)src; return 0; }  /* 0x4000654 */
+void sha_write_output(void *dst_ctx)                { (void)dst_ctx; }     /* 0x4003bcc */
 int  rsa0_kick(unsigned mode, unsigned ticks)
     { (void)mode; (void)ticks; return 0; }                                /* 0x40006a4 */
 int  klad_rsa_chain(void *ctx, unsigned key_size, void *payload)

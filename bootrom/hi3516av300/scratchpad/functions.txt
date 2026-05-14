@@ -89,7 +89,8 @@ func_50  0x04001150  klad_validate_header(ctx)              load OTP slot 0x100a
 func_51  0x0400136c  klad_finalize(ctx)                     alloc 2×64B hash bufs, run SHA chain (init→load_const→update→chunk×2→close), call klad_finalize_check, write DDR target into ctx[44]
 func_52  0x040016ac  klad_check_b                           SD/USB-fastboot variant of klad_load_keys — media_init_a/b/c + media_program_a then alloc/parse/validate/dispatch chain
 func_53  0x040018b8  klad_check_a                           SDIO-media variant — alt_media_init + alt_media_program then same chain
-func_54  0x04000868  klad_dispatch_sig(ctx,sz,a2,a3,a4)     the actual RSA verify: alloc work bufs, klad_setup, rsa0_kick(RSA0+0x50), dispatch on key_size (0x200=2048-bit RSA path / ≤0x7f skip / else loop sz>>7 over 128-bit blocks); 509 instr — outer-shape preserved, RSA0 register dance deferred to klad_rsa_chain
+func_54  0x04000868  klad_dispatch_sig(ctx,sz,a2,a3,a4)     RSA verify dispatch on ctx[2]=mode: 0x200→4096-bit (path 0x4000b9c), 0x100→2048-bit loop, 0x80→1024-bit loop, ≤0x7f→ERROR (uart status "61"); 509 instr, RSA0 register dance deferred to klad_rsa_chain
+func_55  0x0400072c  klad_setup(src, size, hash_ctx_out)    SHA message-padding wrapper: snapshot 120B past msg, alloc SHA ctx, append SHA-2 padding in-place (0x80 + zeros + 64-bit BE bit-length), drive sha_init/sha_compute/sha_write_output, RESTORE original bytes. Non-destructive hash of arbitrary range. 79 instr.
 
 Reset trampoline (covered by re/start.S, not in the func_N enumeration):
 
@@ -117,7 +118,9 @@ SDIO0/SD wire-protocol leaves (surfaced by the media-driver reversal):
 
 KLAD/RSA inner hardware drivers (the next focused-audit frontier — these
 are the actual RSA0/SPACC register sequences and SHA chain):
-  0x400072c  klad_setup(ctx,arg,src)        pre-validation hardware bring-up — clocks/reset SPACC+RSA0
+  0x40006e0  sha_init(ctx)                  SHA hardware/context init via SPACC (called from klad_setup)
+  0x4000654  sha_compute(src)               drive SPACC over the SHA-padded buffer
+  0x4003bcc  sha_write_output(dst_ctx)      emit digest to caller-supplied output area
   0x40006a4  rsa0_kick(mode, ticks)         kick RSA0 hardware engine; runs until done or timeout
   0x4000aac  klad_rsa_chain(ctx,sz,pl)      iterates RSA0 over the payload — actual MOD-MUL chain
   0x4001314  klad_check_step                pre-step in klad_finalize
