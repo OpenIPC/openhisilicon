@@ -136,3 +136,116 @@ configure_soc_clocks
 
   Re-compiled freestanding bootloader.c matches this disassembly
   instruction-for-instruction.
+
+reset_soc_clocks
+-----------------
+
+  040001b0: e3a01000        mov    r1, #0
+  040001b4: e3a0300a        mov    r3, #10               ; settle counter
+  040001b8: e3411201        movt   r1, #0x1201           ; r1 = CRG_START
+  040001bc: e5912080        ldr    r2, [r1, #0x80]       ; r2 = CRG.SOC_CONFIG
+  040001c0: e3c22e5f        bic    r2, r2, #0x5f0
+  040001c4: e3c2200f        bic    r2, r2, #0xf          ; clear bits 0-10 except bit 9
+  040001c8: e5812080        str    r2, [r1, #0x80]       ; no bits set back
+  040001cc-040001d4:        nop / subs / bne     ; 10× nop settle
+  040001d8: e12fff1e        bx     lr
+
+  Mirror of configure_soc_clocks without the re-OR step.
+
+main (bootloader flow at 0x04002704)
+-------------------------------------
+
+  04002704: e92d4010        push   {r4, lr}
+  04002708: ebfffa86        bl     initial_memory_setup (0x4001128)
+  0400270c: eb000aaa        bl     timer_start          (0x40051bc)
+  04002710: eb000ab8        bl     timer_reset_counter  (0x40051f8)
+
+  04002714: mov r3,#0 / movt r3,#0x1202 / ldr r2,[r3,#0x8c]
+                                                        ; r2 = SYSCTRL.SYSSTAT
+  04002720: e2124010        ands   r4, r2, #0x10        ; boot_alt = SYSSTAT & 0x10
+  04002724: 1a00000a        bne    0x4002754             ; skip pinmux if set
+
+  Default-boot pinmux block (boot_alt == 0):
+    movt r3,#0x10ff                                     ; r3 = IO_CTRL0_START
+    str  #0x6c1 [r3]            ; IOCFG1[0]
+    str  #0x4f1 [r3, +4]        ; IOCFG1[1]
+    str  #0x4f1 [r3, +8]        ; IOCFG1[2]
+    str  #0x4f1 [r3, +12]       ; IOCFG1[3]
+    str  #0x5f1 [r3, +16]       ; IOCFG1[4]
+    str  #0x4f1 [r3, +20]       ; IOCFG1[5]
+
+  04002754: mov r3,#0 / movt r3,#0x1202 / ldr r3,[r3,#0x30]
+                                                        ; r3 = SYSCTRL.PERISTAT
+  04002760: tst r3, #1
+  04002764: bne 0x4002808                                ; path_a (PERISTAT.0 set)
+
+  04002768: tst r2, #0x20                                ; SYSSTAT & 0x20 — fastboot hint
+  0400276c: beq 0x40027a4                                ; skip fastboot if clear
+  04002770: bl  fastboot_update (0x4002368)
+  04002774: cmp r0, #0
+  04002778: bne 0x40027a4                                ; on failure → is_update_mode
+
+  return_success:    [0x400277c]
+    04002778: (or fall-through)
+    0400277c: bl  disable_instruction_cache (0x4002880)
+    04002780-0400278c: r3 = *(u32*)0x04010188
+    04002790: bne 0x4002798                              ; skip clock-reset if SRAM[0x188]!=0
+    04002794: bl  reset_soc_clocks (0x40001b0)
+    04002798: bl  timer_stop      (0x40051e8)
+    0400279c: mov r0, #0
+    040027a0: pop {r4, pc}                               ; return 0
+
+  is_update_mode_check:  [0x40027a4]
+    040027a4: bl  is_update_mode  (0x400105c)
+    040027a8: cmp r0, #0
+    040027ac: bne 0x4002834                              ; path_d if true
+    040027b0: cmp r4, #0
+    040027b4: bne 0x4002818                              ; path_c if boot_alt
+
+  path_b (flash boot):   [0x40027b8]
+    040027b8: bl  config_use_flash (0x400249c)
+    040027bc: cmp r0, #0
+    040027c0: beq 0x400277c                              ; success
+    040027c4: bl  media_update    (0x40023c4)
+    040027c8: cmp r0, #0
+    040027cc: beq 0x400277c                              ; success
+    (fall-through to erase_and_reset)
+
+  erase_and_reset:    [0x40027d0]
+    040027d0: r0 = SDRAM_START + 0x500
+    040027d4: r2 = 0x6000
+    040027d8: r1 = 0
+    040027e0: bl  memset (0x4002900)                     ; zero 24KB at SDRAM+0x500
+    040027e4: r0 = 500
+    040027e8: bl  timer_wait_seconds (0x4002cb4)
+    040027ec: bl  timer_stop          (0x40051e8)
+    040027f0-040027fc: r3 = SYSCTRL_START / r2 = 1 / r0 = -1
+    04002800: str r2, [r3, #4]                           ; SC_SYSRES = 1 (soft reset)
+    04002804: pop {r4, pc}                               ; return -1 (unreachable)
+
+  path_a:             [0x4002808]
+    04002808: bl  bootrom_secure_check (0x4002284)
+    0400280c: cmp r0, #0
+    04002810: beq 0x400277c                              ; success
+    04002814: b   0x40027d0                              ; erase_and_reset
+
+  path_c:             [0x4002818]
+    04002818: bl  bootrom_alt_media (0x40025d4)
+    0400281c: cmp r0, #0
+    04002820: beq 0x400277c                              ; success
+    04002824: bl  media_update      (0x40023c4)
+    04002828: cmp r0, #0
+    0400282c: beq 0x400277c                              ; success
+    04002830: b   0x40027d0                              ; erase_and_reset
+
+  path_d:             [0x4002834]
+    04002834: bl  media_update      (0x40023c4)
+    04002838: cmp r0, #0
+    0400283c: beq 0x400277c                              ; success
+    04002840: b   0x40027b0                              ; re-test boot_alt → path_b/c
+
+  Re-compiled freestanding bootloader.c preserves the full control-flow
+  graph (success / erase_and_reset / paths a/b/c/d) but is not byte-
+  identical — gcc reorders some blocks and uses slightly different
+  instruction selection for the comparisons. Functionally equivalent
+  modulo the stub return values.

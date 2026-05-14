@@ -8,6 +8,7 @@
 #define SDRAM_START     0x04010000
 #define STACK_START     (SDRAM_START + 0x500)
 
+#define IO_CTRL0_START  0x10ff0000
 #define CRG_START       0x12010000
 #define SYSCTRL_START   0x12020000
 

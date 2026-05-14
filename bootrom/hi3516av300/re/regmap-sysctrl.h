@@ -3,5 +3,7 @@
 
 #define SC_CTRL    0x0000
 #define SC_SYSRES  0x0004
+#define PERISTAT   0x0030
+#define SYSSTAT    0x008c
 
 #endif

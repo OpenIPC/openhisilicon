@@ -14,6 +14,8 @@ func_07  0x04002cd8  strlen(str)                            LDRB + CMP, returns 
 func_08  0x04002d04  strncmp(s1, s2, n)                     two-pointer compare, returns signed diff
 func_09  0x04002e00  strcmp(s1, s2)                         two-pointer compare until first mismatch or NUL
 func_0a  0x04000140  configure_soc_clocks                   polls PLL_LOCK_STAT for APLL+DPLL+EPLL (mask 0xb, timeout 5001 iters), writes 0x592 into SOC_CONFIG, NOP-settles 10 cycles
+func_0b  0x040001b0  reset_soc_clocks                       inverse of configure_soc_clocks — clears SOC_CONFIG bits 0-10 (bit 9 preserved), 10-NOP settle
+func_0c  0x04002704  main                                   bootloader main flow — 4 boot paths dispatched on SYSSTAT bits 4/5 + PERISTAT bit 0; converges on success (disable_ic + maybe reset_soc_clocks + timer_stop) or erase+SYSRES soft-reset
 
 Reset trampoline (covered by re/start.S, not in the func_N enumeration):
 
@@ -30,6 +32,16 @@ Reset trampoline (covered by re/start.S, not in the func_N enumeration):
                                       remap, jumps to *(SDRAM_START)
   0x04000100  _dead_loop              triggers SC_SYSRES soft-reset, spins
 
-Pending (callees of _start not yet reverse-engineered):
+Pending (callees of main, stubbed in re/stubs.c — addresses confirmed by `bl` sites in main):
 
-  0x04002704  main                    called from _start; stubbed in bootloader.c
+  0x0400105c  is_update_mode          consulted between fastboot try and flash/alt fallback
+  0x04001128  initial_memory_setup    main's first call after entry
+  0x04002284  bootrom_secure_check    path_a entry (PERISTAT bit 0 == 1); name inferred from position, awaits real RE
+  0x04002368  fastboot_update         tried when SYSSTAT bit 5 set
+  0x040023c4  media_update            shared between paths b/c/d as the bulk image loader
+  0x0400249c  config_use_flash        path_b entry (flash boot)
+  0x040025d4  bootrom_alt_media       path_c entry (SYSSTAT bit 4 == 1); name inferred
+  0x04002cb4  timer_wait_seconds      pre-soft-reset wait of 500 units
+  0x040051bc  timer_start             called early in main
+  0x040051e8  timer_stop              called on every main exit
+  0x040051f8  timer_reset_counter     called after timer_start
