@@ -209,11 +209,70 @@ that does not pass klad_dispatch_sig at 0x4000868.
   jump target would let an attacker run arbitrary code with the
   remap-already-cleared state set up.
 
-What you cannot easily attack from these findings: the actual RSA
-signature check (klad_dispatch_sig, 510 instructions, still stubbed),
-the OTP-key fetch (klad_load_keys), and the SHA chain (klad_finalize
-+ klad_check_a/b). These are the next reversal frontier — they are
-where the secure-mode chip's actual trust boundary lives.
+RSA verification chain — what we now know
+------------------------------------------
+
+The 9 KLAD primitives have been structurally reversed. Concrete
+findings worth flagging for crypto auditors:
+
+* **OTP hash anchor at 0x100a0050..0x100a006c.** klad_validate_header
+  (0x4001150) loads 8 words (32 bytes) from this fused-OTP slot and
+  compares against the image header's signature bytes using strncmp.
+  This is a vendor-baked hash anchor, not a public key. The slot is
+  read every secure boot; if an attacker can write the OTP (typically
+  one-time, but mask-ROM bugs in older HiSilicon parts have allowed
+  re-fuse) they own boot trust forever.
+
+* **Public key loaded elsewhere.** klad_setup (0x400072c, still a
+  stub at the time of writing) is where the actual RSA public key
+  enters the chain. Whether the key size and modulus come from OTP
+  alone or are partly attacker-controlled (i.e., taken from the
+  image header) is the single most important question still open.
+
+* **RSA0 hardware at 0x10080050.** klad_dispatch_sig (0x4000868)
+  kicks the RSA0 engine via rsa0_kick(RSA0_START + 0x50, ticks_200ms)
+  and iterates 128-bit blocks through klad_rsa_chain. The full
+  RSA0 register dance (the 400+ instructions inside klad_rsa_chain
+  at 0x4000aac, still a stub) is the next focused-audit target.
+
+* **Potential key-size downgrade.** klad_dispatch_sig dispatches on
+  ctx[2] (key size) with three paths:
+      key_size == 0x200    → 2048-bit RSA via klad_rsa_chain
+      key_size <= 0x7f     → SKIP the iteration entirely (!)
+      else                 → loop (key_size >> 7) times over 128-bit
+                             blocks
+  The ≤0x7f path is a hard-skip with rc=0. If key_size flows from
+  the attacker-controlled image header (rather than from OTP), an
+  image declaring key_size <= 127 bits bypasses cryptographic verify
+  entirely. Status of this path — whether key_size is OTP-sourced
+  or header-sourced — depends on klad_setup, which is still a
+  stub. **This is the single most important RSA-side question to
+  answer next.**
+
+* **SHA chain via SPACC.** klad_finalize (0x400136c) runs a
+  6-step SHA pipeline (init → load_const → update → chunk × 2
+  → close → check) against a 64-byte working buffer. The
+  SPACC accelerator drives this; klad_finalize_check (0x4000614)
+  compares the digest against a value passed in. The digest size
+  and which fields feed the chunks is still inside the stubbed
+  SHA helpers.
+
+* **strncmp side-channel in klad_validate_header.** The OTP-vs-
+  header signature comparison uses strncmp, which short-circuits
+  on first mismatch. The bootrom is not running under any timing-
+  attack mitigation, so on a chip with measurable boot-time
+  delta (e.g. UART debug enabled), an attacker can in principle
+  learn the OTP signature byte-by-byte over many boots. Real-world
+  exploitability depends on whether boot timing is visible and
+  whether the boot rejects-then-retries with the same image — the
+  bootrom does reset on failure, so the attacker gets one
+  measurement per boot cycle.
+
+The remaining inner stubs are the 11 RSA0/SPACC/SHA hardware-driver
+primitives (klad_setup, rsa0_kick, klad_rsa_chain, the 6 klad_sha_*
+helpers, klad_finalize_check, klad_check_step, klad_alt_step) plus
+2 alt-media transit functions. Reversing klad_setup is the highest-
+value next step — it answers the key-size-downgrade question.
 
 
 Reading order suggestion for new auditors
