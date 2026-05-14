@@ -1725,6 +1725,58 @@ static long ive_op_hist(unsigned long arg)
 	return ive_submit_nonxnn(node, buf);
 }
 
+/* ---- EqualizeHist (op=13 reused, ioctl 0xc0b8462a) ----
+ *
+ * Vendor cv500 calls `ive_fill_hist_task` to set up the standard Hist
+ * node, then overrides node[7]=0x61 (EqualizeHist mode marker) and
+ * adds the dst-related fields for the equalized output image. Decoded
+ * from `ive_ioctl` dispatcher @0x68dc-0x6938.
+ *
+ * Arg layout (ioctl size 184 B):
+ *   +0:    HI_HANDLE
+ *   +8:    IVE_SRC_IMAGE_S src
+ *   +80:   IVE_DST_IMAGE_S dst  (equalized output)
+ *   +152:  IVE_MEM_INFO_S stMem (24 B — workspace for histogram bins)
+ *   +176:  HI_BOOL instant
+ *
+ * Field map: standard Hist (op=13) + dst.phys @ node[28], dst.stride
+ * @ node[52], mode-byte @ node[7]=0x61.
+ */
+static long ive_op_equalize_hist(unsigned long arg)
+{
+	u8 *buf = (u8 *)arg;
+	u8 *src = buf + 8;
+	u8 *dst = buf + 80;
+	u8 *stMem = buf + 152;
+	u32 stMem_phys = *(u32 *)stMem;
+	u8 node[208];
+
+	if (IVE_CHECK_IMG(src) || IVE_CHECK_IMG(dst))
+		return -EINVAL;
+	if (!stMem_phys || (stMem_phys & 0xF)) {
+		pr_info("ive_neo: EqualizeHist stMem.phys=0x%x invalid\n", stMem_phys);
+		return -EINVAL;
+	}
+
+	memset(node, 0, sizeof(node));
+	/* Standard Hist field map (same as ive_op_hist + LUT byte). */
+	node[8]  = cv500_src_fmt(IMG_TYPE(src));
+	node[10] = 13;                              /* op = Hist */
+	*(u32 *)(node + 16) = IMG_PHYS(src);
+	*(u32 *)(node + 20) = stMem_phys;
+	*(u16 *)(node + 40) = (u16)IMG_WIDTH(src);
+	*(u16 *)(node + 42) = (u16)IMG_HEIGHT(src);
+	*(u16 *)(node + 44) = (u16)IMG_STRIDE(src);
+
+	/* EqualizeHist overrides: mode-byte + dst image fields. */
+	node[7]  = 0x61;                            /* EqualizeHist mode marker */
+	*(u32 *)(node + 28) = IMG_PHYS(dst);
+	*(u16 *)(node + 52) = (u16)IMG_STRIDE(dst);
+
+	pr_info_once("ive_neo: EqualizeHist handler wired (HW op 13 + mode 0x61)\n");
+	return ive_submit_nonxnn(node, buf);
+}
+
 /* ---- Thresh_S16 (op=14): arg = {handle(8), src(72), dst(72), ctrl(12+)} ---- */
 static long ive_op_thresh_s16(unsigned long arg)
 {
@@ -3223,8 +3275,8 @@ static long ive_dispatch(unsigned int cmd, unsigned long arg)
 	 *     or rejects. Silent stub is correct here.
 	 */
 
-	/* (b) reuses ive_fill_hist_task with node[7]=0x61 + LUT remap. */
-	case 0xc0b8462au:      return 0;  /* EqualizeHist — issue #112 follow-up */
+	/* (b) reuses ive_fill_hist_task with node[7]=0x61 + dst-image overrides. */
+	case 0xc0b8462au:      return ive_op_equalize_hist(arg);  /* EqualizeHist */
 
 	case 0xc0a04602u:                /* CSC */
 #if defined(hi3516cv500)
@@ -3253,8 +3305,11 @@ static long ive_dispatch(unsigned int cmd, unsigned long arg)
 		return 0;
 #endif
 
-	/* (b) GMM (single-Gaussian) is GMM2 with default params in
-	 * vendor. No separate fill_gmm_task — vendor only has fill_gmm2. */
+	/* (c) GMM (single-Gaussian) — vendor cv500 ive_ioctl has no
+	 * dispatch case for ioctl 0x4618 (verified via objdump grep of
+	 * the ioctl-nr movw immediates). Userspace libive.so likely
+	 * routes single-Gaussian through GMM2 with mixture=1, or
+	 * computes on CPU. Silent stub is correct. */
 	case 0xc1184618u:      return 0;  /* GMM */
 
 	/* (c) cv500 vendor blob has no symbols at all for these — HW
