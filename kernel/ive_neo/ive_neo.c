@@ -2875,6 +2875,201 @@ static long ive_op_resize_cv500(unsigned long arg)
 	pr_info_once("ive_neo: Resize handler wired (HW op 0x30, U8C1 + multi-plane)\n");
 	return ive_submit_nonxnn(node, buf);
 }
+
+/* ---- cv500 LKOpticalFlowPyr (HW op 0x1c, ioctl 0xc2c0461c) ----
+ *
+ * Lucas-Kanade pyramidal optical flow. Up to 4 pyramid levels
+ * (u8MaxLevel = 0..3). Vendor blob symbols: ive_lk_optical_flow_pyr
+ * @0x46cc (top), ive_fill_lk_optical_flow_pyr_task @0x8ec4,
+ * ive_check_lk_optical_flow_pyr_param @0x129c8.
+ *
+ * Arg buffer (704 bytes, vendor's IVE_CMD_LK_OPT_FLOW=0xc2c0461c):
+ *   +0:    HI_HANDLE                                  8
+ *   +8:    IVE_SRC_IMAGE_S prev[4]   (4 * 72)        288
+ *   +296:  IVE_SRC_IMAGE_S next[4]                   288
+ *   +584:  IVE_SRC_MEM_INFO_S prevPts (24)            24
+ *   +608:  IVE_MEM_INFO_S    nextPts                  24
+ *   +632:  IVE_DST_MEM_INFO_S status                  24
+ *   +656:  IVE_DST_MEM_INFO_S err                     24
+ *   +680:  IVE_LK_OPTICAL_FLOW_PYR_CTRL_S ctrl        16
+ *       +0:  u32 enOutMode (0=NONE, 1=STATUS, 2=BOTH)
+ *       +4:  u32 bUseInitFlow
+ *       +8:  u16 u16PtsNum
+ *      +10:  u8  u8MaxLevel (0..3)
+ *      +11:  u8  u0q8MinEigThr
+ *      +12:  u8  u8IterCnt
+ *      +13:  u8  u0q8Eps
+ *   +696:  HI_BOOL instant                             4
+ *   +700:  padding                                     4
+ *
+ * Validator constraints:
+ *   u16PtsNum <= 500, u8MaxLevel <= 3, u8IterCnt <= 19, enOutMode <= 2.
+ *
+ * Per-level pyramid node-field layout (decoded from
+ * ive_fill_lk_optical_flow_pyr_task @0x8ec4):
+ *
+ *   level 0: node[16]=prev.phys,  node[120]=next.phys,
+ *            node[44]=prev.stride, node[50]=next.stride
+ *   level 1: node[24]=prev.phys,  node[124]=next.phys,
+ *            node[46]=prev.stride, node[52]=next.stride
+ *   level 2: node[32]=prev.phys,  node[128]=next.phys,
+ *            node[48]=prev.stride, node[54]=next.stride
+ *   level 3: node[136]=prev.phys, node[132]=next.phys,
+ *            node[12]=prev.stride, node[14]=next.stride
+ *
+ * Output mem buffers:
+ *   node[140] = prevPts.phys (always)
+ *   node[20]  = nextPts.phys (always)
+ *   node[28]  = status.phys  (if enOutMode >= 1, else 0)
+ *   node[36]  = err.phys     (if enOutMode == 2, else 0)
+ *
+ * ctrl-mirrored node fields:
+ *   node[9]   = enOutMode
+ *   node[40]  = prev[0].width, node[42] = prev[0].height
+ *   node[56]  = u8MaxLevel
+ *   node[57]  = bUseInitFlow != 0
+ *   node[58]  = u0q8MinEigThr
+ *   node[59]  = u0q8Eps
+ *   node[94]  = u8IterCnt
+ *   node[96]  = u16PtsNum
+ */
+static long ive_op_lk_optical_flow_pyr_cv500(unsigned long arg)
+{
+	u8 *buf  = (u8 *)arg;
+	u8 *prev = buf + 8;
+	u8 *next = buf + 296;
+	u8 *prevPts = buf + 584;
+	u8 *nextPts = buf + 608;
+	u8 *status  = buf + 632;
+	u8 *err     = buf + 656;
+	u8 *ctrl    = buf + 680;
+	u32 out_mode  = *(u32 *)(ctrl + 0);
+	u32 use_init  = *(u32 *)(ctrl + 4);
+	u16 pts_num   = *(u16 *)(ctrl + 8);
+	u8  max_level = ctrl[10];
+	u8  min_eig   = ctrl[11];
+	u8  iter_cnt  = ctrl[12];
+	u8  eps       = ctrl[13];
+	u32 p0_w, p0_h, p0_s;
+	u8 node[208];
+	u32 i;
+
+	if (out_mode > 2) {
+		pr_info("ive_neo: LK bad enOutMode=%u (0..2)\n", out_mode);
+		return -EINVAL;
+	}
+	if (max_level > 3) {
+		pr_info("ive_neo: LK bad u8MaxLevel=%u (0..3)\n", max_level);
+		return -EINVAL;
+	}
+	if (iter_cnt > 19) {
+		pr_info("ive_neo: LK bad u8IterCnt=%u (1..19)\n", iter_cnt);
+		return -EINVAL;
+	}
+	if (!pts_num || pts_num > 500) {
+		pr_info("ive_neo: LK bad u16PtsNum=%u (1..500)\n", pts_num);
+		return -EINVAL;
+	}
+	if (!*(u32 *)prevPts || !*(u32 *)nextPts) {
+		pr_info("ive_neo: LK prevPts/nextPts phys is 0\n");
+		return -EINVAL;
+	}
+	if (out_mode >= 1 && !*(u32 *)status) {
+		pr_info("ive_neo: LK status.phys is 0 (required when enOutMode>=1)\n");
+		return -EINVAL;
+	}
+	if (out_mode == 2 && !*(u32 *)err) {
+		pr_info("ive_neo: LK err.phys is 0 (required when enOutMode==BOTH)\n");
+		return -EINVAL;
+	}
+
+	/* Level 0 is mandatory. Validate src and grab dims. */
+	if (IVE_CHECK_IMG(prev) || IVE_CHECK_IMG(next))
+		return -EINVAL;
+	p0_w = *(u32 *)(prev + 60);
+	p0_h = *(u32 *)(prev + 64);
+	p0_s = *(u32 *)(prev + 48);
+
+	memset(node, 0, sizeof(node));
+
+	/* Constants */
+	node[10] = 0x1c;                            /* op = LK */
+	node[9]  = (u8) out_mode;
+	*(u16 *)(node + 40) = (u16) p0_w;
+	*(u16 *)(node + 42) = (u16) p0_h;
+
+	/* ctrl mirror */
+	node[56] = max_level;
+	node[57] = use_init ? 1 : 0;
+	node[58] = min_eig;
+	node[59] = eps;
+	node[94] = iter_cnt;
+	*(u16 *)(node + 96) = pts_num;
+
+	/* Pyramid level fields. Higher levels get written only when
+	 * max_level reaches them — same conditional as vendor's fill_task. */
+	for (i = 0; i <= max_level; i++) {
+		u8 *pi = prev + i * 72;
+		u8 *ni = next + i * 72;
+		u32 pi_phys = *(u32 *)pi;
+		u32 ni_phys = *(u32 *)ni;
+		u32 pi_stride = *(u32 *)(pi + 48);
+		u32 ni_stride = *(u32 *)(ni + 48);
+
+		if (!pi_phys || !ni_phys || (pi_phys & 0xF) || (ni_phys & 0xF)) {
+			pr_info("ive_neo: LK level %u phys invalid (prev=0x%x next=0x%x)\n",
+				i, pi_phys, ni_phys);
+			return -EINVAL;
+		}
+		if (!pi_stride || !ni_stride) {
+			pr_info("ive_neo: LK level %u stride invalid (prev=%u next=%u)\n",
+				i, pi_stride, ni_stride);
+			return -EINVAL;
+		}
+
+		switch (i) {
+		case 0:
+			*(u32 *)(node + 16)  = pi_phys;
+			*(u32 *)(node + 120) = ni_phys;
+			*(u16 *)(node + 44)  = (u16) pi_stride;
+			*(u16 *)(node + 50)  = (u16) ni_stride;
+			break;
+		case 1:
+			*(u32 *)(node + 24)  = pi_phys;
+			*(u32 *)(node + 124) = ni_phys;
+			*(u16 *)(node + 46)  = (u16) pi_stride;
+			*(u16 *)(node + 52)  = (u16) ni_stride;
+			break;
+		case 2:
+			*(u32 *)(node + 32)  = pi_phys;
+			*(u32 *)(node + 128) = ni_phys;
+			*(u16 *)(node + 48)  = (u16) pi_stride;
+			*(u16 *)(node + 54)  = (u16) ni_stride;
+			break;
+		case 3:
+			/* Level 3 uses unusual offsets — vendor's fill_task
+			 * writes prev.phys to node[136] (not 40+8*i pattern)
+			 * and the strides to node[12]/[14]. */
+			*(u32 *)(node + 136) = pi_phys;
+			*(u32 *)(node + 132) = ni_phys;
+			*(u16 *)(node + 12)  = (u16) pi_stride;
+			*(u16 *)(node + 14)  = (u16) ni_stride;
+			break;
+		}
+	}
+	(void)p0_s;  /* p0_s used only via the level-0 IVE_CHECK_IMG above. */
+
+	/* Output buffers (phys of user-allocated MMZ blobs). */
+	*(u32 *)(node + 140) = *(u32 *)prevPts;
+	*(u32 *)(node + 20)  = *(u32 *)nextPts;
+	if (out_mode >= 1)
+		*(u32 *)(node + 28) = *(u32 *)status;
+	if (out_mode == 2)
+		*(u32 *)(node + 36) = *(u32 *)err;
+
+	pr_info_once("ive_neo: LK handler wired (HW op 0x1c, levels 0..3)\n");
+	return ive_submit_nonxnn(node, buf);
+}
 #endif
 
 #ifndef IVE_STANDALONE
@@ -3048,7 +3243,15 @@ static long ive_dispatch(unsigned int cmd, unsigned long arg)
 		return 0;
 #endif
 	case 0xc008462eu:      return 0;  /* Resize (vendor's small 8-B stub ioctl) — superseded by 0xc4c0462e below */
-	case 0xc2c0461cu:      return 0;  /* LKOpticalFlowPyr — has ive_lk_optical_flow_pyr + fill + check */
+	case 0xc2c0461cu:                /* LKOpticalFlowPyr */
+#if defined(hi3516cv500)
+		/* HW dispatch — single 208-B node, up to 4 pyramid levels.
+		 * Output mem buffers (prevPts/nextPts/status/err) are
+		 * user-allocated MMZ blobs; HW writes via their phys. */
+		return ive_op_lk_optical_flow_pyr_cv500(arg);
+#else
+		return 0;
+#endif
 
 	/* (b) GMM (single-Gaussian) is GMM2 with default params in
 	 * vendor. No separate fill_gmm_task — vendor only has fill_gmm2. */

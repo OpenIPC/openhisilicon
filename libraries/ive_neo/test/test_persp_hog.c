@@ -738,11 +738,123 @@ static int test_resize(void)
     return rc;
 }
 
+static int test_lk_optical_flow_pyr(void)
+{
+    IVE_IMAGE_S prev_lvl[2], next_lvl[2];
+    IVE_MEM_INFO_S prev_pts, next_pts, status, err;
+    IVE_LK_OPTICAL_FLOW_PYR_CTRL_S ctrl;
+    IVE_HANDLE h = -1;
+    HI_S32 ret;
+    HI_U8 *prev_y, *next_y;
+    HI_U8 *prev_pts_buf;
+    int failures_before;
+    int n_pts = 4;
+    int written, i;
+
+    printf("\n=== LK Optical Flow Pyramid %ux%u, 1-level, %d points (reachability) ===\n",
+           W, H, n_pts);
+    failures_before = g_failures;
+    memset(prev_lvl, 0, sizeof(prev_lvl));
+    memset(next_lvl, 0, sizeof(next_lvl));
+    memset(&prev_pts, 0, sizeof(prev_pts));
+    memset(&next_pts, 0, sizeof(next_pts));
+    memset(&status, 0, sizeof(status));
+    memset(&err, 0, sizeof(err));
+
+    if (alloc_image(&prev_lvl[0], W, H) != HI_SUCCESS) return 1;
+    if (alloc_image(&next_lvl[0], W, H) != HI_SUCCESS) {
+        free_image(&prev_lvl[0]); return 1;
+    }
+    /* prev / next pts arrays — each point = IVE_POINT_U16S16_S = 4B
+     * (X Q14.2 + Y Q14.2). 16-byte alignment required for HW. */
+    if (alloc_mem_info(&prev_pts, 64) != HI_SUCCESS) goto fail_imgs;
+    if (alloc_mem_info(&next_pts, 64) != HI_SUCCESS) goto fail_prevpts;
+    if (alloc_mem_info(&status, 64)   != HI_SUCCESS) goto fail_nextpts;
+    if (alloc_mem_info(&err, 64)      != HI_SUCCESS) goto fail_status;
+
+    prev_lvl[0].enType = IVE_IMAGE_TYPE_U8C1;
+    next_lvl[0].enType = IVE_IMAGE_TYPE_U8C1;
+    prev_y = (HI_U8 *)(uintptr_t)prev_lvl[0].au64VirAddr[0];
+    next_y = (HI_U8 *)(uintptr_t)next_lvl[0].au64VirAddr[0];
+
+    /* Static-scene gradient: prev == next, so any tracked point should
+     * report "unchanged" (best case) or "could not track" (worst). */
+    for (i = 0; i < Y_SIZE; i++) {
+        prev_y[i] = (HI_U8)(i & 0xff);
+        next_y[i] = (HI_U8)(i & 0xff);
+    }
+    HI_MPI_SYS_MmzFlushCache(prev_lvl[0].au64PhyAddr[0], prev_y, IMG_SIZE);
+    HI_MPI_SYS_MmzFlushCache(next_lvl[0].au64PhyAddr[0], next_y, IMG_SIZE);
+
+    /* Seed 4 points around the image. Format: X (Q14.2) + Y (Q14.2) in 4B. */
+    prev_pts_buf = (HI_U8 *)(uintptr_t)prev_pts.u64VirAddr;
+    memset(prev_pts_buf, 0, 64);
+    for (i = 0; i < n_pts; i++) {
+        HI_U16 x = (HI_U16)((16 + i * 8) << 2);     /* Q14.2 encoding */
+        HI_U16 y = (HI_U16)((16 + i * 8) << 2);
+        prev_pts_buf[i * 4 + 0] = (HI_U8)(x & 0xff);
+        prev_pts_buf[i * 4 + 1] = (HI_U8)(x >> 8);
+        prev_pts_buf[i * 4 + 2] = (HI_U8)(y & 0xff);
+        prev_pts_buf[i * 4 + 3] = (HI_U8)(y >> 8);
+    }
+    HI_MPI_SYS_MmzFlushCache(prev_pts.u64PhyAddr, prev_pts_buf, 64);
+
+    memset((void *)(uintptr_t)next_pts.u64VirAddr, SENTINEL, 64);
+    memset((void *)(uintptr_t)status.u64VirAddr,   SENTINEL, 64);
+    memset((void *)(uintptr_t)err.u64VirAddr,      SENTINEL, 64);
+    HI_MPI_SYS_MmzFlushCache(next_pts.u64PhyAddr,
+                             (void *)(uintptr_t)next_pts.u64VirAddr, 64);
+    HI_MPI_SYS_MmzFlushCache(status.u64PhyAddr,
+                             (void *)(uintptr_t)status.u64VirAddr,   64);
+    HI_MPI_SYS_MmzFlushCache(err.u64PhyAddr,
+                             (void *)(uintptr_t)err.u64VirAddr,      64);
+
+    memset(&ctrl, 0, sizeof(ctrl));
+    ctrl.enOutMode    = IVE_LK_OPTICAL_FLOW_PYR_OUT_MODE_BOTH;
+    ctrl.bUseInitFlow = HI_FALSE;
+    ctrl.u16PtsNum    = n_pts;
+    ctrl.u8MaxLevel   = 0;          /* single-level: prev/next[0] only */
+    ctrl.u0q8MinEigThr = 0;
+    ctrl.u8IterCnt    = 5;
+    ctrl.u0q8Eps      = 1;
+
+    ret = HI_MPI_IVE_LKOpticalFlowPyr(&h, prev_lvl, next_lvl,
+                                      &prev_pts, &next_pts, &status, &err,
+                                      &ctrl, HI_TRUE);
+    check(ret == HI_SUCCESS, "ioctl returned success");
+    if (ret == HI_SUCCESS) {
+        check(wait_handle(h) == HI_SUCCESS, "wait completed");
+        HI_MPI_SYS_MmzFlushCache(next_pts.u64PhyAddr,
+                                 (void *)(uintptr_t)next_pts.u64VirAddr, 64);
+        HI_MPI_SYS_MmzFlushCache(status.u64PhyAddr,
+                                 (void *)(uintptr_t)status.u64VirAddr, 64);
+        written = 0;
+        for (i = 0; i < n_pts * 4; i++)
+            if (((HI_U8 *)(uintptr_t)next_pts.u64VirAddr)[i] != SENTINEL)
+                written++;
+        printf("  HW wrote %d/%d nextPts bytes (replacing sentinel)\n",
+               written, n_pts * 4);
+        check(written > 0, "HW wrote nextPts buffer (LK reached HW)");
+    }
+
+    free_mem(&err);
+fail_status:
+    free_mem(&status);
+fail_nextpts:
+    free_mem(&next_pts);
+fail_prevpts:
+    free_mem(&prev_pts);
+fail_imgs:
+    free_image(&prev_lvl[0]);
+    free_image(&next_lvl[0]);
+    return g_failures - failures_before;
+}
+
 int main(int argc, char **argv)
 {
     int rc, total_failures = 0;
     int skip_hog = 0, skip_ncc = 0, skip_lbp = 0, skip_csc = 0, skip_flt_csc = 0;
-    int skip_resize = 0;
+    int skip_resize = 0, skip_lk = 0;
 
     for (int i = 1; i < argc; i++) {
         if (!strcmp(argv[i], "--no-hog"))      skip_hog = 1;
@@ -751,6 +863,7 @@ int main(int argc, char **argv)
         if (!strcmp(argv[i], "--no-csc"))      skip_csc = 1;
         if (!strcmp(argv[i], "--no-flt-csc"))  skip_flt_csc = 1;
         if (!strcmp(argv[i], "--no-resize"))   skip_resize = 1;
+        if (!strcmp(argv[i], "--no-lk"))       skip_lk = 1;
     }
 
     rc = HI_MPI_SYS_Init();
@@ -772,6 +885,8 @@ int main(int argc, char **argv)
         total_failures += test_flt_csc();
     if (!skip_resize)
         total_failures += test_resize();
+    if (!skip_lk)
+        total_failures += test_lk_optical_flow_pyr();
 
     HI_MPI_SYS_Exit();
 
