@@ -26,6 +26,7 @@
 #include <sys/ioctl.h>
 #include <stdint.h>
 #include <stdlib.h>
+#include <math.h>
 
 /* ioctl cmd numbers (authoritative — extracted from libive.so decomp) */
 #define IVE_CMD_DMA            0xC0684600u
@@ -1201,11 +1202,91 @@ HI_S32 HI_MPI_IVE_KCF_CreateGaussPeak(HI_U3Q5 u3q5Padding,
     return HI_ERR_IVE_NOT_SUPPORT;
 }
 
+/* Hann-window generator, decoded from cv500 vendor libive.so internal
+ * helper @0x2e08 and verified against on-target output. Writes a u16
+ * cosine-window (Hann shape) into `dst` for size N, padding the result
+ * to a fixed buffer width:
+ *
+ *   if (N < 17): buf_width = 16 samples (32 B), step = 8
+ *   else      : buf_width = 32 samples (64 B), step = 16
+ *
+ * The window samples at buf index k = clamp(k - step, -N/2, N/2-1) + N/2
+ * give the source position; for k outside that range the value is the
+ * edge sample (flat padding). The cosine itself is:
+ *
+ *   v = (1.0 - cos(2π * idx / (N - 1))) * 0.5 * 16384, cast to u16
+ *
+ * Constants verified at .rodata vendor offsets:
+ *   0x2ec0: 2π (double 0x401921FB54442D18)
+ *   0x2ec8: 16384.0 (double 0x40D0000000000000)
+ *
+ * Denominator is (N - 1), not N — vendor's `vcvt.f64.u32 d8, s16` is
+ * fed by `sub r3, r0, #1` at function entry. Easy to miss in static
+ * decode; the on-target probe (kcf_probe2) showed u16[5]=0x0c0c=3084
+ * for N=8 which matches `(1 - cos(2π*1/7)) * 0.5 * 16384 = 3084.5`
+ * exactly, ruling out the prior N-denominator + 65536-scale guess.
+ *
+ * Float ops use double precision to match vendor's VFP d-register path.
+ */
+static void ive_kcf_gen_hann_window(HI_U32 u32N, HI_U16 *pu16Dst)
+{
+    HI_U32 cap  = (u32N < 17) ? 16 : 32;
+    HI_S32 step = (u32N < 17) ?  8 : 16;
+    HI_S32 half = (HI_S32)(u32N >> 1);
+    HI_S32 i;
+
+    for (i = -step; i < (HI_S32)cap - step; i++) {
+        HI_S32 clamped;
+        double f, v;
+        HI_U32 q;
+
+        if (i >= half)            clamped = half - 1;
+        else if (i <= -half)      clamped = -half;
+        else                      clamped = i;
+        clamped += half;          /* shift to [0, N-1] */
+
+        f = (double)clamped * (2.0 * 3.141592653589793238) / (double)(u32N - 1);
+        v = (1.0 - cos(f)) * 0.5 * 16384.0;
+        q = (HI_U32) v;           /* vcvt.u32.f64 truncation */
+        *pu16Dst++ = (HI_U16) q;
+    }
+}
+
+/* Mirrors cv500 vendor libive.so HI_MPI_IVE_KCF_CreateCosWin @0xda38.
+ *
+ * Generates 13 Hann windows for ROI sizes N ∈ {8, 10, 12, …, 32}, two
+ * copies (X and Y) per size. Each size's output occupies a 64-byte
+ * slot at offset (N-8) * 32 inside pstCosWinX.virt / pstCosWinY.virt;
+ * for N < 17 only the first 32 B (16 u16) are written and the upper
+ * half stays zero. Total per buffer: 13 * 64 = 832 bytes; user must
+ * pre-allocate at least that much MMZ for both X and Y. */
 HI_S32 HI_MPI_IVE_KCF_CreateCosWin(IVE_DST_MEM_INFO_S *pstCosWinX,
                                    IVE_DST_MEM_INFO_S *pstCosWinY)
 {
-    (void)pstCosWinX; (void)pstCosWinY;
-    return HI_ERR_IVE_NOT_SUPPORT;
+    HI_U16 *x_virt, *y_virt;
+    HI_U32  n;
+
+    IVE_CHECK_NULL("HI_MPI_IVE_KCF_CreateCosWin", pstCosWinX, "pstCosWinX");
+    IVE_CHECK_NULL("HI_MPI_IVE_KCF_CreateCosWin", pstCosWinY, "pstCosWinY");
+    if (pstCosWinX->u32Size < 832 || pstCosWinY->u32Size < 832) {
+        IVE_LOG("HI_MPI_IVE_KCF_CreateCosWin",
+                "buffer too small (X=%u Y=%u, need >= 832)",
+                pstCosWinX->u32Size, pstCosWinY->u32Size);
+        return HI_ERR_IVE_ILLEGAL_PARAM;
+    }
+    x_virt = (HI_U16 *)(uintptr_t)pstCosWinX->u64VirAddr;
+    y_virt = (HI_U16 *)(uintptr_t)pstCosWinY->u64VirAddr;
+    IVE_CHECK_NULL("HI_MPI_IVE_KCF_CreateCosWin", x_virt, "pstCosWinX.virt");
+    IVE_CHECK_NULL("HI_MPI_IVE_KCF_CreateCosWin", y_virt, "pstCosWinY.virt");
+
+    for (n = 8; n <= 32; n += 2) {
+        HI_U32 offset_bytes = (n - 8) * 32;
+        ive_kcf_gen_hann_window(n,
+            (HI_U16 *)((HI_U8 *)x_virt + offset_bytes));
+        ive_kcf_gen_hann_window(n,
+            (HI_U16 *)((HI_U8 *)y_virt + offset_bytes));
+    }
+    return HI_SUCCESS;
 }
 
 HI_S32 HI_MPI_IVE_KCF_GetTrainObj(HI_U3Q5 u3q5Padding, IVE_ROI_INFO_S astRoiInfo[],
