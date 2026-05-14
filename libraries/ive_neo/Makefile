@@ -15,7 +15,7 @@ OBJS := $(SRCS:%.c=%.o)
 all: $(LIB_NAME).so $(LIB_NAME).a
 
 $(LIB_NAME).so: $(OBJS)
-	$(CC) -shared -o $@ $(OBJS) -lpthread
+	$(CC) -shared -o $@ $(OBJS) -lpthread -lm
 
 $(LIB_NAME).a: $(OBJS)
 	$(AR) -rcs $(LIB_NAME).a $(OBJS)
