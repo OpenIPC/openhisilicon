@@ -101,8 +101,151 @@ Literal pool for _start
   0400011c: 9c 00 00 00     .word  0x0000009c   ; clear_remap_start offset
   04000120: e0 00 00 00     .word  0x000000e0   ; clear_remap_end offset
 
-configure_soc_clocks (not reverse-engineered in this PR)
----------------------------------------------------------
+configure_soc_clocks
+---------------------
 
   04000140: e3a01000        mov    r1, #0
-  ...                       (CRG programming follows; see disasm.txt)
+  04000144: e3012389        movw   r2, #0x1389           ; timeout = 5001 iters
+  04000148: e3411201        movt   r1, #0x1201           ; r1 = CRG_START = 0x12010000
+  0400014c: ea000006        b      0x400016c             ; skip NOP block on first iter
+  04000150-04000164:        e320f000             ; 6× nop — inter-poll delay
+  04000164: e2522001        subs   r2, r2, #1
+  04000168: 0a000003        beq    0x400017c             ; timeout fall-through
+  0400016c: e59131e8        ldr    r3, [r1, #0x1e8]      ; r3 = CRG.PLL_LOCK_STAT
+  04000170: e203300b        and    r3, r3, #0xb          ; mask: APLL+DPLL+EPLL lock bits
+  04000174: e353000b        cmp    r3, #0xb              ; all three locked?
+  04000178: 1afffff4        bne    0x4000150             ; loop with delay if not
+
+  0400017c: e3a01000        mov    r1, #0
+  04000180: e3a0300a        mov    r3, #10               ; post-switch settle counter
+  04000184: e3411201        movt   r1, #0x1201           ; r1 = CRG_START
+  04000188: e5912080        ldr    r2, [r1, #0x80]       ; r2 = CRG.SOC_CONFIG (PERI_CRG32)
+  0400018c: e3c22e5f        bic    r2, r2, #0x5f0        ; clear bits 4-8 + bit 10
+  04000190: e3c2200f        bic    r2, r2, #0xf          ; clear bits 0-3
+  04000194: e3822e59        orr    r2, r2, #0x590        ; set bits 4,7,8,10
+  04000198: e3822002        orr    r2, r2, #0x2          ; set bit 1
+  0400019c: e5812080        str    r2, [r1, #0x80]       ; CRG.SOC_CONFIG: post-mask bits 1/4/7/8/10 set
+
+  040001a0-040001a8:        e320f000 / subs/bne   ; 10× nop settle
+  040001ac: e12fff1e        bx     lr
+
+  Resulting SOC_CONFIG: bits 0/2/3/5/6 cleared, 1/4/7/8/10 set, bit 9
+  and bits ≥11 preserved. Subfield semantics (which sub-PLL feeds each
+  domain, divider ratios) await cross-reference against the av300
+  vendor user-guide.
+
+  Re-compiled freestanding bootloader.c matches this disassembly
+  instruction-for-instruction.
+
+reset_soc_clocks
+-----------------
+
+  040001b0: e3a01000        mov    r1, #0
+  040001b4: e3a0300a        mov    r3, #10               ; settle counter
+  040001b8: e3411201        movt   r1, #0x1201           ; r1 = CRG_START
+  040001bc: e5912080        ldr    r2, [r1, #0x80]       ; r2 = CRG.SOC_CONFIG
+  040001c0: e3c22e5f        bic    r2, r2, #0x5f0
+  040001c4: e3c2200f        bic    r2, r2, #0xf          ; clear bits 0-10 except bit 9
+  040001c8: e5812080        str    r2, [r1, #0x80]       ; no bits set back
+  040001cc-040001d4:        nop / subs / bne     ; 10× nop settle
+  040001d8: e12fff1e        bx     lr
+
+  Mirror of configure_soc_clocks without the re-OR step.
+
+main (bootloader flow at 0x04002704)
+-------------------------------------
+
+  04002704: e92d4010        push   {r4, lr}
+  04002708: ebfffa86        bl     initial_memory_setup (0x4001128)
+  0400270c: eb000aaa        bl     timer_start          (0x40051bc)
+  04002710: eb000ab8        bl     timer_reset_counter  (0x40051f8)
+
+  04002714: mov r3,#0 / movt r3,#0x1202 / ldr r2,[r3,#0x8c]
+                                                        ; r2 = SYSCTRL.SYSSTAT
+  04002720: e2124010        ands   r4, r2, #0x10        ; boot_alt = SYSSTAT & 0x10
+  04002724: 1a00000a        bne    0x4002754             ; skip pinmux if set
+
+  Default-boot pinmux block (boot_alt == 0):
+    movt r3,#0x10ff                                     ; r3 = IO_CTRL0_START
+    str  #0x6c1 [r3]            ; IOCFG1[0]
+    str  #0x4f1 [r3, +4]        ; IOCFG1[1]
+    str  #0x4f1 [r3, +8]        ; IOCFG1[2]
+    str  #0x4f1 [r3, +12]       ; IOCFG1[3]
+    str  #0x5f1 [r3, +16]       ; IOCFG1[4]
+    str  #0x4f1 [r3, +20]       ; IOCFG1[5]
+
+  04002754: mov r3,#0 / movt r3,#0x1202 / ldr r3,[r3,#0x30]
+                                                        ; r3 = SYSCTRL.PERISTAT
+  04002760: tst r3, #1
+  04002764: bne 0x4002808                                ; path_a (PERISTAT.0 set)
+
+  04002768: tst r2, #0x20                                ; SYSSTAT & 0x20 — fastboot hint
+  0400276c: beq 0x40027a4                                ; skip fastboot if clear
+  04002770: bl  fastboot_update (0x4002368)
+  04002774: cmp r0, #0
+  04002778: bne 0x40027a4                                ; on failure → is_update_mode
+
+  return_success:    [0x400277c]
+    04002778: (or fall-through)
+    0400277c: bl  disable_instruction_cache (0x4002880)
+    04002780-0400278c: r3 = *(u32*)0x04010188
+    04002790: bne 0x4002798                              ; skip clock-reset if SRAM[0x188]!=0
+    04002794: bl  reset_soc_clocks (0x40001b0)
+    04002798: bl  timer_stop      (0x40051e8)
+    0400279c: mov r0, #0
+    040027a0: pop {r4, pc}                               ; return 0
+
+  is_update_mode_check:  [0x40027a4]
+    040027a4: bl  is_update_mode  (0x400105c)
+    040027a8: cmp r0, #0
+    040027ac: bne 0x4002834                              ; path_d if true
+    040027b0: cmp r4, #0
+    040027b4: bne 0x4002818                              ; path_c if boot_alt
+
+  path_b (flash boot):   [0x40027b8]
+    040027b8: bl  config_use_flash (0x400249c)
+    040027bc: cmp r0, #0
+    040027c0: beq 0x400277c                              ; success
+    040027c4: bl  media_update    (0x40023c4)
+    040027c8: cmp r0, #0
+    040027cc: beq 0x400277c                              ; success
+    (fall-through to erase_and_reset)
+
+  erase_and_reset:    [0x40027d0]
+    040027d0: r0 = SDRAM_START + 0x500
+    040027d4: r2 = 0x6000
+    040027d8: r1 = 0
+    040027e0: bl  memset (0x4002900)                     ; zero 24KB at SDRAM+0x500
+    040027e4: r0 = 500
+    040027e8: bl  timer_wait_seconds (0x4002cb4)
+    040027ec: bl  timer_stop          (0x40051e8)
+    040027f0-040027fc: r3 = SYSCTRL_START / r2 = 1 / r0 = -1
+    04002800: str r2, [r3, #4]                           ; SC_SYSRES = 1 (soft reset)
+    04002804: pop {r4, pc}                               ; return -1 (unreachable)
+
+  path_a:             [0x4002808]
+    04002808: bl  bootrom_secure_check (0x4002284)
+    0400280c: cmp r0, #0
+    04002810: beq 0x400277c                              ; success
+    04002814: b   0x40027d0                              ; erase_and_reset
+
+  path_c:             [0x4002818]
+    04002818: bl  bootrom_alt_media (0x40025d4)
+    0400281c: cmp r0, #0
+    04002820: beq 0x400277c                              ; success
+    04002824: bl  media_update      (0x40023c4)
+    04002828: cmp r0, #0
+    0400282c: beq 0x400277c                              ; success
+    04002830: b   0x40027d0                              ; erase_and_reset
+
+  path_d:             [0x4002834]
+    04002834: bl  media_update      (0x40023c4)
+    04002838: cmp r0, #0
+    0400283c: beq 0x400277c                              ; success
+    04002840: b   0x40027b0                              ; re-test boot_alt → path_b/c
+
+  Re-compiled freestanding bootloader.c preserves the full control-flow
+  graph (success / erase_and_reset / paths a/b/c/d) but is not byte-
+  identical — gcc reorders some blocks and uses slightly different
+  instruction selection for the comparisons. Functionally equivalent
+  modulo the stub return values.

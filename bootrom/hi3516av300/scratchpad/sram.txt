@@ -6,21 +6,40 @@ first 0x268 bytes, then `main` populates structures here before invoking
 the clear_remap thunk (which itself lives at 0x04016500 after being
 memcpy32'd from bootrom 0x0400009c).
 
-Populated incrementally as analysis proceeds. Below is what's known from
-the _start fingerprint alone:
+Known slots (populated by the reverse-engineered functions):
 
-  0x04010000  callback pointer        first word read by clear_remap thunk;
-                                      receives entry point of next-stage
-                                      image after main loads it
-  0x04010000..0x04010268              zeroed by _start before main()
-  0x04010500  STACK_START             top-of-stack (decrements); SP
-                                      initialized here by _start
-  0x04016500  clear_remap thunk dst   17 instructions copied from
-                                      0x0400009c..0x040000e0 by memcpy32
+  0x04010000  load target / callback   First word — read by clear_remap thunk
+                                       as the next-stage entry. config_use_flash
+                                       and bootrom_alt_media both write the
+                                       final image base address here before
+                                       returning.
+  0x04010004  init record (12 bytes)   memcpy'd from bootrom 0x7f44 by
+                                       initial_memory_setup. Vendor-specific
+                                       record (purpose TBD).
+  0x04010180  timer0 value snapshot    timer_reset_counter writes TIMER0.VALUE
+                                       at the moment of reset.
+  0x04010184  timer0 delta             zeroed by timer_reset_counter.
+  0x04010188  reset-clocks gate        main()'s success path tests this; if 0,
+                                       reset_soc_clocks is called before
+                                       timer_stop. Likely a one-shot flag set
+                                       by an earlier (TBD) function.
+  0x04010500..0x04016500  load buffer  24 KB working area where the boot image
+                                       is staged before the four-word
+                                       validation cross-check. memset'd to 0
+                                       by main()'s erase_and_reset path.
+  0x04010500  STACK_START              top-of-stack (decrements); SP
+                                       initialized here by _start. Note: the
+                                       same address doubles as the load buffer
+                                       base — stack walks downward, image
+                                       grows upward, they meet only in error.
+  0x04016500  clear_remap thunk dst    17 instructions copied from
+                                       0x0400009c..0x040000e0 by memcpy32
 
-Pending — populated when `main` (0x04002704) is reverse-engineered:
+  0x04010000..0x04010268             zeroed by _start before main()
 
-  0x04010004..0x040104ff              currently unknown; in cv500 this
-                                      region holds boot_type, mem_block_t
-                                      table, and program_stream_t — av300
-                                      structure to be verified
+Pending — slots inside 0x04010268..0x040104ff are touched by the
+transitive callees (organize_memory_chunks, parse_image_header,
+media_init_*, klad_*) still living as stubs in re/stubs.c. In cv500
+this region also holds boot_type, mem_block_t table, and
+program_stream_t; av300 structure to be verified empirically once
+those callees are decoded.

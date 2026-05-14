@@ -12,7 +12,7 @@ CFLAGS  := -mcpu=cortex-a7 -marm -nostdlib -ffreestanding \
 
 LDFLAGS := -nostdlib -Wl,--build-id=none -T re/re.lds
 
-OBJS := re/start.o re/bootloader.o
+OBJS := re/start.o re/bootloader.o re/stubs.o
 
 .PHONY: all build disasm verify clean
 
