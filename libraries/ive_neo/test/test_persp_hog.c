@@ -611,10 +611,70 @@ static int test_flt_csc(void)
     return g_failures - failures_before;
 }
 
+static int test_resize(void)
+{
+    IVE_IMAGE_S src, dst;
+    IVE_RESIZE_CTRL_S ctrl;
+    IVE_MEM_INFO_S mem;
+    IVE_HANDLE h = -1;
+    HI_S32 ret;
+    HI_U8 *src_y, *dst_y;
+    int non_sentinel, failures_before;
+
+    printf("\n=== Resize identity %ux%u -> %ux%u U8C1 (reachability) ===\n",
+           W, H, W, H);
+    failures_before = g_failures;
+    memset(&src, 0, sizeof(src));
+    memset(&dst, 0, sizeof(dst));
+    memset(&mem, 0, sizeof(mem));
+
+    if (alloc_image(&src, W, H) != HI_SUCCESS) return 1;
+    if (alloc_image(&dst, W, H) != HI_SUCCESS) { free_image(&src); return 1; }
+    if (alloc_mem_info(&mem, 256) != HI_SUCCESS) {
+        free_image(&src); free_image(&dst); return 1;
+    }
+    src.enType = IVE_IMAGE_TYPE_U8C1;
+    dst.enType = IVE_IMAGE_TYPE_U8C1;
+    src_y = (HI_U8 *)(uintptr_t)src.au64VirAddr[0];
+    dst_y = (HI_U8 *)(uintptr_t)dst.au64VirAddr[0];
+
+    for (int i = 0; i < Y_SIZE; i++) src_y[i] = (HI_U8)(i & 0xff);
+    memset(dst_y, SENTINEL, IMG_SIZE);
+    HI_MPI_SYS_MmzFlushCache(src.au64PhyAddr[0], src_y, IMG_SIZE);
+    HI_MPI_SYS_MmzFlushCache(dst.au64PhyAddr[0], dst_y, IMG_SIZE);
+
+    ctrl.enMode = IVE_RESIZE_MODE_LINEAR;
+    ctrl.stMem = mem;
+    ctrl.u16Num = 1;
+
+    ret = HI_MPI_IVE_Resize(&h, &src, &dst, &ctrl, HI_TRUE);
+    check(ret == HI_SUCCESS, "ioctl returned success");
+    if (ret == HI_SUCCESS) {
+        check(wait_handle(h) == HI_SUCCESS, "wait completed");
+        HI_MPI_SYS_MmzFlushCache(dst.au64PhyAddr[0], dst_y, IMG_SIZE);
+        non_sentinel = 0;
+        for (int i = 0; i < Y_SIZE; i++)
+            if (dst_y[i] != SENTINEL) non_sentinel++;
+        printf("  HW wrote %d/%d Y bytes (replacing sentinel)\n",
+               non_sentinel, Y_SIZE);
+        check(non_sentinel > Y_SIZE / 2,
+              "HW wrote majority of dst (Resize reached HW)");
+        printf("  dst[0..15]: ");
+        for (int i = 0; i < 16; i++) printf("%02x ", dst_y[i]);
+        printf("\n");
+    }
+
+    free_image(&src);
+    free_image(&dst);
+    free_mem(&mem);
+    return g_failures - failures_before;
+}
+
 int main(int argc, char **argv)
 {
     int rc, total_failures = 0;
     int skip_hog = 0, skip_ncc = 0, skip_lbp = 0, skip_csc = 0, skip_flt_csc = 0;
+    int skip_resize = 0;
 
     for (int i = 1; i < argc; i++) {
         if (!strcmp(argv[i], "--no-hog"))      skip_hog = 1;
@@ -622,6 +682,7 @@ int main(int argc, char **argv)
         if (!strcmp(argv[i], "--no-lbp"))      skip_lbp = 1;
         if (!strcmp(argv[i], "--no-csc"))      skip_csc = 1;
         if (!strcmp(argv[i], "--no-flt-csc"))  skip_flt_csc = 1;
+        if (!strcmp(argv[i], "--no-resize"))   skip_resize = 1;
     }
 
     rc = HI_MPI_SYS_Init();
@@ -641,6 +702,8 @@ int main(int argc, char **argv)
         total_failures += test_csc();
     if (!skip_flt_csc)
         total_failures += test_flt_csc();
+    if (!skip_resize)
+        total_failures += test_resize();
 
     HI_MPI_SYS_Exit();
 

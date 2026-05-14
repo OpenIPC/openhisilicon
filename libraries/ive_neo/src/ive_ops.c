@@ -846,21 +846,53 @@ HI_S32 HI_MPI_IVE_SVM_Predict(IVE_HANDLE *h, IVE_SRC_DATA_S *src,
     return ret;
 }
 
+/* cv500 HW Resize: multi-image (u16Num 1..8) U8C1 single-plane
+ * resize. The kernel side (ive_op_resize_cv500) writes a 25-byte
+ * per-image scale-factor table into ctrl.stMem and submits a single
+ * HW node that references it. Caller must pre-allocate stMem of at
+ * least u16Num * 25 bytes via HI_MPI_SYS_MmzAlloc.
+ *
+ * Arg buffer layout matches the kernel's ive_op_resize_cv500 decode. */
+#define RZ_OFF_SRC      8
+#define RZ_OFF_DST      584
+#define RZ_OFF_CTRL     1160
+#define RZ_OFF_INST     1208
+#define RZ_ARG_SIZE     1216
+#define RZ_MAX_NUM      8
+#define RZ_CMD          0xc4c0462eu  /* _IOWR('F', 0x2e, 1216) */
+
 HI_S32 HI_MPI_IVE_Resize(IVE_HANDLE *h, IVE_SRC_IMAGE_S src[], IVE_DST_IMAGE_S dst[],
                          IVE_RESIZE_CTRL_S *c, HI_BOOL inst)
 {
-    /* Resize on this SoC is dispatched to VGS by vendor; ive_neo
-     * returns 0 (no-op stub). Just package handle + ctrl + instant. */
-    uint8_t buf[64];
+    uint8_t buf[RZ_ARG_SIZE];
     HI_S32 ret;
+    HI_U16 i, n;
 
-    (void)src; (void)dst;
-    IVE_CHECK_NULL("HI_MPI_IVE_Resize", h, "pIveHandle");
+    IVE_CHECK_NULL("HI_MPI_IVE_Resize", h,   "pIveHandle");
+    IVE_CHECK_NULL("HI_MPI_IVE_Resize", src, "astSrc");
+    IVE_CHECK_NULL("HI_MPI_IVE_Resize", dst, "astDst");
+    IVE_CHECK_NULL("HI_MPI_IVE_Resize", c,   "pstResizeCtrl");
+
+    n = c->u16Num;
+    if (!n || n > RZ_MAX_NUM) {
+        IVE_LOG("HI_MPI_IVE_Resize", "u16Num(%u) must be 1..%u",
+                n, RZ_MAX_NUM);
+        return HI_ERR_IVE_ILLEGAL_PARAM;
+    }
+
     if (ive_open_fd() != HI_SUCCESS) return HI_FAILURE;
+
     memset(buf, 0, sizeof(buf));
-    if (c) memcpy(buf + 8, c, sizeof(*c));
-    put_u32(buf, 56, (uint32_t)inst);
-    ret = ioctl(g_ive_fd, IVE_CMD_RESIZE, buf);
+    for (i = 0; i < n; i++) {
+        memcpy(buf + RZ_OFF_SRC + i * sizeof(IVE_IMAGE_S),
+               &src[i], sizeof(IVE_IMAGE_S));
+        memcpy(buf + RZ_OFF_DST + i * sizeof(IVE_IMAGE_S),
+               &dst[i], sizeof(IVE_IMAGE_S));
+    }
+    memcpy(buf + RZ_OFF_CTRL, c, sizeof(IVE_RESIZE_CTRL_S));
+    put_u32(buf, RZ_OFF_INST, (uint32_t)inst);
+
+    ret = ioctl(g_ive_fd, RZ_CMD, buf);
     *h = (ret == 0) ? (IVE_HANDLE)get_u32(buf, 0) : -1;
     return ret;
 }
