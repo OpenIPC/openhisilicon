@@ -32,7 +32,9 @@
 
 #define RSA0_START      0x10080000
 #define TRNG_START      0x10090000
+#define KLAD_START      0x10070000   /* Key Ladder cipher block */
 #define USB_TRIM_START  0x100a0000   /* (OTP slot mirror at 0x50..0x6c) */
+#define OTPUSER_START   0x100b0000   /* OTP user-area controller */
 #define SPACC_START     0x100c0000   /* Synopsys SPACC accelerator (SHA+AES) */
 #define SDIO0_START     0x100f0000
 #define EMMC_START      0x10100000

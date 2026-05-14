@@ -246,6 +246,40 @@ reversed. Concrete findings worth flagging for crypto auditors:
   at 0x4000654, sha_write_output at 0x4003bcc) remain as stubs —
   reversing them traces the SPACC accelerator register sequence.
 
+* **KLAD key-ladder constants dumped from av300 silicon.**
+  Reversing klad_load_const (0x400122c) revealed it loads 32 bytes
+  of vendor-baked constants from bootrom 0x7e38..0x7e57 into the
+  KLAD (Key Ladder) hardware block at 0x10070000, chained through
+  two derivation operations. Plus a 16-byte nibble-classification
+  table at 0x7e28..0x7e37 used by the PKCS#1 padding parser.
+
+  Verbatim from the av300 mask-ROM dump (MANIFEST sha256
+  1944d7b4c6eca8003f55110abc3b9fc26df14be1027903107591eb4afab32c0a):
+
+    0x7e28..0x7e37  (PKCS#1 nibble-classifier, floor(log2(x))+1):
+      00 01 02 02 03 03 03 03 04 04 04 04 04 04 04 04
+
+    0x7e38..0x7e47  (KLAD derivation chunk 1, AES-ish):
+      50 db 86 c5 92 c5 2f 0c 43 6c ca 6f 2f fe ca f5
+      = LE words c586db50 0c2fc592 6fca6c43 f5cafe2f
+
+    0x7e48..0x7e57  (KLAD derivation chunk 2, AES-ish):
+      4a 96 ae 01 3f c6 0e 20 5e 9d a4 c9 d5 ad 9b 99
+      = LE words 01ae964a 200ec63f c9a49d5e 999badd5
+
+    OTPUSER trigger magic written by klad_load_const:
+      0x1acce551 — writes to 0x100b0004 before each KLAD op,
+      OTPUSER[0x4c] handshakes with bit 1 set after the magic
+      is accepted.
+
+  Chip-uniqueness check is OPEN: every av300 part shares these bytes
+  (mask-ROM is single-mask silicon). Whether sibling V4 chips
+  (hi3516cv500, hi3516ev300, gk7205v300) share the same constants
+  requires dumping their bootroms and comparing. If the constants
+  are family-shared and the KLAD ladder's output is the boot-verify
+  key root, then ANY V4-family chip becomes a tooling target for
+  any V4-family secure-boot attack.
+
 * **RSA0 hardware sequence is fully reversed.** klad_dispatch_sig
   (0x4000868, 509 instructions, now fully inlined in
   bootloader.c) drives RSA0 directly:

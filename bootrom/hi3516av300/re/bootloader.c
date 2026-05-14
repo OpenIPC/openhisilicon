@@ -2156,17 +2156,81 @@ int klad_sha_close(void)  /* 0x400390c */
     return 0;
 }
 
+/*
+ * ---- klad_load_const — KLAD key-ladder bootstrap ----
+ *
+ * Corrects earlier reversal: this function does NOT load RSA0
+ * constants. It runs the KLAD (Key Ladder) hardware through two
+ * chained derivation operations using 32 bytes of vendor-baked
+ * constants from bootrom[0x7e38..0x7e57] — the result is the
+ * boot-verification key material that downstream RSA/SHA operations
+ * use to validate the loaded image.
+ *
+ * Sequence:
+ *   1. Spin-wait on OTPUSER[0x4c] bit 0 clear (OTP block idle)
+ *   2. OTPUSER[0x8]  = 0          (clear status)
+ *      OTPUSER[0x0]  = 1          (enable)
+ *      OTPUSER[0x4]  = 0x1acce551 (vendor "begin key ladder" magic)
+ *   3. Spin-wait on OTPUSER[0x4c] bit 1 set (handshake done)
+ *   4. KLAD[0]       = 2          (select derivation mode)
+ *      KLAD[0x10..0x1c] = bootrom[0x7e38..0x7e47]  (first 16 bytes)
+ *      KLAD[0]       |= 1         (trigger op 1)
+ *      Spin-wait on KLAD[0] bit 0 clear
+ *   5. KLAD[0x10..0x1c] = bootrom[0x7e48..0x7e57]  (second 16 bytes)
+ *      KLAD[0]       |= 0x11      (trigger op 2 with chain bit)
+ *      Spin-wait on KLAD[0] bit 0 clear
+ *
+ * The two 16-byte chunks are likely AES-CMAC or AES-key derivation
+ * inputs (high-entropy, no obvious structure). Output of op 1
+ * presumably feeds op 2 as input via the KLAD ladder's internal
+ * state machine — this is the canonical "load key into chain" then
+ * "encrypt key with chained key" pattern.
+ *
+ * Dumped from av300 silicon (PR #137 MANIFEST):
+ *   0x7e28..0x7e37 = floor(log2(x))+1 nibble table for PKCS#1 parser
+ *   0x7e38..0x7e47 = c586db50 0c2fc592 6fca6c43 f5cafe2f  (op 1 input)
+ *   0x7e48..0x7e57 = 01ae964a 200ec63f c9a49d5e 999badd5  (op 2 input)
+ *
+ * Whether these bytes are family-shared (cv500/ev300/etc.) or
+ * av300-unique requires comparing against dumps from sibling chips.
+ */
 void klad_load_const(void)  /* 0x400122c */
 {
-    const u32 *table = (const u32 *)0x00007e28;
-    volatile u32 *rsa0 = (volatile u32 *)RSA0_START;
+    const u32 *table       = (const u32 *)0x00007e28;
+    volatile u32 *otpuser  = (volatile u32 *)OTPUSER_START;
+    volatile u32 *klad     = (volatile u32 *)KLAD_START;
+    u32 chunk1_w0 = table[4],  chunk1_w1 = table[5];
+    u32 chunk1_w2 = table[6],  chunk1_w3 = table[7];
+    u32 chunk2_w0 = table[8],  chunk2_w1 = table[9];
+    u32 chunk2_w2 = table[10], chunk2_w3 = table[11];
 
-    /* Load 3 vendor-precomputed RSA constants into RSA0 control regs.
-     * Full decoding of which RSA parameter each represents (modulus,
-     * exponent, Montgomery N') awaits the av300 vendor RSA spec. */
-    rsa0[0x54 / 4] = table[10];
-    rsa0[0x58 / 4] = table[4];
-    rsa0[0x5c / 4] = table[5];
+    /* OTPUSER handshake: wait idle, then issue the magic command. */
+    while ((otpuser[0x4c / 4] & 1) != 0)
+        ;
+    otpuser[0x8 / 4]  = 0;
+    otpuser[0x0 / 4]  = 1;
+    otpuser[0x4 / 4]  = 0x1acce551u;
+    while ((otpuser[0x4c / 4] & 2) == 0)
+        ;
+
+    /* KLAD operation 1 — load + derive from first 16 bytes. */
+    klad[0]        = 2;
+    klad[0x10 / 4] = chunk1_w0;
+    klad[0x14 / 4] = chunk1_w1;
+    klad[0x18 / 4] = chunk1_w2;
+    klad[0x1c / 4] = chunk1_w3;
+    klad[0]        = klad[0] | 1u;
+    while ((klad[0] & 1) != 0)
+        ;
+
+    /* KLAD operation 2 — chain in second 16 bytes (bit 4 = chain). */
+    klad[0x10 / 4] = chunk2_w0;
+    klad[0x14 / 4] = chunk2_w1;
+    klad[0x18 / 4] = chunk2_w2;
+    klad[0x1c / 4] = chunk2_w3;
+    klad[0]        = klad[0] | 0x11u;
+    while ((klad[0] & 1) != 0)
+        ;
 }
 
 int klad_check_step(void)  /* 0x4001314 */
