@@ -197,7 +197,7 @@ extern int  klad_post_unlock(unsigned boot_type, int target_size_class, unsigned
 extern int  klad_finalize(void *ctx);              /* 0x400136c */
 extern int  refresh_ddr(unsigned mctl_mode);       /* 0x4000358 */
 extern void configure_emmc_pins(void);             /* 0x4003d68 */
-extern int  send_command_emmc(void);               /* 0x4003c30 */
+extern int  update_emmc_card_clock(void);               /* 0x4003c30 */
 extern int  klad_verify_rsa(void *src, unsigned len);  /* 0x4005468 */
 extern int  klad_alt_dispatch(void *ctx);          /* 0x4001df8 */
 extern int  klad_alt_e88(int boot_pin, int err);   /* 0x4001e88 */
@@ -1168,7 +1168,7 @@ int klad_unlock(void)  /* 0x4001af4 */
  *
  * These are structural reversals: the control-flow graph and identified
  * MMIO sequences match the original mask-ROM, but several deep helpers
- * (klad_validate_header, klad_dispatch_sig, send_command_emmc, etc.)
+ * (klad_validate_header, klad_dispatch_sig, update_emmc_card_clock, etc.)
  * remain as link-only stubs in stubs.c. They become the next reversal
  * frontier. Names ending in _a/_b/_c or _sub are placeholders — the
  * actual responsibilities (which RSA mode, which OTP key slot, which
@@ -1192,7 +1192,7 @@ int klad_unlock(void)  /* 0x4001af4 */
  *   6. Set MMC_RINTSTS=-1, MMC_TBBCNT (offset 0x8c) = -1, MMC_CTRL=16
  *      (PIO mode), then dispatch on PERISTAT bits 9..8 again to select
  *      either a 4-bit (CTYPE), 8-bit, or default-bus init sequence
- *      via three send_command_emmc rounds.
+ *      via three update_emmc_card_clock rounds.
  *   7. CTYPE high byte 0xfff00 (drive strength?), CMD setup, CARD_RSTN
  *      reset cycle (0 → wait 100ms → 1 → wait 1000ms), BLKSIZ=0x200,
  *      BYTCNT=0x100000.
@@ -1249,19 +1249,19 @@ int initialize_emmc(void)  /* 0x4003de0 */
     mode_sel = (sysctrl[PERISTAT / 4] >> 8) & 3;
     if (mode_sel == 1) {
         emmc[0x10 / 4] = 1;             /* MMC_CLKENA = 1 — enable clock */
-        if (send_command_emmc() != 0)
+        if (update_emmc_card_clock() != 0)
             return -1;
         ctype_val = 32;
     } else if (mode_sel == 2) {
         emmc[0x10 / 4] = 0;
-        if (send_command_emmc() != 0)
+        if (update_emmc_card_clock() != 0)
             return -1;
         emmc[0x8 / 4]  = 0;             /* CLKDIV */
         emmc[0xc / 4]  = 0;             /* reserved */
-        if (send_command_emmc() != 0)
+        if (update_emmc_card_clock() != 0)
             return -1;
         emmc[0x10 / 4] = 1;
-        if ((rc = send_command_emmc()) != 0)
+        if ((rc = update_emmc_card_clock()) != 0)
             return -1;
         ctype_val = (u32)rc;
     } else {
@@ -1803,7 +1803,22 @@ void wait_long_timer_0(unsigned ms)  /* 0x4002c84 */
     }
 }
 
-int send_command_emmc(void)  /* 0x4003c30 */
+/*
+ * ---- update_emmc_card_clock ----
+ *
+ * Despite issuing a CMD-register write (MMC_CMD = 0xa0002000 — start +
+ * use_hold + wait_prvdata_complete), this is NOT a regular SD/MMC
+ * command. cv500's reverse names it `update_emmc_card_clock` because
+ * the DesignWare DW MMC controller uses this CMD-register pattern as
+ * a "clock-update" handshake — the controller treats the write as a
+ * synchronization barrier to commit pending CLKDIV/CLKENA changes,
+ * not as a CMD0/CMD1/etc. transmit to the eMMC card.
+ *
+ * Polls MMC_CMD bit 31 (start) for clearing, with a 3-retry outer
+ * loop and a 0xf00-iter inner poll. Returns 0 on success, -1 if all
+ * three retries see MMC_RINTSTS bit 12 (error) set.
+ */
+int update_emmc_card_clock(void)  /* 0x4003c30 */
 {
     volatile u32 *emmc = (volatile u32 *)EMMC_START;
     int retries = 3;
@@ -4232,6 +4247,68 @@ int media_sub_a_decode_block(void *ctx, unsigned tag)  /* 0x4007c70 */
         sdio_xfer_cmd(ctx, ep, 0x700, (u32)((u8 *)ctx + 46), 0);
     }
     return 0;
+}
+
+/*
+ * ---- crc16_checksum — UART-frame nibble-driven CRC-16 accumulator ----
+ *
+ * Updates the running CRC-16 state stored in a frame descriptor.
+ *
+ *   ctx  — frame descriptor; ctx->u16[0] is the CRC accumulator,
+ *          ctx->u16[1] is the previously-buffered partial byte,
+ *          ctx->u16[2] is the total frame-length count (set by caller).
+ *   pos  — current byte offset within the frame (0-based).
+ *   byte — the byte just received from UART0.
+ *
+ * Branches:
+ *   pos < frame_len-2 — payload phase: pack `byte` into ctx->u16[0],
+ *                       return 1 if more bytes still needed, else 0.
+ *   pos >= frame_len-2 — trailing-CRC phase: copy 32-byte CCITT-16
+ *                        nibble table from bootrom 0x7e08 onto stack,
+ *                        run two 4-bit nibble updates (state =
+ *                        (state<<4) ^ table[(byte^(state>>12)) & 0xf]),
+ *                        write result into ctx->u16[1].
+ *
+ * Discovered via cv500's functions.txt entry func_31 — we initially
+ * missed naming this function. Address-for-address identical between
+ * av300 and cv500. The CCITT-16 nibble table at bootrom 0x7e08 is
+ * shared with the cv500 mask-ROM, suggesting V4 family genealogy.
+ */
+unsigned crc16_checksum(void *ctx, unsigned pos, unsigned byte)  /* 0x4002e30 */
+{
+    u16 *c = (u16 *)ctx;
+    unsigned frame_len = c[2];
+
+    if ((unsigned)(frame_len - 2) < pos) {
+        /* Trailing-CRC phase — apply two 4-bit nibble updates. */
+        u16 table[16];
+        u16 state = c[1];
+        unsigned i;
+
+        memcpy(table, (const void *)0x00007e08, 32);
+
+        /* High nibble of byte. */
+        i = (byte >> 4) ^ (state >> 12);
+        state = (u16)((state << 4) ^ table[i & 0xf]);
+        /* Low nibble of byte. */
+        i = (byte & 0xf) ^ (state >> 12);
+        state = (u16)((state << 4) ^ table[i & 0xf]);
+
+        c[1] = state;
+        return 1;
+    }
+
+    /* Payload phase — pack byte into CRC accumulator at position pos.
+     * The original uses an "or with shifted byte" pattern; here we
+     * mirror it directly. */
+    {
+        unsigned shift = (frame_len - pos) << 3;
+        u16 next = (u16)(c[0] | (byte << shift));
+        c[0] = next;
+        if (pos == frame_len)
+            return (next == c[1]) ? 0 : 1;   /* final compare */
+        return 1;
+    }
 }
 
 int receive_frame(void *frame_desc)  /* 0x4002ee4 */
