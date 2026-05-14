@@ -1,17 +1,15 @@
 /*
- * Link-only stubs for the final transitive frontier of the av300
- * bootrom reversal. After this PR, only two categories remain:
+ * Final transitive frontier for the av300 bootrom reversal. After
+ * this PR the only remaining stubs are 10 hardware-leaf primitives:
  *
- *   1. The CRC-checksummed UART frame parser (receive_frame, 269 instr).
- *   2. Inner crypto/SD primitives — the actual hardware drivers behind
- *      RSA0 (rsa0_kick, klad_sha_*, sha_init/compute/output),
- *      SDIO0 (send_command_sdio0, sdio_read_block/write_block,
- *      media_sub_a_inner, media_sub_b_setup), and a handful of
- *      smaller helpers.
+ *   1. UART CRC frame parser (receive_frame, 269 instr)
+ *   2. SDIO0/SD wire-protocol leaves (5)
+ *   3. SPACC accelerator sub-primitives (4) — per-block bring-up
+ *      details internal to sha_init / sha_compute
  *
- * Each name reflects role-from-context. Signatures match call sites.
- * Internal RSA hardware register sequences and key material handling
- * are the next focused-audit target.
+ * Reversing these traces the per-cycle SPACC and SD-card hardware
+ * register sequences; they are deep audit targets but not part of
+ * the high-level boot logic.
  */
 
 typedef unsigned char  u8;
@@ -29,36 +27,20 @@ int  sdio_write_block(void *src)                    { (void)src; return 0; }  /*
 int  media_sub_a_inner(void *desc)                  { (void)desc; return 0; }  /* 0x4007ae8 */
 int  media_sub_b_setup(void *desc)                  { (void)desc; return 0; }  /* 0x4007898 */
 
-/* KLAD/RSA crypto-driver primitives — the deepest hardware-driver
- * layer. klad_dispatch_sig calls these in sequence; reversing them
- * means tracing the exact RSA0 register dance vs SPACC accelerator
- * register dance. (klad_setup itself is reversed in bootloader.c —
- * the three SHA leaves it calls remain as stubs.) */
-int  sha_init(void *ctx)                            { (void)ctx; return 0; }  /* 0x40006e0 */
-int  sha_compute(void *src)                         { (void)src; return 0; }  /* 0x4000654 */
-void sha_write_output(void *dst_ctx)                { (void)dst_ctx; }     /* 0x4003bcc */
-int  rsa0_kick(unsigned mode, unsigned ticks)
-    { (void)mode; (void)ticks; return 0; }                                /* 0x40006a4 */
-int  klad_check_step(void)                          { return 0; }          /* 0x4001314 */
-int  klad_alt_step(unsigned arg)                    { (void)arg; return 0; }  /* 0x4001b40 */
+/* SPACC accelerator sub-primitives — internal helpers used by
+ * sha_init and sha_compute. Each is small (a handful of instructions
+ * doing register reads/writes against SPACC_START); reversing them
+ * means tracing the SPACC SHA-context bring-up wire layer. */
+int  spacc_init(void *ctx)                          { (void)ctx; return 0; }  /* 0x40039a8 */
+void spacc_finalize(void)                           {}                       /* 0x4003a74 */
+void spacc_chunk_prep(void *ctx, unsigned size)     { (void)ctx; (void)size; }  /* 0x4003ae8 */
+void spacc_chunk_run(void)                          {}                       /* 0x4003b68 */
 
-void klad_sha_init(void *a, void *b)                { (void)a; (void)b; }  /* 0x40036c4 */
-void klad_sha_finalize(void)                        {}                     /* 0x4003858 */
-void klad_load_const(void)                          {}                     /* 0x400122c */
-void klad_sha_update(unsigned arg)                  { (void)arg; }         /* 0x40038dc */
-void klad_sha_chunk(void *a, unsigned len)          { (void)a; (void)len; }  /* 0x400373c */
-void klad_sha_chunk2(unsigned a, unsigned len)      { (void)a; (void)len; }  /* 0x40037e4 */
-void klad_sha_close(void)                           {}                     /* 0x400390c */
-int  klad_finalize_check(unsigned val, unsigned size, unsigned len)
-    { (void)val; (void)size; (void)len; return 0; }                       /* 0x4000614 */
-
-int  alt_media_program(void)                        { return 0; }          /* 0x40057dc */
+int  alt_media_program(void)                        { return 0; }            /* 0x40057dc */
 int  alt_media_finalize_buf(void *dst, unsigned len)
-    { (void)dst; (void)len; return 0; }                                   /* 0x4005740 */
+    { (void)dst; (void)len; return 0; }                                      /* 0x4005740 */
 
 /* media_init_alt is already reversed in bootloader.c — provide an
- * alias so the klad_check_a path's reference resolves to the same
- * symbol. (alt_media_init was the old name from klad_check_a's
- * comment text; the real function is media_init_alt.) */
+ * alias so the klad_check_a path's reference resolves. */
 extern int media_init_alt(void);
 int alt_media_init(void) { return media_init_alt(); }

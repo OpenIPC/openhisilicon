@@ -1925,6 +1925,268 @@ void update_timer_0_value(void)  /* 0x400524c */
 
 /*
  * ============================================================================
+ * RSA0/SPACC/SHA inner hardware-driver primitives.
+ *
+ * 14 leaves that drive the RSA0 and SPACC blocks directly. After
+ * reversal only ~4 SPACC sub-primitives at 0x40039a8/0x4003a74/
+ * 0x4003ae8/0x4003b68 remain as stubs — those are the per-block
+ * SPACC bring-up details.
+ *
+ * Hardware register layout discovered:
+ *   RSA0 @ 0x10080000    — public-key engine
+ *     0x50  status (kicked by rsa0_kick)
+ *     0x54  mode/length register
+ *     0x58  modulus input FIFO
+ *     0x5c  signature input FIFO
+ *     0x64  result output FIFO
+ *     0x68  command register (cmd 5 = start)
+ *   SPACC @ 0x100c0000   — SHA + AES accelerator
+ *     0x340/0x348/0x34c   per-context offsets
+ *     0x40c               per-context flags
+ *     0x480/0x484         primary context selector
+ *     0x4b0/0x4b4         secondary context selector
+ *     0x80c               status (waited on by sha_compute)
+ *   SRAM @ 0x04010110    — 64-byte SHA working buffer
+ * ============================================================================
+ */
+
+extern int  spacc_init(void *ctx);                  /* 0x40039a8 */
+extern void spacc_finalize(void);                   /* 0x4003a74 */
+extern void spacc_chunk_prep(void *ctx, unsigned size);  /* 0x4003ae8 */
+extern void spacc_chunk_run(void);                  /* 0x4003b68 */
+
+int rsa0_kick(unsigned mode, unsigned ticks)  /* 0x40006a4 */
+{
+    volatile u32 *status = (volatile u32 *)mode;
+    timer_reset_counter();
+    for (;;) {
+        if ((status[0] & ticks) == 0)
+            return 0;
+        if (timer_get_value() >= 1)
+            return -1;
+    }
+}
+
+int klad_finalize_check(unsigned val, unsigned size, unsigned len)  /* 0x4000614 */
+{
+    volatile u32 *status = (volatile u32 *)val;
+    timer_reset_counter();
+    for (;;) {
+        u32 v = status[0];
+        if ((v & size) == 0)
+            return 0;
+        if (timer_get_value() >= len)
+            return -1;
+    }
+}
+
+int sha_init(void *ctx)  /* 0x40006e0 */
+{
+    unsigned ticks = get_wait_ticks(1) * 200;
+    spacc_init(ctx);
+    if (rsa0_kick(SPACC_START + 0x390, ticks) != 0)
+        return -1;
+    spacc_finalize();
+    return 0;
+}
+
+int sha_compute(void *src)  /* 0x4000654 */
+{
+    volatile u32 *spacc = (volatile u32 *)SPACC_START;
+    unsigned ticks = get_wait_ticks(1) * 200;
+    int rc;
+    u32 stat;
+
+    spacc_chunk_prep(src, 0);
+    spacc_chunk_run();
+    rc = klad_finalize_check(SPACC_START + 0x80c, 0x80000, ticks);
+    stat = spacc[0x80c / 4];
+    spacc[0x80c / 4] = stat;
+    return rc;
+}
+
+void sha_write_output(void *dst)  /* 0x4003bcc */
+{
+    volatile u32 *sram_ctrl = (volatile u32 *)(SDRAM_START + 0x110);
+    volatile u32 *spacc = (volatile u32 *)SPACC_START;
+    u32 word_count = sram_ctrl[0x40 / 4] >> 2;
+    u8 *p = (u8 *)dst;
+    unsigned i;
+
+    for (i = 0; i < word_count; i++) {
+        u32 word;
+        spacc[0x34c / 4] = 0;
+        word = spacc[0x348 / 4];
+        memcpy(p, &word, 4);
+        p += 4;
+    }
+}
+
+void klad_sha_init(void *a, void *b)  /* 0x40036c4 */
+{
+    volatile u32 *spacc = (volatile u32 *)SPACC_START;
+    volatile u32 *sram  = (volatile u32 *)(SDRAM_START + 0x110);
+    u32 v;
+
+    memset((void *)(SDRAM_START + 0x110), 0, 64);
+
+    v = spacc[0x484 / 4];
+    v &= ~(0x7fu << 24);
+    v |=  (2u << 24);
+    spacc[0x484 / 4] = v;
+    spacc[0x488 / 4] = (u32)a;
+    sram[0x30 / 4] = 0;
+    sram[0x38 / 4] = (v >> 16) & 0x7f;
+    sram[0x24 / 4] = (u32)a;
+
+    v = spacc[0x4b0 / 4];
+    v &= ~(0x7fu << 24);
+    v |=  (2u << 24);
+    spacc[0x4b0 / 4] = v;
+    spacc[0x4b4 / 4] = (u32)b;
+    sram[0x3c / 4] = (v >> 16) & 0x7f;
+    sram[0x28 / 4] = (u32)b;
+    sram[0x34 / 4] = 0;
+}
+
+void klad_sha_finalize(void)  /* 0x4003858 */
+{
+    volatile u32 *spacc = (volatile u32 *)SPACC_START;
+    volatile u32 *sram  = (volatile u32 *)(SDRAM_START + 0x110);
+    u32 v = spacc[0x480 / 4];
+
+    v &= ~0xc4000u;
+    v |=  0x4000u;
+    v &= ~(3u << 10);
+    v |=  (2u << 10);
+    v |=  0x380u;
+    v &= ~(7u << 4);
+    v |=  (2u << 4);
+    v &= ~(7u << 1);
+    v |=  (1u << 1);
+    spacc[0x480 / 4] = v;
+
+    sram[0] = 2;
+    sram[1] = 1;
+    sram[0x30 / 4] = 0;
+    sram[0x34 / 4] = 0;
+}
+
+void klad_sha_chunk(void *addr, unsigned len)  /* 0x400373c */
+{
+    volatile u32 *sram = (volatile u32 *)(SDRAM_START + 0x110);
+    u32 slot = sram[0x38 / 4];
+    u32 base = sram[0x24 / 4] + (slot << 5);
+    u32 *desc = (u32 *)base;
+    u8 *bp = (u8 *)base;
+
+    sram[0x38 / 4] = slot + 1;
+    memset((void *)base, 0, 32);
+    bp[1] = (u8)((bp[1] & ~3u) | 3u);
+    sram[0x30 / 4]++;
+    desc[2] = (u32)addr;
+    desc[3] = len;
+    sram[0x38 / 4] &= 1;
+
+    if (sram[0x18 / 4] != 0) {
+        u32 *src = (u32 *)((u8 *)sram + 0xc);
+        desc[4] = sram[0x8 / 4];
+        desc[5] = src[0];
+        desc[6] = src[1];
+    }
+}
+
+void klad_sha_chunk2(unsigned addr, unsigned len)  /* 0x40037e4 */
+{
+    volatile u32 *sram = (volatile u32 *)(SDRAM_START + 0x110);
+    u32 slot = sram[0x3c / 4];
+    u32 base = sram[0x28 / 4] + (slot << 5);
+    u32 *desc = (u32 *)base;
+    u8 *bp = (u8 *)base;
+
+    sram[0x3c / 4] = slot + 1;
+    memset((void *)base, 0, 32);
+    sram[0x34 / 4]++;
+    desc[1] = addr;
+    desc[2] = len;
+    bp[1] = (u8)((bp[1] & ~0xfu) | 3u);
+    sram[0x3c / 4] &= 1;
+}
+
+void klad_sha_update(unsigned arg)  /* 0x40038dc */
+{
+    if (arg == 0)
+        return;
+    memcpy((void *)(SDRAM_START + 0x110 + 8), (const void *)arg, 16);
+    *(volatile u32 *)(SDRAM_START + 0x110 + 0x18) = 16;
+}
+
+int klad_sha_close(void)  /* 0x400390c */
+{
+    volatile u32 *spacc = (volatile u32 *)SPACC_START;
+    volatile u32 *sram  = (volatile u32 *)(SDRAM_START + 0x110);
+    u32 v = spacc[0x4b0 / 4];
+    u32 a = (v >> 16) & 0x7f;
+    u32 b = (v >> 8)  & 0x7f;
+
+    if (a != b)
+        return -1;
+
+    {
+        u32 t1 = sram[0x34 / 4];
+        u32 sum = (b + t1) & 1;
+        v &= ~(0x7fu << 16);
+        v |= (sum << 16);
+        v &= ~0x7fu;
+        v |= t1 & 0x7f;
+        spacc[0x4b0 / 4] = v;
+    }
+    {
+        u32 v2 = spacc[0x484 / 4];
+        u32 t2 = sram[0x30 / 4];
+        u32 sum2 = (t2 + ((v2 >> 16) & 0x7f)) & 1;
+        v2 &= ~(0x7fu << 16);
+        v2 |= (sum2 << 16);
+        v2 &= ~0x7fu;
+        v2 |= t2 & 0x7f;
+        spacc[0x484 / 4] = v2;
+    }
+    sram[0x30 / 4] = 0;
+    sram[0x34 / 4] = 0;
+    return 0;
+}
+
+void klad_load_const(void)  /* 0x400122c */
+{
+    const u32 *table = (const u32 *)0x00007e28;
+    volatile u32 *rsa0 = (volatile u32 *)RSA0_START;
+
+    /* Load 3 vendor-precomputed RSA constants into RSA0 control regs.
+     * Full decoding of which RSA parameter each represents (modulus,
+     * exponent, Montgomery N') awaits the av300 vendor RSA spec. */
+    rsa0[0x54 / 4] = table[10];
+    rsa0[0x58 / 4] = table[4];
+    rsa0[0x5c / 4] = table[5];
+}
+
+int klad_check_step(void)  /* 0x4001314 */
+{
+    volatile u32 *fcm = (volatile u32 *)0x1000040c;
+    u32 v = fcm[0];
+    if (((v >> 8) & 2) == 0)
+        return -1;
+    v &= ~(0xffu << 8);
+    fcm[0] = v;
+    return 0;
+}
+
+int klad_alt_step(unsigned boot_pin)  /* 0x4001b40 */
+{
+    return reset_secure_io_peripherals(0x73616667u /* "safg" */, (int)boot_pin);
+}
+
+/*
+ * ============================================================================
  * UART fastboot protocol drivers.
  *
  * The bootrom implements a CRC-checksummed frame protocol on UART0 for
@@ -2459,7 +2721,7 @@ extern void klad_load_const(void);                             /* 0x400122c */
 extern void klad_sha_update(unsigned arg);                     /* 0x40038dc */
 extern void klad_sha_chunk(void *a, unsigned len);             /* 0x400373c */
 extern void klad_sha_chunk2(unsigned a, unsigned len);         /* 0x40037e4 */
-extern void klad_sha_close(void);                              /* 0x400390c */
+extern int  klad_sha_close(void);                              /* 0x400390c */
 extern int  klad_finalize_check(unsigned val, unsigned size, unsigned len);  /* 0x4000614 */
 /* klad_rsa_chain was a placeholder name for the inner loop inside
  * klad_dispatch_sig — not a real function entry. Now expanded inline. */
