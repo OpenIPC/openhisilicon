@@ -1,12 +1,18 @@
 /*
  * Link-only stubs for transitive callees of the reverse-engineered
  * functions in bootloader.c. The frontier is now down to two
- * subsystems: the eMMC/SDIO media drivers and the KLAD crypto
- * primitives, each warranting its own dedicated review PR.
+ * subsystems plus a handful of new deep helpers surfaced by the
+ * media-driver reversal:
  *
- * Signatures match the bootrom call sites; semantic responsibility
- * for the KLAD entry points awaits cross-reference with av300
- * vendor crypto documentation.
+ *   - 9 KLAD/RSA crypto primitives (the actual security model)
+ *   - 1 UART CRC frame parser
+ *   - 4 SDIO0/SD wire-protocol leaves surfaced by media_init_d /
+ *     media_program_b / media_sub_a (send_command_sdio0 +
+ *     sdio_read_block/write_block + media_sub_a_inner +
+ *     media_sub_b_setup)
+ *
+ * Each remaining stub is large (110-700 instructions) and warrants
+ * its own dedicated PR for focused review.
  */
 
 typedef unsigned char  u8;
@@ -14,23 +20,21 @@ typedef unsigned int   u32;
 typedef unsigned int   size_t;
 
 /*
- * Frame parser shared by the four UART fastboot drivers above. CRC
- * checksumming + framing state machine — 269 instructions of its
- * own, deferred for a focused review.
+ * UART frame parser — 269 instructions of CRC + state machine.
+ * Drives all five UART fastboot dispatchers in bootloader.c.
  */
 int  receive_frame(void *frame)                     { (void)frame; return 0; }  /* 0x4002ee4 */
 
 /*
- * Media-path drivers — bulk SDIO / eMMC programmer state machines.
- * Each runs 200-500+ instructions and lives in its own subsystem.
+ * SDIO0/SD wire-protocol leaves surfaced by the newly reversed
+ * media_init_d / media_program_b / media_sub_a / media_sub_b.
  */
-int  media_init_d(void)                             { return 0; }          /* 0x400422c */
-int  media_program_b(void *ctx)                     { (void)ctx; return 0; }  /* 0x4004d8c */
-int  media_finalize_b(void *dst, void *src, unsigned len)
-    { (void)dst; (void)src; (void)len; return 0; }                          /* 0x4004900 */
-int  media_sub_a(void)                              { return 0; }          /* 0x40077a8 */
-unsigned media_sub_b(void)                          { return 0; }          /* 0x40077b8 */
-void media_sub_c(void)                              {}                     /* 0x400795c */
+int  send_command_sdio0(unsigned cmd, unsigned arg, int sync)
+    { (void)cmd; (void)arg; (void)sync; return 0; }                       /* 0x4003ce0 */
+int  sdio_read_block(void *dst)                     { (void)dst; return 0; }  /* 0x4006cb8 */
+int  sdio_write_block(void *src)                    { (void)src; return 0; }  /* 0x4006cc0 */
+int  media_sub_a_inner(void *desc)                  { (void)desc; return 0; }  /* 0x4007ae8 */
+int  media_sub_b_setup(void *desc)                  { (void)desc; return 0; }  /* 0x4007898 */
 
 /*
  * KLAD / RSA / SPACC / TRNG internal helpers — the actual crypto

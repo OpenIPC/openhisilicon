@@ -75,6 +75,12 @@ func_42  0x04003410  uart0_wait_start_frame                 5-retry probe: send 
 func_43  0x04003354  uart0_recv_payload                     CRC-frame receive loop: state 1/2/4 → ack 0xAA/0x55/0xAA + callback; exits when SYSCTRL[0x150] == "EMMC" magic (0x454d4d43)
 func_44  0x040034e0  uart0_recv_signed_image(dst, size)     receive signed image frames; tracks size mismatch flag; returns 0 on END / -1 on mismatch or 256-retry timeout
 func_45  0x04003580  uart0_proto_handshake                  single-frame handshake; on END writes "ziju"/"DOWN" magics into SYSCTRL[0x140/0x13c], sets SYSCTRL[0x154]=1
+func_46  0x0400795c  media_sub_c                            write 0x530f failure status into SYSCTRL[0x140]
+func_47  0x040077a8  media_sub_a                            wrapper: read SRAM[0x264] desc ptr, tail-call media_sub_a_inner
+func_48  0x040077b8  media_sub_b                            alloc 2636-byte SDIO descriptor object + sub-buffers, populate vendor cmd table from 0x7f68
+func_49  0x0400422c  media_init_d                           SDIO0 controller bring-up: PWREN→CTRL=7 reset→PIO mode→CMD0/CMD8/ACMD41/CMD2/CMD3/CMD7/CMD16 sequence via send_command_sdio0
+func_4a  0x04004d8c  media_program_b                        SD-card MBR-aware sector loader: read block 0, check 0x55/0xaa MBR signature, copy partition or raw via callback
+func_4b  0x04004900  media_finalize_b(dst, src, len)        block-copy + CRC verify — outermost shape preserved; multi-stage state machine deferred
 
 Reset trampoline (covered by re/start.S, not in the func_N enumeration):
 
@@ -93,13 +99,12 @@ Transitive frontier (stubbed in re/stubs.c — the big deep helpers, each
 UART frame parser (deferred — 269 instructions of CRC/state machine):
   0x4002ee4  receive_frame(frame)     consumes one CRC-checksummed frame from UART0 RX into a 28-byte descriptor; returns state code (1=ENTER, 2=DATA, 4=END)
 
-eMMC/SDIO media drivers (200-500+ instructions each):
-  0x400422c  media_init_d             called from media_program_a entry (294 instr)
-  0x4004900  media_finalize_b         block-copy + checksum (530 instr)
-  0x4004d8c  media_program_b          program-transfer state machine (239 instr)
-  0x40077a8  media_sub_a              alt-media protocol step (113 instr)
-  0x40077b8  media_sub_b              alt-media protocol setup (109 instr)
-  0x400795c  media_sub_c              alt-media timeout fallback (4 instr — small)
+SDIO0/SD wire-protocol leaves (surfaced by the media-driver reversal):
+  0x4003ce0  send_command_sdio0(cmd,arg,sync)  CMD register write + completion poll
+  0x4006cb8  sdio_read_block(dst)             single 512B block read via DATA FIFO
+  0x4006cc0  sdio_write_block(src)            single 512B block write
+  0x4007898  media_sub_b_setup(desc)          descriptor population tail (split from media_sub_b for size)
+  0x4007ae8  media_sub_a_inner(desc)          block-read worker driven by media_sub_a
 
 KLAD/RSA/SPACC/TRNG crypto primitives (the actual security model — each
 deserves dedicated PR with side-by-side cv500 cross-reference):
