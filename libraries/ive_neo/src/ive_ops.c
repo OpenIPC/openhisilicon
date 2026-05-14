@@ -1744,43 +1744,80 @@ HI_S32 HI_MPI_IVE_KCF_GetTrainObj(HI_U3Q5 u3q5Padding, IVE_ROI_INFO_S astRoiInfo
 
 /* KCF_Process — kernel HW dispatch via ioctl 0xc0084633.
  *
- * Userspace marshalling decoded (this PR), kernel HW handler TBD. The
- * userspace side packs pu8TmpBuf with this layout (verified via static
- * decode of vendor libive.so HI_MPI_IVE_KCF_Process @0xdee8):
+ * Userspace marshalling: libive packs pstObjList->pu8TmpBuf with this
+ * staging layout (verified by tracing vendor libive @0xdee8 + libive-side
+ * memcpy_s offsets and a kprobe trace of ive_fill_kcf_task on av300):
  *
- *   [0..71]        IVE_IMAGE_S pstSrc copy
- *   [72..N_train*176+71]    IVE_KCF_OBJ_S array (train objs)
- *   [11336..N_track*176+11335] IVE_KCF_OBJ_S array (track objs)
- *   [22600..22603] u32 N_train
- *   [22604..22607] u32 N_track
- *   [22608..22647] IVE_KCF_PRO_CTRL_S (40 B)
- *   [22648..22651] HI_BOOL bInstant
+ *   TmpBuf[   0 ..   71]   IVE_IMAGE_S (pstSrc copy, 72 B)
+ *   TmpBuf[  72 ..]        IVE_KCF_OBJ_S array (TRAIN slots,  176 B each)
+ *   TmpBuf[11336 ..]       IVE_KCF_OBJ_S array (TRACK slots,  176 B each)
+ *   TmpBuf[0x5848] u32     train counter (kernel-written, == iter index)
+ *   TmpBuf[0x584c] u32     track counter
+ *   TmpBuf[0x5850 .. 0x5877] IVE_KCF_PRO_CTRL_S (40 B; CSC/InterFactor/
+ *                              Lamda/TrancAlfa/Sigma/RespThr)
+ *   TmpBuf[0x5878]         HW reserved scratch
  *
- * ioctl arg (8 bytes):
- *   +0..3: HI_HANDLE return slot
- *   +4..7: pu8TmpBuf pointer (user va)
+ * ioctl arg = struct { HI_HANDLE *handle; void *tmpBuf; } (8 B). The
+ * 8-byte arg goes via copy_from_user; the staging buffer must already be
+ * MMZ memory (mmap-shared) so HW DMA can touch it without an extra copy.
  *
- * The kernel-side handler (open_ive_neo.ko, case 0xc0084633) must:
- *   1. copy_from_user(kbuf, user_tmpBuf, 22656)
- *   2. For each train obj i in [0..N_train):
- *      - Compute hog_params struct from u3q5Padding + stRoiInfo
- *        (mirrors vendor ive_get_kcf_hog_param @0x0)
- *      - Fill 208-byte HW task node (mirrors ive_fill_kcf_task @0x9718)
- *        with train_flag=0
- *      - Append to per-call task chain
- *   3. Same for each track obj with train_flag=1
- *   4. Submit chain (needs task buffer > 4 KB; currently 13 KB max for
- *      N=64); wait for HW IRQ
- *   5. HW writes peak data into each obj's stDst (which points into
- *      user-allocated pstMem set up by GetTrainObj)
- *   6. copy_to_user(user_tmpBuf, kbuf, 22656)
- *   7. Set handle = 0 (already-done), return
+ * Kernel HW task node — 208 B, fully decoded via av300 kprobe trace of
+ * ive_fill_kcf_task(src=TmpBuf, obj_idx, hog_params, is_track, node).
+ * On entry r5 = TmpBuf + obj_idx*176 + (is_track ? 11336 : 72). r6 =
+ * 32-byte hog_params (derived from u3q5Padding + ROI by vendor
+ * ive_get_kcf_hog_param). r8 = TmpBuf + 0x5000 (CTRL staging base).
  *
- * Static decode of fill_kcf_task field map captured in source review;
- * needs kprobe trace on av300 (kernel symbol ive_fill_kcf_task @0xbf3c2718)
- * to confirm before any kernel-side code ships. Until then this remains
- * a NOT_SUPPORT stub; calling KCF userspace funcs through Process is
- * the only KCF path that doesn't work in our libive_neo.
+ *   node[ 6]      = 0
+ *   node[ 8] u8   = hw_fmt_code[src.enType]   (YUV420SP -> 1)
+ *   node[ 9]      = 0
+ *   node[10] u8   = 0x34                       (KCF magic)
+ *   node[11] u8   = is_track (0=TRAIN, 1=TRACK)
+ *   node[16] u32  = src.au64PhyAddr[0] - mmz_base   (Y plane offset)
+ *   node[24] u32  = src.au64PhyAddr[1] - mmz_base   (UV plane offset)
+ *   node[40] u16  = src.u32Width
+ *   node[42] u16  = src.u32Height
+ *   node[44] u16  = src.au32Stride[0]
+ *   node[46] u16  = src.au32Stride[1]
+ *   node[52] u16  = hog_params[24] u16            (RoiId low 16)
+ *   node[84] u32  = obj.stAlpha.u64PhyAddr   low32 - mmz_base
+ *   node[102] u16 = ctrl.u4q12TrancAlfa
+ *   node[104] u32 = obj.stGaussPeak.u64PhyAddr low32 - mmz_base
+ *   node[108] u16 = ctrl.u1q15InterFactor
+ *   node[110] u16 = ctrl.u0q16Lamda
+ *   node[112] u32 = obj.stCosWinX.u64PhyAddr  low32 - mmz_base
+ *   node[116] u32 = obj.stCosWinY.u64PhyAddr  low32 - mmz_base
+ *   node[120] u32 = obj.stHogFeature.u64PhyAddr low32 - mmz_base (slot 0)
+ *   node[124] u32 = TRAIN: dup of [120];  TRACK: TmpBuf[0x5858] - mmz_base
+ *   node[128] u32 = TRAIN: dup of [120];  TRACK: TmpBuf[0x5858] - mmz_base
+ *   node[132] u32 = obj.stHogFeature - mmz_base (slot 3, both paths)
+ *   node[136] u32 = obj.stAlpha     - mmz_base (dup of node[84])
+ *   node[140] u32 = TRACK only: obj.stDst.u64PhyAddr low32 - mmz_base
+ *   node[144] u32 = TRACK only: ctrl.u8RespThr (byte zero-extended)
+ *   node[148] u32 = hog_params[ 8] s32  (start X scan offset, Q-format)
+ *   node[152] u32 = hog_params[12] s32  (start Y scan offset)
+ *   node[156] u32 = hog_params[16] u32  (scan X range)
+ *   node[160] u32 = hog_params[20] u32  (scan Y range)
+ *   node[164] u16 = hog_params[ 0] u16  (X step Q-scale)
+ *   node[168] u16 = hog_params[ 2] u16  (Y step Q-scale)
+ *   node[172] u32 = (1<<40) / ((ctrl.u0q8Sigma+1)^2 * L*H*31)
+ *                   with L = (hog_params[16] <= 135) ? hog_params[16]/4-2 : 32
+ *                        H = (hog_params[20] <= 135) ? hog_params[20]/4-2 : 32
+ *                   (1/sigma^2 reciprocal, pre-scaled for HW kernel evaluator)
+ *   node[176] u8  = ctrl.enCscMode  & 0xff
+ *   node[177] u8  = 4                              (constant)
+ *   node[192] u16 = hog_params[ 4] u16             (HOG cells X, == grid_dim/8)
+ *   node[194] u16 = hog_params[ 6] u16             (HOG cells Y)
+ *
+ * mmz_base is the per-MMZ-zone base phys returned by ive_get_mmz_base_addr
+ * (we mirror with dma_addr_t arithmetic on our DT-reserved CMA pool).
+ *
+ * Vendor kernel-side check (ive_check_kcf_param, line 6001) enforces
+ * ctrl.stTmpBuf.u32Size >= 47616 (0xBA00) — this is the minimum size
+ * for the staging area plus a HW scratch region. Our handler must
+ * accept the same minimum.
+ *
+ * is_track flag is named misleadingly: in vendor's encoding, 0=TRAIN,
+ * 1=TRACK. The TmpBuf slot selection at +72/+11336 confirms this.
  */
 HI_S32 HI_MPI_IVE_KCF_Process(IVE_HANDLE *pIveHandle,
                               IVE_SRC_IMAGE_S *pstSrc,
