@@ -1742,6 +1742,46 @@ HI_S32 HI_MPI_IVE_KCF_GetTrainObj(HI_U3Q5 u3q5Padding, IVE_ROI_INFO_S astRoiInfo
     return HI_SUCCESS;
 }
 
+/* KCF_Process — kernel HW dispatch via ioctl 0xc0084633.
+ *
+ * Userspace marshalling decoded (this PR), kernel HW handler TBD. The
+ * userspace side packs pu8TmpBuf with this layout (verified via static
+ * decode of vendor libive.so HI_MPI_IVE_KCF_Process @0xdee8):
+ *
+ *   [0..71]        IVE_IMAGE_S pstSrc copy
+ *   [72..N_train*176+71]    IVE_KCF_OBJ_S array (train objs)
+ *   [11336..N_track*176+11335] IVE_KCF_OBJ_S array (track objs)
+ *   [22600..22603] u32 N_train
+ *   [22604..22607] u32 N_track
+ *   [22608..22647] IVE_KCF_PRO_CTRL_S (40 B)
+ *   [22648..22651] HI_BOOL bInstant
+ *
+ * ioctl arg (8 bytes):
+ *   +0..3: HI_HANDLE return slot
+ *   +4..7: pu8TmpBuf pointer (user va)
+ *
+ * The kernel-side handler (open_ive_neo.ko, case 0xc0084633) must:
+ *   1. copy_from_user(kbuf, user_tmpBuf, 22656)
+ *   2. For each train obj i in [0..N_train):
+ *      - Compute hog_params struct from u3q5Padding + stRoiInfo
+ *        (mirrors vendor ive_get_kcf_hog_param @0x0)
+ *      - Fill 208-byte HW task node (mirrors ive_fill_kcf_task @0x9718)
+ *        with train_flag=0
+ *      - Append to per-call task chain
+ *   3. Same for each track obj with train_flag=1
+ *   4. Submit chain (needs task buffer > 4 KB; currently 13 KB max for
+ *      N=64); wait for HW IRQ
+ *   5. HW writes peak data into each obj's stDst (which points into
+ *      user-allocated pstMem set up by GetTrainObj)
+ *   6. copy_to_user(user_tmpBuf, kbuf, 22656)
+ *   7. Set handle = 0 (already-done), return
+ *
+ * Static decode of fill_kcf_task field map captured in source review;
+ * needs kprobe trace on av300 (kernel symbol ive_fill_kcf_task @0xbf3c2718)
+ * to confirm before any kernel-side code ships. Until then this remains
+ * a NOT_SUPPORT stub; calling KCF userspace funcs through Process is
+ * the only KCF path that doesn't work in our libive_neo.
+ */
 HI_S32 HI_MPI_IVE_KCF_Process(IVE_HANDLE *pIveHandle,
                               IVE_SRC_IMAGE_S *pstSrc,
                               IVE_KCF_OBJ_LIST_S *pstObjList,
