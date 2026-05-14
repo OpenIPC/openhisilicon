@@ -191,11 +191,11 @@ extern unsigned media_sub_b(void);                 /* 0x40077b8 */
 extern void media_sub_c(void);                     /* 0x400795c */
 
 extern int  klad_validate_header(void *ctx);       /* 0x4001150 */
-extern int  klad_init_check(int slot, int boot_pin);  /* 0x40010ac */
+extern int  reset_secure_io_peripherals(unsigned slot, int boot_pin);  /* 0x40010ac */
 extern int  klad_dispatch_sig(void *ctx, unsigned size, unsigned a, unsigned b, unsigned c);  /* 0x4000868 */
 extern int  klad_post_unlock(int slot, int boot_pin);  /* 0x4000568 */
 extern int  klad_finalize(void *ctx);              /* 0x400136c */
-extern int  klad_decode_chunk(unsigned a, unsigned b);  /* 0x4000358 */
+extern int  refresh_ddr(unsigned mctl_mode);       /* 0x4000358 */
 extern void configure_emmc_pins(void);             /* 0x4003d68 */
 extern int  send_command_emmc(void);               /* 0x4003c30 */
 extern int  klad_verify_rsa(void);                 /* 0x4005468 */
@@ -1406,7 +1406,7 @@ int klad_load_keys(void)  /* 0x4001470 */
         rc = klad_dispatch_sig(ctx, size_arg, mid, src, sig);
         if (rc != 0) {
             uart0_send_status(0x33, 0x31);
-            klad_init_check(src_tag, boot_pin);
+            reset_secure_io_peripherals(src_tag, boot_pin);
             free_chunk((unsigned)ctx);
             return -1;
         }
@@ -1416,7 +1416,7 @@ int klad_load_keys(void)  /* 0x4001470 */
 
         if (sysctrl[PERISTAT / 4] & 2) {
             /* alt key-decode path */
-            klad_decode_chunk(0, 0);
+            refresh_ddr(0);
             if (klad_dispatch_sig(ctx, size_arg, mid, src, sig) == 0)
                 goto success_done;
         }
@@ -1432,7 +1432,7 @@ int klad_load_keys(void)  /* 0x4001470 */
             c2[11] = dst;
             klad_finalize(ctx);
             rc = klad_dispatch_sig(ctx, c2[11], mid2, src2, sig);
-            klad_init_check(src_tag, boot_pin);
+            reset_secure_io_peripherals(src_tag, boot_pin);
             if (rc != 0) {
                 uart0_send_status(0x34, 0x31);
                 free_chunk((unsigned)ctx);
@@ -1599,4 +1599,326 @@ int klad_alt_verify(void)  /* 0x4001bdc */
 out:
     free_chunk((unsigned)ctx);
     return 0;
+}
+
+/*
+ * ============================================================================
+ * Frontier reversal — remaining small/medium leaves.
+ *
+ * 17 functions ranging from 1 instruction (nop_2d74) to 88 (refresh_ddr).
+ * Each is small enough to reverse precisely from disasm. The remaining
+ * deep helpers (klad_dispatch_sig at 510 instructions, klad_post_unlock at
+ * ~700, klad_validate_header at ~658, klad_finalize at ~520, plus the
+ * three big alt_* paths and the giant uart0_recv_payload / media_program_b
+ * / media_finalize_b crypto/SD-protocol drivers) stay as stubs.
+ *
+ * Two name corrections: cv500's functions.txt names 0x358 "refresh_ddr"
+ * and 0x10ac "reset_secure_io_peripherals" — the PR #137 placeholders
+ * klad_decode_chunk / klad_init_check were wrong. Renamed everywhere.
+ * ============================================================================
+ */
+
+extern void uart0_write(int byte);  /* 0x400514c — leaf TX, single byte */
+extern unsigned get_random_value(void);  /* 0x40002cc */
+
+unsigned get_random_value(void)  /* 0x40002cc */
+{
+    volatile u32 *trng = (volatile u32 *)TRNG_START;
+    unsigned timeout = 200 * get_wait_ticks(1000);
+
+    timer_reset_counter();
+    for (;;) {
+        u32 st = trng[HISEC_COM_TRNG_DATA_ST / 4];
+        if ((st >> 8) & 0xff)
+            return trng[HISEC_COM_TRNG_FIFO_DATA / 4];
+        if (timer_get_value() >= timeout)
+            return 0;
+    }
+}
+
+void uart0_send_status(int code, int extra)  /* 0x4000320 */
+{
+    uart0_write(10);
+    uart0_write('E');
+    uart0_write(code);
+    uart0_write('D');
+    uart0_write(extra);
+}
+
+int refresh_ddr(unsigned mctl_mode)  /* 0x04000358 */
+{
+    volatile u32 *ddrc = (volatile u32 *)(DDRC_START + 0x8000);
+    volatile u32 *misc = (volatile u32 *)MISC_START;
+    unsigned timeout = mctl_mode << 2;
+    int has_phy_cal = (ddrc[0x50 / 4] & 0xf) ? 1 : 0;
+    unsigned t1, t2;
+
+    if (has_phy_cal) {
+        ddrc[0] = 1;
+        timer_reset_counter();
+        while ((ddrc[0x294 / 4] & 1) == 0) {
+            if (timer_get_value() >= timeout) {
+                uart0_send_status(10, 1);
+                return -1;
+            }
+        }
+        t1 = get_random_value();
+        t2 = get_random_value();
+        if (t1 != t2) {
+            (void)get_random_value();
+            (void)get_random_value();
+            misc[0x28 / 4] = 0;
+            misc[0x2c / 4] = 0;
+            (void)get_random_value();
+            (void)get_random_value();
+            (void)get_random_value();
+            (void)get_random_value();
+            ddrc[0] = 2;
+            timer_reset_counter();
+            while ((ddrc[0x294 / 4] & 1) == 0) {
+                if (timer_get_value() >= timeout) {
+                    uart0_send_status(10, 3);
+                    return -1;
+                }
+            }
+            return 0;
+        }
+    }
+    timer_reset_counter();
+    while ((ddrc[0x294 / 4] & 1) == 0) {
+        if (timer_get_value() >= timeout)
+            break;
+    }
+    return 0;
+}
+
+int reset_secure_io_peripherals(unsigned boot_type, int boot_pin)  /* 0x040010ac */
+{
+    volatile u32 *crg = (volatile u32 *)CRG_START;
+    u32 v;
+
+    v = crg[PERI_CRG104 / 4];
+    v |= 0x100u;
+    crg[PERI_CRG104 / 4] = v;
+    v = crg[PERI_CRG104 / 4];
+    v |= 0x14u;
+    crg[PERI_CRG104 / 4] = v;
+    v = crg[PERI_CRG104 / 4];
+    v &= ~0x100u;
+    crg[PERI_CRG104 / 4] = v;
+    v = crg[PERI_CRG104 / 4];
+    v &= ~0x14u;
+    crg[PERI_CRG104 / 4] = v;
+
+    if (boot_type == 0x73616667u) {
+        close_sdio0();
+        return 0;
+    }
+    if (boot_type == 0x73616668u)
+        return 0;
+    if (boot_type == 0x73616665u) {
+        disable_uart0_hdwr();
+        return 0;
+    }
+    if (boot_pin == 1)
+        reset_emmc();
+    return 0;
+}
+
+void nop_2d74(void)  /* 0x4002d74 */
+{
+}
+
+unsigned alloc_chunk(unsigned size)  /* 0x4002b78 */
+{
+    volatile u32 *desc = (volatile u32 *)(SDRAM_START + SRAM_CHUNK_TABLE_OFF);
+    if (size > desc[0]) {
+        do { desc += 4; } while (desc[0] < size);
+    }
+
+    for (;;) {
+        u32 cls_size  = desc[0];
+        u32 cls_count = desc[1];
+        u32 cls_base  = desc[2];
+        u32 cls_mask  = desc[3];
+
+        if ((int)cls_count <= 0)
+            return 0;
+        if ((cls_mask & 1) == 0) {
+            desc[3] = cls_mask | 1u;
+            return cls_base;
+        }
+        {
+            unsigned bit = 0;
+            u32 m = cls_mask;
+            while ((m & 1) && bit < cls_count) {
+                bit++;
+                m >>= 1;
+            }
+            if (bit < cls_count) {
+                desc[3] = cls_mask | (1u << bit);
+                return cls_base + bit * cls_size;
+            }
+        }
+        desc += 4;
+    }
+}
+
+void free_chunk(unsigned addr)  /* 0x4002c1c */
+{
+    volatile u32 *desc = (volatile u32 *)(SDRAM_START + SRAM_CHUNK_TABLE_OFF);
+    u32 cls_size, cls_count, cls_base, off;
+
+    for (;;) {
+        cls_size  = desc[0];
+        cls_count = desc[1];
+        cls_base  = desc[2];
+        off = addr - cls_base;
+        if (off < cls_count * cls_size)
+            break;
+        desc += 4;
+    }
+
+    if (off == 0) {
+        desc[3] &= ~1u;
+        return;
+    }
+    {
+        unsigned bit = 0;
+        u32 t = 0;
+        while (off > t) {
+            bit++;
+            t += cls_size;
+        }
+        desc[3] &= ~(1u << bit);
+    }
+}
+
+void wait_long_timer_0(unsigned ms)  /* 0x4002c84 */
+{
+    while (ms != 0) {
+        unsigned chunk = ms < 0x989680u ? ms : 0x989680u;
+        wait_timer_0(chunk);
+        ms -= chunk;
+    }
+}
+
+int send_command_emmc(void)  /* 0x4003c30 */
+{
+    volatile u32 *emmc = (volatile u32 *)EMMC_START;
+    int retries = 3;
+
+    while (retries--) {
+        unsigned tries = 0xf00;
+        emmc[MMC_CMD / 4] = 0x20a02000u;
+        while (tries--) {
+            if ((int)emmc[MMC_CMD / 4] >= 0)
+                return 0;
+            if (emmc[MMC_RINTSTS / 4] & 0x1000u)
+                break;
+        }
+    }
+    return -1;
+}
+
+void configure_emmc_pins(void)  /* 0x4003d68 */
+{
+    volatile u32 *sysctrl  = (volatile u32 *)SYSCTRL_START;
+    volatile u32 *iocfg0   = (volatile u32 *)IO_CTRL0_START;
+    const u32 *table       = (const u32 *)0x00007d98;
+    u32 peristat = sysctrl[PERISTAT / 4];
+    unsigned mode = (peristat >> 8) & 3;
+    int needs_pull_fix = (peristat & 0x2000u) != 0;
+    unsigned i;
+
+    iocfg0[0] = table[mode];
+    for (i = 1; i < 6; i++) {
+        u32 v = table[mode + i];
+        if (needs_pull_fix)
+            v &= ~0x100u;
+        iocfg0[i] = v;
+    }
+    iocfg0[6] = table[mode + 6];
+}
+
+void initialize_uart0(void)  /* 0x40050c0 */
+{
+    volatile u32 *crg       = (volatile u32 *)CRG_START;
+    volatile u32 *sram_base = (volatile u32 *)(SDRAM_START + SRAM_UART_BASE_OFF);
+    volatile u32 *uart;
+    u32 v;
+
+    v = crg[0x1b8 / 4];
+    crg[0x1b8 / 4] = v | 1u;
+
+    v = crg[0x1bc / 4];
+    crg[0x1bc / 4] = v & ~0x40000u;
+
+    sram_base[0] = UART0_START;
+    uart = (volatile u32 *)UART0_START;
+    uart[UART_CR / 4]    = 0;
+    uart[UART_IBRD / 4]  = 13;
+    uart[UART_FBRD / 4]  = 1;
+    uart[UART_LCR_H / 4] = 0x70;
+    uart[UART_CR / 4]    = 0x301;
+}
+
+void disable_uart0(void)  /* 0x400512c */
+{
+    volatile u32 *sram_base = (volatile u32 *)(SDRAM_START + SRAM_UART_BASE_OFF);
+    volatile u32 *uart = (volatile u32 *)sram_base[0];
+    u32 cr = uart[UART_CR / 4];
+    uart[UART_CR / 4] = cr & ~1u;
+}
+
+int uart0_read(void)  /* 0x4005170 */
+{
+    volatile u32 *sram_base = (volatile u32 *)(SDRAM_START + SRAM_UART_BASE_OFF);
+    volatile u32 *uart = (volatile u32 *)sram_base[0];
+    u32 byte;
+
+    while (uart[UART_FR / 4] & UART_FR_RXFE)
+        ;
+    byte = uart[UART_DR / 4];
+    if (byte & ~0xffu) {
+        uart[UART_RSR / 4] = 0xFFFFFFFFu;
+        return -1;
+    }
+    return (int)byte;
+}
+
+int uart0_has_rx_data(void)  /* 0x40051a0 */
+{
+    volatile u32 *sram_base = (volatile u32 *)(SDRAM_START + SRAM_UART_BASE_OFF);
+    volatile u32 *uart = (volatile u32 *)sram_base[0];
+    return ((uart[UART_FR / 4] ^ 0x10u) >> 4) & 1u;
+}
+
+unsigned timer_get_value(void)  /* 0x4005234 */
+{
+    volatile u32 *timer0 = (volatile u32 *)TIMER0_START;
+    return ~timer0[TIMER_VALUE / 4];
+}
+
+unsigned get_wait_ticks(unsigned ms)  /* 0x4005244 */
+{
+    (void)ms;
+    return 3000;
+}
+
+void update_timer_0_value(void)  /* 0x400524c */
+{
+    volatile u32 *timer0 = (volatile u32 *)TIMER0_START;
+    volatile u32 *state  = (volatile u32 *)(SDRAM_START + SRAM_TIMER0_VALUE_OFF);
+    u32 cur    = timer0[TIMER_VALUE / 4];
+    u32 delta  = state[1];
+    u32 prev   = state[0];
+    u32 new_delta;
+
+    state[0] = cur;
+    new_delta = prev + delta;
+    if (cur > prev)
+        new_delta -= 1;
+    new_delta -= cur;
+    state[1] = new_delta;
 }

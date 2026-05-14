@@ -6,6 +6,8 @@
 #include "regmap-mmc.h"
 #include "regmap-sysctrl.h"
 #include "regmap-timer.h"
+#include "regmap-trng.h"
+#include "regmap-uart.h"
 
 #define BOOTROM_START   0x04000000
 #define SDRAM_START     0x04010000
@@ -25,6 +27,8 @@
 #define SRAM_TIMER0_VALUE_OFF   0x0180  /* timer_reset_counter saves here */
 #define SRAM_TIMER0_DELTA_OFF   0x0184
 #define SRAM_INIT_RECORD_OFF    0x0004  /* 12-byte record copied from bootrom 0x7f44 */
+#define SRAM_CHUNK_TABLE_OFF    0x0010  /* organize_memory_chunks descriptor base */
+#define SRAM_UART_BASE_OFF      0x017c  /* SRAM holds the active UART base pointer */
 
 #define TRNG_START      0x10090000
 #define SDIO0_START     0x100f0000
@@ -35,6 +39,8 @@
 #define CRG_START       0x12010000
 #define SYSCTRL_START   0x12020000
 #define MISC_START      0x12030000
+#define DDRC_START      0x12060000
+#define UART0_START     0x120a0000
 #define GPIO0_START     0x120d0000
 
 #define BOOTROM_INIT_REC_SRC    (BOOTROM_START + 0x7f44)

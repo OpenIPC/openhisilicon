@@ -50,9 +50,26 @@ func_29  0x040056c0  media_init_alt_finalize                wait for SRAM[0x18c]
 func_2a  0x04002a80  organize_memory_chunks                 build chunk-allocator descriptor table from bootrom 0x7e5c (size,count) array
 func_2b  0x04001af4  klad_unlock                            dispatches on PERISTAT bits 4/5 between klad_check_a and klad_check_b
 func_2c  0x04003de0  initialize_emmc                        DW MMC controller bring-up: pin cfg, CRG reset, 3-mode dispatch (PERISTAT bits 9..8), CMD/CTYPE setup, 1-sec timeout poll on RINTSTS.bit9
-func_2d  0x04001470  klad_load_keys                         UART secure-load entry: uart0_wait_start_frame → uart0_recv_signed_image → alloc 48B chunk → parse_image_header → klad_validate_header → klad_dispatch_sig → invoke_foreign_code → optional klad_decode_chunk + re-dispatch; status codes via uart0_send_status
+func_2d  0x04001470  klad_load_keys                         UART secure-load entry: uart0_wait_start_frame → uart0_recv_signed_image → alloc 48B chunk → parse_image_header → klad_validate_header → klad_dispatch_sig → invoke_foreign_code → optional refresh_ddr + re-dispatch; status codes via uart0_send_status
 func_2e  0x04001f0c  klad_verify                            (SYSSTAT.bit4) secure path: initialize_emmc + memcpy_emmc → same header+sig+verify chain → on PERISTAT.bit1 retry via klad_verify_rsa
 func_2f  0x04001bdc  klad_alt_verify                        !(SYSSTAT.bit4) secure path: magic guard SYSCTRL[0x14] → klad_alt_dispatch on match; else flash 4-word check → klad_alt_e88 on hit; else same header+sig+verify chain from FLASH_START
+func_30  0x040002cc  get_random_value                       TRNG read with 200ms timeout — drains TRNG_FIFO when TRNG_DATA_ST.[8:15] non-zero
+func_31  0x04000320  uart0_send_status(c, x)                send 5-byte status frame "\nE<c>D<x>" via uart0_write
+func_32  0x04000358  refresh_ddr(mctl_mode)                 DDR controller refresh: poll DDRC+0x294.bit0, optional TRNG-fed PHY recal, set DDRC[0]=2 on second pass
+func_33  0x040010ac  reset_secure_io_peripherals(tag, pin)  toggle CRG[0x1a0] KLAD/RSA/SPACC/TRNG bits, then dispatch on boot_type to chain into reset_emmc / close_sdio0 / disable_uart0_hdwr
+func_34  0x04002b78  alloc_chunk(size)                      bit-mask allocator walking SRAM[0x10] descriptor table
+func_35  0x04002c1c  free_chunk(addr)                       inverse — find size class and clear allocation bit
+func_36  0x04002c84  wait_long_timer_0(ms)                  loops wait_timer_0 in ≤0x989680 (10M) chunks
+func_37  0x04002d74  nop_2d74                               vendor no-op (single bx lr)
+func_38  0x04003c30  send_command_emmc                      MMC_CMD write + 3-retry poll on completion / error bits
+func_39  0x04003d68  configure_emmc_pins                    program IO_CTRL0[0..6] from bootrom 0x7d98 pinmux table, mode = PERISTAT[9:8]
+func_3a  0x040050c0  initialize_uart0                       PL011 bring-up: CRG[0x1b8/0x1bc] gate clocks, IBRD=13/FBRD=1/LCR_H=0x70/CR=0x301
+func_3b  0x0400512c  disable_uart0                          clear UART_CR bit 0
+func_3c  0x04005170  uart0_read                             blocking byte read; on framing/parity error: clear RSR, return -1
+func_3d  0x040051a0  uart0_has_rx_data                      return (FR ^ 0x10) >> 4 & 1
+func_3e  0x04005234  timer_get_value                        ~TIMER0.VALUE (since timer counts down)
+func_3f  0x04005244  get_wait_ticks(ms)                     vendor-fixed return 3000
+func_40  0x0400524c  update_timer_0_value                   refresh SRAM[0x180..0x184] timer delta from current TIMER0.VALUE
 
 Reset trampoline (covered by re/start.S, not in the func_N enumeration):
 
@@ -65,47 +82,33 @@ Reset trampoline (covered by re/start.S, not in the func_N enumeration):
   0x0400009c  clear_remap thunk       sets SC_CTRL.bit8, jumps to *(SDRAM_START)
   0x04000100  _dead_loop              triggers SC_SYSRES soft-reset, spins
 
-Transitive frontier (stubbed in re/stubs.c — bodies await later PRs):
+Transitive frontier (stubbed in re/stubs.c — the big deep helpers, each
+130-700 instructions, deferred for dedicated review PRs):
 
-Small helpers used by the reversed functions:
-  0x40016ac  klad_check_b             called from klad_unlock when peristat.bit4 clear
-  0x40018b8  klad_check_a             called from klad_unlock when peristat.bit4 set
+UART secure-load drivers (each 200-350 instructions of UART fastboot
+protocol + flow control):
+  0x4003410  uart0_wait_start_frame   start-of-frame detect (39 instr — small for the family)
+  0x4003354  uart0_recv_payload       payload reception state machine (353 instr)
+  0x4003580  uart0_proto_handshake    intermediate handshake step (214 instr)
+  0x40034e0  uart0_recv_signed_image  receive signed image into buffer (254 instr)
+  0x400514c  uart0_write              single-byte TX leaf — used by uart0_send_status
 
-KLAD/RSA crypto entry points (called from klad_load_keys/verify/alt_verify):
-  0x4001150  klad_validate_header     header sanity check before sig dispatch
-  0x40010ac  klad_init_check          (slot, boot_pin) — gate before retry path
-  0x4000868  klad_dispatch_sig        the actual RSA/SHA dispatch — five-arg call
-  0x4000568  klad_post_unlock         retry-path entry when dispatch_sig fails
-  0x400136c  klad_finalize            wrap-up after retry, recomputes DDR offset
-  0x4000358  klad_decode_chunk        chunk-decoded path for PERISTAT bit 1
-  0x4005468  klad_verify_rsa          PERISTAT bit 1 path in klad_verify
-  0x4001df8  klad_alt_dispatch        SYSCTRL[0x14] magic-match path in klad_alt_verify
-  0x4001e88  klad_alt_e88             flash-magic-hit path in klad_alt_verify
+eMMC/SDIO media drivers (200-500+ instructions each):
+  0x400422c  media_init_d             called from media_program_a entry (294 instr)
+  0x4004900  media_finalize_b         block-copy + checksum (530 instr)
+  0x4004d8c  media_program_b          program-transfer state machine (239 instr)
+  0x40077a8  media_sub_a              alt-media protocol step (113 instr)
+  0x40077b8  media_sub_b              alt-media protocol setup (109 instr)
+  0x400795c  media_sub_c              alt-media timeout fallback (4 instr — small)
 
-UART secure-load helpers:
-  0x4003580  uart0_proto_handshake    extra protocol step between start-frame and payload
-  0x40034e0  uart0_recv_signed_image  receives signed image into buffer over UART
-  0x4000320  uart0_send_status(a,b)   diagnostic status TX
-
-eMMC command primitives:
-  0x4003d68  configure_emmc_pins      pinmux for eMMC CMD/CLK/DATA pads
-  0x4003c30  send_command_emmc        CMD register write + completion poll
-  0x4002b78  alloc_chunk(size)        chunk-allocator allocate
-  0x4002c1c  free_chunk(addr)         chunk-allocator free
-  0x4002c84  wait_long_timer_0(ms)    millisecond delay variant
-  0x4002d74  nop_2d74                 vendor "no-op marker" function (single bx lr)
-  0x400422c  media_init_d             called from media_program_a entry
-  0x4004900  media_finalize_b         block-copy + checksum helper
-  0x4004d8c  media_program_b          state-machine for media program transfer
-  0x40050c0  initialize_uart0         UART0 PL011 bring-up
-  0x400512c  disable_uart0            UART0 PL011 teardown
-  0x4005170  uart0_read               single-byte UART0 read
-  0x40051a0  uart0_has_rx_data        UART0 RX FIFO non-empty check
-  0x4003354  uart0_recv_payload       UART payload reception state machine
-  0x4003410  uart0_wait_start_frame   UART fastboot protocol start-of-frame detect
-  0x4005234  timer_get_value          read TIMER0.VALUE delta from SRAM snapshot
-  0x4005244  get_wait_ticks(ms)       convert ms to timer ticks
-  0x400524c  update_timer_0_value     refresh SRAM TIMER0 state from hardware
-  0x40077a8  media_sub_a              alt-media protocol step (poll)
-  0x40077b8  media_sub_b              alt-media protocol setup (timeout calc)
-  0x400795c  media_sub_c              alt-media timeout fallback
+KLAD/RSA/SPACC/TRNG crypto primitives (the actual security model — each
+deserves dedicated PR with side-by-side cv500 cross-reference):
+  0x4001150  klad_validate_header     header sanity check (658 instr)
+  0x4000868  klad_dispatch_sig        RSA/SHA dispatch — 5-arg (510 instr)
+  0x4000568  klad_post_unlock         retry-path entry (695 instr)
+  0x400136c  klad_finalize            wrap-up + DDR offset recompute (523 instr)
+  0x40016ac  klad_check_b             klad_unlock dispatch leaf (131 instr)
+  0x40018b8  klad_check_a             klad_unlock dispatch leaf (143 instr)
+  0x4005468  klad_verify_rsa          PERISTAT.bit1 path in klad_verify (128 instr)
+  0x4001df8  klad_alt_dispatch        SYSCTRL[0x14] magic-match path (663 instr)
+  0x4001e88  klad_alt_e88             flash-magic-hit path (627 instr)
