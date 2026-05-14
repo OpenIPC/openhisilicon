@@ -2668,8 +2668,8 @@ out:
 
 /* ---- cv500 Resize (HW op 0x30, ioctl 0xc4c0462e) ----
  *
- * U8C1 (single-plane) image resize, 1..8 images per call. Vendor blob
- * symbols: ive_resize_proc @0x490c, ive_fill_resize_task @0x91e8.
+ * Image resize, 1..8 images per call. Vendor blob symbols:
+ * ive_resize_proc @0x490c, ive_fill_resize_task @0x91e8.
  *
  * Layout discovery: the vendor passes a 9264-byte user buffer (src[64]
  * + dst[64] + ctrl) via a small ioctl carrying handle + user-pointer.
@@ -2677,28 +2677,44 @@ out:
  * ioctl, mirroring the PerspTrans/Hog precedent. Cap u16Num at 8.
  *
  * Critical insight from disassembly: fill_resize_task writes a
- * 25-byte-per-image table into a buffer it receives as its 5th arg.
- * That buffer is the user-allocated ctrl.stMem (remapped to kernel
- * virt via cmpi_remap_cached @0x49d8 in vendor). HW reads the table
- * from stMem.phys (which we store in node[16]) at runtime — so the
+ * per-image table into a buffer it receives as its 5th arg. That
+ * buffer is the user-allocated ctrl.stMem (remapped to kernel virt
+ * via cmpi_remap_cached @0x49d8 in vendor). HW reads the table from
+ * stMem.phys (which we store in node[16]) at runtime — so the
  * 208-byte HW node is a single descriptor, not a chain of N nodes.
  *
- * Per-image slot layout (Path A, src.enType=0=U8C1):
- *   +0:     u8  src.enType (0 for U8C1)
- *   +1..4:  u32 src.phys - mmz_base  (low 32 of au64PhyAddr[0])
- *   +5..8:  u32 dst.phys - mmz_base
- *   +9..10: u16 src.stride[0]
- *  +11..12: u16 dst.stride[0]
- *  +13..14: u16 src.width
- *  +15..16: u16 src.height
- *  +17..18: u16 dst.width
- *  +19..20: u16 dst.height
- *  +21..22: u16 (src.width << 11) / dst.width   (Q4.11 horizontal scale)
- *  +23..24: u16 (src.height << 11) / dst.height (Q4.11 vertical scale)
+ * Two slot layouts depending on src[0].enType:
  *
- * Path B (multi-plane, src.enType != 0) is deferred — vendor's inner
- * loop at 0x93c4 packs additional plane phys/strides into a different
- * per-image layout; reject src.enType != 0 for now.
+ *   PATH A (enType=0=U8C1, 25 bytes/image, vendor branch at 0x9294):
+ *     +0     u8  src.enType (0)
+ *     +1..4  u32 src.phys - mmz_base (low 32 of au64PhyAddr[0])
+ *     +5..8  u32 dst.phys - mmz_base
+ *     +9..10  u16 src.stride[0]
+ *    +11..12  u16 dst.stride[0]
+ *    +13..14  u16 src.width
+ *    +15..16  u16 src.height
+ *    +17..18  u16 dst.width
+ *    +19..20  u16 dst.height
+ *    +21..22  u16 (src.width  << 11) / dst.width   (Q4.11)
+ *    +23..24  u16 (src.height << 11) / dst.height
+ *
+ *   PATH B (enType != 0, multi-plane, 49 bytes/image, vendor branch
+ *           at 0x93c4 + per-plane loop):
+ *     +0     u8  src.enType
+ *     +1..12  u32 src.au64PhyAddr[0..2] - mmz_base (3 planes × 4 B)
+ *    +13..24  u32 dst.au64PhyAddr[0..2] - mmz_base
+ *    +25..30  u16 src.au32Stride[0..2]               (3 × 2 B)
+ *    +31..36  u16 dst.au32Stride[0..2]
+ *    +37..38  u16 src.width
+ *    +39..40  u16 src.height
+ *    +41..42  u16 dst.width
+ *    +43..44  u16 dst.height
+ *    +45..46  u16 (src.width  << 11) / dst.width
+ *    +47..48  u16 (src.height << 11) / dst.height
+ *
+ * HW selects which layout to interpret via node[8] (the format byte
+ * from cv500_src_fmt_lut[enType]). All images in a single call must
+ * share the same enType — Path is selected once for the whole batch.
  *
  * Arg buffer (1216 bytes):
  *   +0:    HI_HANDLE                                 8
@@ -2711,7 +2727,29 @@ out:
  *   +1208: HI_BOOL instant                           4
  */
 #define IVE_RZ_MAX_NUM    8
-#define IVE_RZ_SLOT_BYTES 25
+#define IVE_RZ_SLOT_A     25      /* Path A: U8C1 single plane */
+#define IVE_RZ_SLOT_B     49      /* Path B: multi-plane */
+
+static int ive_rz_slot_size(u32 en_type)
+{
+	return en_type == 0 ? IVE_RZ_SLOT_A : IVE_RZ_SLOT_B;
+}
+
+/* Per-image planar count for stride/phys validation. 1 for U8C1 / S8C1
+ * (single plane), 2 for YUV420SP / YUV422SP (luma + UV), 3 for
+ * U8C3_PACKAGE / U8C3_PLANAR. Used to sanity-check that user-allocated
+ * IVE_IMAGE_S fields are non-zero on planes HW actually reads. */
+static int ive_rz_plane_count(u32 en_type)
+{
+	switch (en_type) {
+	case 0:  return 1;                /* U8C1 */
+	case 2:                           /* YUV420SP */
+	case 3:  return 2;                /* YUV422SP */
+	case 10: return 1;                /* U8C3_PACKAGE (1 packed plane) */
+	case 11: return 3;                /* U8C3_PLANAR */
+	default: return -1;               /* unsupported */
+	}
+}
 
 static long ive_op_resize_cv500(unsigned long arg)
 {
@@ -2720,11 +2758,12 @@ static long ive_op_resize_cv500(unsigned long arg)
 	u8 *astDst = buf + 584;
 	u8 *ctrl   = buf + 1160;
 	u32 mode    = *(u32 *)(ctrl + 0);
-	u32 mem_phys = *(u32 *)(ctrl + 8);    /* stMem.u64PhyAddr lo
-					       * (enMode is u32 + 4B pad to u64 align) */
+	u32 mem_phys = *(u32 *)(ctrl + 8);    /* stMem.u64PhyAddr lo */
 	u32 mem_size = *(u32 *)(ctrl + 24);   /* stMem.u32Size */
 	u16 num     = *(u16 *)(ctrl + 32);
 	u32 src0_type = *(u32 *)(astSrc + 68);
+	int slot_bytes;
+	int n_planes;
 	void *tab;
 	u8 node[208];
 	u32 i;
@@ -2738,9 +2777,9 @@ static long ive_op_resize_cv500(unsigned long arg)
 		pr_info("ive_neo: Resize bad enMode=%u (0=LINEAR, 1=AREA)\n", mode);
 		return -EINVAL;
 	}
-	if (src0_type != 0) {
-		/* Path B (multi-plane) not yet implemented — see follow-up. */
-		pr_info("ive_neo: Resize src[0].enType=%u — only U8C1(0) supported\n",
+	n_planes = ive_rz_plane_count(src0_type);
+	if (n_planes < 0) {
+		pr_info("ive_neo: Resize src[0].enType=%u unsupported (need 0/2/3/10/11)\n",
 			src0_type);
 		return -EOPNOTSUPP;
 	}
@@ -2748,15 +2787,16 @@ static long ive_op_resize_cv500(unsigned long arg)
 		pr_info("ive_neo: Resize stMem.phys=0x%x invalid\n", mem_phys);
 		return -EINVAL;
 	}
-	if (mem_size < (u32)num * IVE_RZ_SLOT_BYTES) {
+	slot_bytes = ive_rz_slot_size(src0_type);
+	if (mem_size < (u32)num * (u32)slot_bytes) {
 		pr_info("ive_neo: Resize stMem too small (size=%u, need >= %u)\n",
-			mem_size, num * IVE_RZ_SLOT_BYTES);
+			mem_size, num * slot_bytes);
 		return -EINVAL;
 	}
 
 	/* CMA is in lowmem; phys_to_virt gives a kernel mapping of stMem. */
 	tab = phys_to_virt((phys_addr_t)mem_phys);
-	memset(tab, 0, (u32)num * IVE_RZ_SLOT_BYTES);
+	memset(tab, 0, (u32)num * (u32)slot_bytes);
 
 	for (i = 0; i < num; i++) {
 		u8 *src = astSrc + i * 72;
@@ -2765,12 +2805,14 @@ static long ive_op_resize_cv500(unsigned long arg)
 		u32 sh = *(u32 *)(src + 64);
 		u32 dw = *(u32 *)(dst + 60);
 		u32 dh = *(u32 *)(dst + 64);
-		u8 *slot = (u8 *)tab + i * IVE_RZ_SLOT_BYTES;
+		u32 src_t = *(u32 *)(src + 68);
+		u32 dst_t = *(u32 *)(dst + 68);
+		u8 *slot = (u8 *)tab + i * slot_bytes;
 
-		if (*(u32 *)(src + 68) != 0 || *(u32 *)(dst + 68) != 0) {
-			pr_info("ive_neo: Resize [%u] enType src=%u dst=%u (need U8C1)\n",
-				i, *(u32 *)(src + 68), *(u32 *)(dst + 68));
-			return -EOPNOTSUPP;
+		if (src_t != src0_type || dst_t != src0_type) {
+			pr_info("ive_neo: Resize [%u] enType src=%u dst=%u, batch=%u (must be uniform)\n",
+				i, src_t, dst_t, src0_type);
+			return -EINVAL;
 		}
 		if (IVE_CHECK_IMG(src) || IVE_CHECK_IMG(dst)) {
 			pr_info("ive_neo: Resize [%u] image check failed\n", i);
@@ -2781,31 +2823,56 @@ static long ive_op_resize_cv500(unsigned long arg)
 			return -EINVAL;
 		}
 
-		slot[0] = 0;                                            /* src.enType */
-		*(u32 *)(slot + 1)  = IMG_PHYS(src);
-		*(u32 *)(slot + 5)  = IMG_PHYS(dst);
-		*(u16 *)(slot + 9)  = (u16) IMG_STRIDE(src);
-		*(u16 *)(slot + 11) = (u16) IMG_STRIDE(dst);
-		*(u16 *)(slot + 13) = (u16) sw;
-		*(u16 *)(slot + 15) = (u16) sh;
-		*(u16 *)(slot + 17) = (u16) dw;
-		*(u16 *)(slot + 19) = (u16) dh;
-		*(u16 *)(slot + 21) = (u16) ((sw << 11) / dw);
-		*(u16 *)(slot + 23) = (u16) ((sh << 11) / dh);
+		slot[0] = (u8) src0_type;
+		if (slot_bytes == IVE_RZ_SLOT_A) {
+			/* Path A — U8C1 single-plane. */
+			*(u32 *)(slot + 1)  = IMG_PHYS(src);
+			*(u32 *)(slot + 5)  = IMG_PHYS(dst);
+			*(u16 *)(slot + 9)  = (u16) IMG_STRIDE(src);
+			*(u16 *)(slot + 11) = (u16) IMG_STRIDE(dst);
+			*(u16 *)(slot + 13) = (u16) sw;
+			*(u16 *)(slot + 15) = (u16) sh;
+			*(u16 *)(slot + 17) = (u16) dw;
+			*(u16 *)(slot + 19) = (u16) dh;
+			*(u16 *)(slot + 21) = (u16) ((sw << 11) / dw);
+			*(u16 *)(slot + 23) = (u16) ((sh << 11) / dh);
+		} else {
+			/* Path B — multi-plane (YUV420SP/YUV422SP/U8C3_PLANAR). */
+			int p;
+
+			for (p = 0; p < 3; p++) {
+				/* Plane phys/stride read regardless of n_planes;
+				 * unused planes are zeroed in IVE_IMAGE_S by libive. */
+				*(u32 *)(slot + 1 + p * 4)  =
+					*(u32 *)(src + p * 8);            /* au64PhyAddr[p] lo */
+				*(u32 *)(slot + 13 + p * 4) =
+					*(u32 *)(dst + p * 8);
+				*(u16 *)(slot + 25 + p * 2) =
+					(u16) *(u32 *)(src + 48 + p * 4); /* au32Stride[p] */
+				*(u16 *)(slot + 31 + p * 2) =
+					(u16) *(u32 *)(dst + 48 + p * 4);
+			}
+			*(u16 *)(slot + 37) = (u16) sw;
+			*(u16 *)(slot + 39) = (u16) sh;
+			*(u16 *)(slot + 41) = (u16) dw;
+			*(u16 *)(slot + 43) = (u16) dh;
+			*(u16 *)(slot + 45) = (u16) ((sw << 11) / dw);
+			*(u16 *)(slot + 47) = (u16) ((sh << 11) / dh);
+		}
 	}
 
 	/* Push the table out of CPU caches before HW reads it. */
 	osal_flush_dcache_area(tab, (phys_addr_t)mem_phys,
-			       (u32)num * IVE_RZ_SLOT_BYTES);
+			       (u32)num * (u32)slot_bytes);
 
 	memset(node, 0, sizeof(node));
-	node[8]  = cv500_src_fmt(src0_type);            /* 0 → 0 (U8C1) */
-	node[10] = 0x30;                                /* op = Resize */
+	node[8]  = cv500_src_fmt(src0_type);             /* format byte for HW */
+	node[10] = 0x30;                                 /* op = Resize */
 	node[11] = (u8) mode;
-	*(u32 *)(node + 16) = mem_phys;                 /* stMem.phys: per-image table base */
-	*(u32 *)(node + 136) = num;                     /* u16Num at +136 */
+	*(u32 *)(node + 16)  = mem_phys;                 /* stMem.phys: table base */
+	*(u32 *)(node + 136) = num;                      /* u16Num */
 
-	pr_info_once("ive_neo: Resize handler wired (HW op 0x30, U8C1)\n");
+	pr_info_once("ive_neo: Resize handler wired (HW op 0x30, U8C1 + multi-plane)\n");
 	return ive_submit_nonxnn(node, buf);
 }
 #endif
@@ -3021,8 +3088,8 @@ static long ive_dispatch(unsigned int cmd, unsigned long arg)
 	case 0xc4c0462eu:      /* HI_MPI_IVE_Resize cv500 (op 0x30, arg 1216 B) */
 #if defined(hi3516cv500)
 		/* HW dispatch — single HW node, per-image table in ctrl.stMem.
-		 * Stage 1: u16Num 1..8, U8C1 only. Multi-plane (U8C3_PLANAR)
-		 * deferred. */
+		 * u16Num 1..8; supports both Path A (U8C1, 25-B slots) and
+		 * Path B (YUV420SP/YUV422SP/U8C3_PLANAR, 49-B slots). */
 		return ive_op_resize_cv500(arg);
 #else
 		return 0;
