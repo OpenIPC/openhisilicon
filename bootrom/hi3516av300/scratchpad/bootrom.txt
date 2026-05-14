@@ -1,0 +1,108 @@
+hi3516av300 bootrom — annotated hex window
+============================================
+
+Generated from `make disasm` against the dump matching MANIFEST. Reproduce
+with:
+
+  bootrom/scripts/dump.sh openipc-hi3516av300.dlab.doty.ru hi3516av300
+  bootrom/scripts/disasm.sh hi3516av300
+
+Below is hand-annotated coverage of bytes 0x00000000..0x000001ff.
+
+Vector table
+------------
+
+  04000000: 10 00 00 ea     b      0x4000048           ; reset → _start
+  04000004: 14 f0 9f e5     ldr pc, [pc, #20]          ; → *(0x4000020) = 0x100
+  04000008: 14 f0 9f e5     ldr pc, [pc, #20]          ; → *(0x4000024) = 0x100
+  0400000c: 14 f0 9f e5     ldr pc, [pc, #20]          ; → *(0x4000028) = 0x100
+  04000010: 14 f0 9f e5     ldr pc, [pc, #20]          ; → *(0x400002c) = 0x100
+  04000014: 14 f0 9f e5     ldr pc, [pc, #20]          ; → *(0x4000030) = 0x100
+  04000018: 14 f0 9f e5     ldr pc, [pc, #20]          ; → *(0x4000034) = 0x100
+  0400001c: 14 f0 9f e5     ldr pc, [pc, #20]          ; → *(0x4000038) = 0x100
+  04000020: 00 01 00 00     .word  0x00000100          ; exception-1 target
+  04000024: 00 01 00 00     .word  0x00000100          ; exception-2 target
+  04000028: 00 01 00 00     .word  0x00000100
+  0400002c: 00 01 00 00     .word  0x00000100
+  04000030: 00 01 00 00     .word  0x00000100
+  04000034: 00 01 00 00     .word  0x00000100
+  04000038: 00 01 00 00     .word  0x00000100
+  0400003c: 78 56 34 12     .word  0x12345678         ; _magic
+  04000040: 9c 00 00 04     .word  0x0400009c         ; clear_remap_rom_ptr → clear_remap_start
+  04000044: 00 65 01 04     .word  0x04016500         ; clear_remap_ptr → SDRAM destination
+
+_start
+------
+
+  04000048: e10f0000        mrs    r0, CPSR
+  0400004c: e3c0001f        bic    r0, r0, #0x1f         ; clear mode bits
+  04000050: e38000d3        orr    r0, r0, #0xd3         ; supervisor, IRQ+FIQ masked
+  04000054: e129f000        msr    CPSR_fc, r0
+  04000058: eb0009f9        bl     0x4002844             ; disable_ctrl_features
+  0400005c: e59f00ac        ldr    r0, [pc, #172]        ; r0 = STACK_START (0x04010500)
+  04000060: e1a0d000        mov    sp, r0
+  04000064: eb000035        bl     0x4000140             ; configure_soc_clocks
+  04000068: e59f00a4        ldr    r0, [pc, #164]        ; r0 = SDRAM_START (0x04010000)
+  0400006c: e3a01000        mov    r1, #0
+  04000070: e59f20a0        ldr    r2, [pc, #160]        ; r2 = 0x04010268
+  04000074: e0522000        subs   r2, r2, r0            ; r2 = 0x268
+  04000078: eb000a20        bl     0x4002900             ; memset(SDRAM_START, 0, 0x268)
+  0400007c: eb0009a0        bl     0x4002704             ; main()
+  04000080: e51f0048        ldr    r0, [pc, #-72]        ; clear_remap_rom_ptr = 0x0400009c
+  04000084: e51f1048        ldr    r1, [pc, #-72]        ; clear_remap_ptr     = 0x04016500
+  04000088: e59f208c        ldr    r2, [pc, #140]        ; r2 = clear_remap_start (0x9c)
+  0400008c: e59f308c        ldr    r3, [pc, #140]        ; r3 = clear_remap_end   (0xe0)
+  04000090: e0432002        sub    r2, r3, r2            ; r2 = 0x44 bytes
+  04000094: eb000011        bl     0x40000e0             ; memcpy32
+  04000098: e51ff05c        ldr    pc, [pc, #-92]        ; pc = clear_remap_ptr = 0x04016500
+
+clear_remap thunk (copied to SDRAM, executed there)
+----------------------------------------------------
+
+  0400009c: e59f4038        ldr    r4, [pc, #56]         ; r4 = SYSCTRL_START = 0x12020000
+  040000a0: e5940000        ldr    r0, [r4]              ; SC_CTRL
+  040000a4: e3800c01        orr    r0, r0, #0x100        ; bit 8: clear boot remap
+  040000a8: e5840000        str    r0, [r4]
+  040000ac: e59f1024        ldr    r1, [pc, #36]         ; r1 = SDRAM_START
+  040000b0: e5910000        ldr    r0, [r1]              ; r0 = *(SDRAM_START) — entry point
+  040000b4: e1a0f000        mov    pc, r0
+  040000b8-040000d4:        e320f000              ; 7× nop
+  040000d8: 00 00 01 04     .word  0x04010000          ; SDRAM_START literal
+  040000dc: 00 00 02 12     .word  0x12020000          ; SYSCTRL_START literal
+
+memcpy32 (LDM/STM 8-register block copy)
+-----------------------------------------
+
+  040000e0: e0802002        add    r2, r0, r2            ; r2 = src + len
+  040000e4: e8b007f8        ldm    r0!, {r3-r10}         ; load 32 bytes
+  040000e8: e8a107f8        stmia  r1!, {r3-r10}         ; store 32 bytes
+  040000ec: e1500002        cmp    r0, r2
+  040000f0: dafffffb        ble    0x40000e4             ; loop
+  040000f4: e1a0f00e        mov    pc, lr
+
+  Note: copies in 32-byte chunks, overshoots by up to 31 bytes if size
+  isn't a multiple of 32. The clear_remap thunk is exactly 0x44 (68)
+  bytes = 2 chunks of 32 + 4 of overshoot — caller pads safely.
+
+_dead_loop (exception fallback)
+--------------------------------
+
+  04000100: e59f101c        ldr    r1, [pc, #28]         ; r1 = SYSCTRL_START
+  04000104: e3a00001        mov    r0, #1
+  04000108: e5810004        str    r0, [r1, #4]          ; SC_SYSRES: soft reset
+  0400010c: eafffffe        b      0x400010c             ; spin until reset
+
+Literal pool for _start
+------------------------
+
+  04000110: 00 05 01 04     .word  0x04010500   ; STACK_START
+  04000114: 00 00 01 04     .word  0x04010000   ; SDRAM_START
+  04000118: 68 02 01 04     .word  0x04010268   ; end of SDRAM clear region
+  0400011c: 9c 00 00 00     .word  0x0000009c   ; clear_remap_start offset
+  04000120: e0 00 00 00     .word  0x000000e0   ; clear_remap_end offset
+
+configure_soc_clocks (not reverse-engineered in this PR)
+---------------------------------------------------------
+
+  04000140: e3a01000        mov    r1, #0
+  ...                       (CRG programming follows; see disasm.txt)

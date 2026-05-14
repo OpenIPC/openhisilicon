@@ -1,0 +1,35 @@
+hi3516av300 bootrom — function ledger
+======================================
+
+Format: <addr> <name> <signature/notes>
+
+func_00  0x040000e0  memcpy32(src, dst, size)               LDM/STM r3-r10 loop, used by _start to copy clear_remap thunk to SDRAM
+func_01  0x04002844  disable_ctrl_features                  MRC/BIC c1c0: clear I-cache, D-cache, MMU, branch prediction, align check
+func_02  0x04002858  enable_instruction_cache               sets parity, calls invalidate_instruction_pipeline, enables I-cache, ISB
+func_03  0x04002880  disable_instruction_cache              clears I-cache enable, tail-calls invalidate_instruction_pipeline
+func_04  0x040028e0  invalidate_instruction_pipeline        MCR p15 c8c7 (TLB) + MCR p15 c7c5 (I-cache)
+func_05  0x04002900  memset(dst, val, size)                 unrolled 8-byte STM with byte-tail
+func_06  0x040029a0  memcpy(dst, src, size)                 aligned + unaligned paths, unrolled
+func_07  0x04002cd8  strlen(str)                            LDRB + CMP, returns end-start
+func_08  0x04002d04  strncmp(s1, s2, n)                     two-pointer compare, returns signed diff
+func_09  0x04002e00  strcmp(s1, s2)                         two-pointer compare until first mismatch or NUL
+
+Reset trampoline (covered by re/start.S, not in the func_N enumeration):
+
+  0x04000000  _entry                  B _start
+  0x04000004  exception vectors       all branch to 0x00000100 (post-remap SDRAM)
+  0x0400003c  _magic                  .word 0x12345678
+  0x04000040  clear_remap_rom_ptr     0x0400009c
+  0x04000044  clear_remap_ptr         0x04016500
+  0x04000048  _start                  CPSR setup → disable_ctrl_features →
+                                      stack → configure_soc_clocks →
+                                      zero SDRAM[0..0x268] → main → copy
+                                      clear_remap thunk to SDRAM → jump
+  0x0400009c  clear_remap thunk       sets SC_CTRL.bit8 to release boot
+                                      remap, jumps to *(SDRAM_START)
+  0x04000100  _dead_loop              triggers SC_SYSRES soft-reset, spins
+
+Pending (callees of _start not yet reverse-engineered):
+
+  0x04000140  configure_soc_clocks    called from _start; stubbed in bootloader.c
+  0x04002704  main                    called from _start; stubbed in bootloader.c

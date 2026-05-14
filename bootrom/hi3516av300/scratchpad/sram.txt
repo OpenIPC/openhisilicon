@@ -1,0 +1,26 @@
+hi3516av300 bootrom — SRAM layout (0x04010000+)
+=================================================
+
+The bootrom uses on-chip SRAM at 0x04010000 as scratch. _start zeros the
+first 0x268 bytes, then `main` populates structures here before invoking
+the clear_remap thunk (which itself lives at 0x04016500 after being
+memcpy32'd from bootrom 0x0400009c).
+
+Populated incrementally as analysis proceeds. Below is what's known from
+the _start fingerprint alone:
+
+  0x04010000  callback pointer        first word read by clear_remap thunk;
+                                      receives entry point of next-stage
+                                      image after main loads it
+  0x04010000..0x04010268              zeroed by _start before main()
+  0x04010500  STACK_START             top-of-stack (decrements); SP
+                                      initialized here by _start
+  0x04016500  clear_remap thunk dst   17 instructions copied from
+                                      0x0400009c..0x040000e0 by memcpy32
+
+Pending — populated when `main` (0x04002704) is reverse-engineered:
+
+  0x04010004..0x040104ff              currently unknown; in cv500 this
+                                      region holds boot_type, mem_block_t
+                                      table, and program_stream_t — av300
+                                      structure to be verified

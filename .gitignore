@@ -29,3 +29,10 @@ kernel/ive_neo/Makefile
 *.o.inc
 *.o.lst
 *.o.map
+
+# Mask-ROM dumps and their working artifacts under bootrom/. Only the
+# RE'd source, MANIFEST, and scratchpad notes are tracked; the .bin
+# itself is HiSilicon IP and stays local.
+bootrom/**/*.bin
+bootrom/**/disasm.txt
+bootrom/**/re.elf

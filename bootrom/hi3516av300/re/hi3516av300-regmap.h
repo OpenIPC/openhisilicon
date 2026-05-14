@@ -1,0 +1,14 @@
+#ifndef BOOTROM_HI3516AV300_REGMAP_H
+#define BOOTROM_HI3516AV300_REGMAP_H
+
+#include "regmap-sysctrl.h"
+
+#define BOOTROM_START   0x04000000
+#define SDRAM_START     0x04010000
+#define STACK_START     (SDRAM_START + 0x500)
+
+#define SYSCTRL_START   0x12020000
+
+#define CLEAR_REMAP_THUNK_DST   (SDRAM_START + 0x6500)
+
+#endif

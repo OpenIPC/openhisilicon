@@ -1,0 +1,8 @@
+chip: hi3516av300
+base: 0x04000000
+size: 65536
+sha256: 1944d7b4c6eca8003f55110abc3b9fc26df14be1027903107591eb4afab32c0a
+first16: 10 00 00 ea 14 f0 9f e5 14 f0 9f e5 14 f0 9f e5
+magic_at_3c: 0x12345678
+dump_tool: ipctool master+956052a built 2026-05-14
+dump_date: 2026-05-14
