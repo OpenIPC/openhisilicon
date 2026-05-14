@@ -62,6 +62,78 @@ extending the av300 reverse-engineered source. Each item references
 addresses in the original mask-ROM (re/bootloader.c is the C side).
 
 
+Honest verdict up front
+-----------------------
+
+We reverse-engineered the secure-boot verification chain end-to-end
+and **did not find a software bug** that would let an attacker bypass
+signature verification. The chain (parse_image_header →
+klad_validate_header → klad_dispatch_sig → invoke_foreign_code) is
+reasonably designed: the header parser has size/mode/alignment bounds
+checks, the OTP-anchored trust chain is well-formed, and the RSA verify
+runs against a hardware engine with no recoverable timing leak on the
+signature itself.
+
+What we DO have, in honest order of relevance:
+
+  1. **Side channels** — strncmp in klad_validate_header is non-
+     constant-time. The bytes it leaks (the OTP-stored SHA digest of
+     the trusted public key) are informationally redundant because the
+     same public key is shipped in every signed image header. So this
+     is a code smell, not an exploitation primitive on its own.
+
+  2. **Fault-injection / glitch windows** — clear_remap thunk, the
+     SHA-padding mutation in klad_setup, and the conditional branches
+     after each crypto check are all real fault-injection targets.
+     These are physical attacks requiring lab equipment (ChipWhisperer
+     class or better). They are NOT software bugs and cannot be
+     triggered remotely.
+
+  3. **Weak-key OEM choice** — the bootrom accepts mode=0x80
+     (1024-bit RSA). If an OEM picked a 1024-bit signing key, modern
+     factoring (CADO-NFS) breaks it. This is the OEM's configuration
+     issue, not a bootrom bug, and there is no way for an end user to
+     know what key length their specific camera's OEM picked.
+
+  4. **Speculative audit targets** — the MBR partition-entry walk in
+     media_program_b (cv500 func_4a / 0x4d8c) and the image-header
+     descriptor-table walk in parse_image_header (0x40001dc) both run
+     over attacker-influenced bytes before signature verification.
+     We did NOT verify any bug in these paths; we noted them as worth
+     fuzzing. A diligent researcher might find an integer overflow
+     or a missing bound, or might confirm they are clean.
+
+What this means for camera owners
+---------------------------------
+
+If you have a secure-boot-locked camera and want to install custom
+firmware: **nothing in this RE gives you a software-only bypass.**
+The cryptographic chain holds against software attacks (assuming the
+OEM picked a strong RSA key — which you cannot determine from
+outside). Practical options for liberating one device are buying a
+different camera, transplanting a blank SoC, or commissioning a
+glitch attack — all costlier than the device for one-off use.
+
+What this means for security researchers
+----------------------------------------
+
+The bootrom is now mostly visible in source. If you want to audit:
+
+  - parse_image_header and the descriptor-table walk it produces
+    (mode-indexed offsets into SDRAM+0x510..)
+  - media_program_b's MBR + partition-entry parse on SD cards
+  - klad_check_a / klad_check_b parsers that handle alt-media inputs
+  - Integer arithmetic in klad_post_unlock (offsets, sizes, DDR
+    target computation)
+  - The four-word "sentinel" check used in multiple places — verify
+    its semantics match the standard PKCS#1 padding check
+
+These are the highest-value targets. The KLAD/RSA/SPACC hardware
+drivers we reversed today are unlikely to harbour exploitable bugs
+since they are essentially MMIO sequence drivers; the parsers above
+them are where attacker-controlled bytes meet code.
+
+
 Structural findings
 -------------------
 
