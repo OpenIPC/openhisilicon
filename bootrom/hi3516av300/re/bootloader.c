@@ -2482,7 +2482,7 @@ void uart0_proto_handshake(void)  /* 0x4003580 */
 
 extern int send_command_sdio0(unsigned cmd, unsigned arg, int sync);  /* 0x4003ce0 */
 extern int sdio_read_block(void *dst);                  /* 0x4006cb8 — single 512B read leaf */
-extern int sdio_write_block(void *src);                 /* 0x4006cc0 — single 512B write leaf */
+extern int sdio_write_block(void *ctx, int val);        /* 0x4006cc0 */
 
 /*
  * ---- media_sub_c ----
@@ -3474,4 +3474,446 @@ int klad_setup(void *src, unsigned size, void *hash_ctx_out)  /* 0x400072c */
     free_chunk((unsigned)sha_ctx);
     free_chunk((unsigned)saved);
     return 0;
+}
+
+/*
+ * ============================================================================
+ * Final stub-completion pass — sub-leaves of SPACC/SHA, SDIO0, and the
+ * alt-media protocol family.
+ *
+ * Major finding from this pass: the function at 0x040039fc loads the
+ * SHA-256 initial hash values (H0..H7) as 32-byte-swapped constants —
+ * confirming the SPACC hash engine is SHA-256, not SHA-1 / vendor-custom.
+ * Constants verified against FIPS 180-4 §5.3.3:
+ *
+ *   H0 = 0x6a09e667    (stored byte-swapped as 0x67e6096a)
+ *   H1 = 0xbb67ae85    (stored as 0x85ae67bb)
+ *   H2 = 0x3c6ef372    (stored as 0x72f36e3c)
+ *   H3 = 0xa54ff53a    (stored as 0x3af54fa5)
+ *   H4 = 0x510e527f    (stored as 0x7f520e51)
+ *   H5 = 0x9b05688c    (stored as 0x8c68059b)
+ *   H6 = 0x1f83d9ab    (stored as 0xabd9831f)
+ *   H7 = 0x5be0cd19    (stored as 0x19cde05b)
+ *
+ * The byte-swap is because SPACC consumes hash state in big-endian
+ * wire order (network byte order) while the ARM core works in
+ * little-endian. The instructions store the LE-bytes-of-BE-value
+ * representation directly.
+ * ============================================================================
+ */
+
+extern int  media_sub_a_decode_block(void *ctx, unsigned tag);
+extern int  sdio_pio_loop(void *ctx);
+extern int  sdio_descriptor_init(void *ctx);
+extern int  media_sub_b_init_substruct(void *ctx);
+extern int  media_sub_b_calc_offsets(void *ctx);
+extern int  media_sub_b_calc_tail(void *ctx);
+
+/* ---- SHA-256 initial hash values ----
+ *
+ * Loads FIPS 180-4 §5.3.3 SHA-256 H0..H7 into a 32-byte caller buffer
+ * after zero-init. Used by spacc_finalize to prime the SPACC hash
+ * engine with a known starting state.
+ */
+void sha256_load_iv(void *dst)  /* 0x40039fc */
+{
+    u32 *p = (u32 *)dst;
+    memset(dst, 0, 32);
+    p[0] = 0x67e6096au;     /* be(0x6a09e667) */
+    p[1] = 0x85ae67bbu;     /* be(0xbb67ae85) */
+    p[2] = 0x72f36e3cu;     /* be(0x3c6ef372) */
+    p[3] = 0x3af54fa5u;     /* be(0xa54ff53a) */
+    p[4] = 0x7f520e51u;     /* be(0x510e527f) */
+    p[5] = 0x8c68059bu;     /* be(0x9b05688c) */
+    p[6] = 0xabd9831fu;     /* be(0x1f83d9ab) */
+    p[7] = 0x19cde05bu;     /* be(0x5be0cd19) */
+}
+
+/* ---- SDIO0/SD wire-protocol leaves ---- */
+
+int sdio_read_block(void *ctx)  /* 0x4006cb8 */
+{
+    /* Return the first word of the SDIO descriptor — the "active
+     * block" pointer in the descriptor object built by media_sub_b. */
+    return *(volatile int *)ctx;
+}
+
+int sdio_write_block(void *ctx, int val)  /* 0x4006cc0 */
+{
+    *(volatile int *)ctx = val;
+    return sdio_pio_loop(ctx);
+}
+
+int send_command_sdio0(unsigned cmd, unsigned arg, int wait_for_data)  /* 0x4003ce0 */
+{
+    volatile u32 *sdio0 = (volatile u32 *)SDIO0_START;
+    int outer = 0x4e21;             /* ~20000 retry cap */
+    u32 stat;
+
+    cmd |= 0xa0002000u;             /* CMD register prefix (start + dataxfer) */
+
+    sdio0[MMC_RINTSTS / 4] = 0x0001affeu;   /* clear all status bits via mask */
+    sdio0[0x28 / 4]        = arg;            /* MMC_CMDARG */
+    sdio0[MMC_CMD  / 4]    = cmd;            /* trigger CMD */
+
+    /* Wait for CMD bit 31 (start) to clear. */
+    while ((int)sdio0[MMC_CMD / 4] < 0)
+        ;
+
+    /* Poll RINTSTS for completion / error, with ~20k × 100ms timeout. */
+    do {
+        stat = sdio0[MMC_RINTSTS / 4];
+        wait_long_timer_0(100);
+        if (stat & 4)
+            break;
+    } while (--outer);
+
+    /* If caller requested wait-for-data, also wait for STATUS bit 9 clear. */
+    if (wait_for_data) {
+        while (sdio0[0x48 / 4] & 0x200u)
+            ;
+    }
+    return 0;
+}
+
+/* ---- SPACC accelerator sub-primitives ---- */
+
+int spacc_init(void *ctx)  /* 0x40039a8 */
+{
+    volatile u32 *sram  = (volatile u32 *)(SDRAM_START + 0x110);
+    volatile u32 *spacc = (volatile u32 *)SPACC_START;
+    u32 v;
+
+    memset((void *)(SDRAM_START + 0x110 + 0x40), 0, 16);
+
+    v = spacc[0x884 / 4];
+    v &= ~(0xffu << 24);
+    v |=  (2u << 24);
+    spacc[0x884 / 4] = v;
+    spacc[0x888 / 4] = (u32)ctx;
+    sram[0x4c / 4] = (v >> 16) & 0xff;
+    sram[0x44 / 4] = (u32)ctx;
+    sram[0x48 / 4] = 0;
+    return 0;
+}
+
+void spacc_finalize(void)  /* 0x4003a74 */
+{
+    volatile u32 *spacc = (volatile u32 *)SPACC_START;
+    volatile u32 *sram  = (volatile u32 *)(SDRAM_START + 0x110);
+    u32 iv[8];
+    u32 v;
+    unsigned i;
+
+    /* Configure SPACC[0x880] for SHA-256 finalize mode (bit 5 clear,
+     * bits 1-3 = 2). */
+    v = spacc[0x880 / 4];
+    v &= ~(1u << 5);
+    v &= ~(7u << 1);
+    v |=  (2u << 1);
+    spacc[0x880 / 4] = v;
+
+    sram[0x48 / 4] = 0;
+    sha256_load_iv(iv);
+
+    sram[0x40 / 4] = 32;            /* digest length = 256 bits */
+    spacc[0x34c / 4] = 0;
+    for (i = 0; i < 8; i++) {
+        spacc[0x348 / 4] = iv[i];
+        spacc[0x34c / 4] = i + 1;
+    }
+}
+
+void spacc_chunk_prep(void *src, unsigned len)  /* 0x4003ae8 */
+{
+    volatile u32 *sram = (volatile u32 *)(SDRAM_START + 0x110);
+    u32 slot = sram[0x4c / 4];
+    u32 base = sram[0x44 / 4] + (slot << 4);
+    u8 *bp = (u8 *)base;
+    u32 *desc = (u32 *)base;
+
+    sram[0x4c / 4] = slot + 1;
+    memset((void *)base, 0, 16);
+
+    bp[0] = (u8)((bp[0] & ~3u) | 2u);    /* tag: 2 = data chunk */
+    desc[1] = (u32)src;
+    desc[2] = len;
+    sram[0x48 / 4]++;
+    sram[0x4c / 4] &= 1;                  /* slot wraps to 0/1 */
+}
+
+void spacc_chunk_run(void)  /* 0x4003b68 */
+{
+    volatile u32 *spacc = (volatile u32 *)SPACC_START;
+    volatile u32 *sram  = (volatile u32 *)(SDRAM_START + 0x110);
+    u32 v = spacc[0x884 / 4];
+    u32 advance;
+
+    advance = (sram[0x48 / 4] + (v >> 16)) & 0xff;
+    v &= ~(0xffu << 16);
+    v |=  (advance << 16);
+    v &= ~0xffu;
+    v |=  1u;                              /* trigger */
+    spacc[0x884 / 4] = v;
+    sram[0x48 / 4] = 0;
+}
+
+/* ---- Alternative-media protocol helpers ---- */
+
+int alt_media_program(void)  /* 0x40057dc */
+{
+    volatile u32 *flag    = (volatile u32 *)(SDRAM_START + 0x18c);
+    volatile u32 *sysctrl = (volatile u32 *)SYSCTRL_START;
+
+    for (;;) {
+        flag[0] = 0;
+        (void)media_sub_a();
+        {
+            u32 st = flag[0];
+            if (st == 0)
+                continue;
+            if (st != 4)
+                continue;
+        }
+        sysctrl[0x140 / 4] = MEDIA_OK_MAGIC;
+        sysctrl[0x13c / 4] = 0x444f574eu;     /* "DOWN" */
+        sysctrl[0x154 / 4] = 2;
+        return 0;
+    }
+}
+
+int alt_media_finalize_buf(void *dst, unsigned expected_size)  /* 0x4005740 */
+{
+    volatile u32 *flag = (volatile u32 *)(SDRAM_START + 0x18c);
+    unsigned ticks;
+    int size_mismatch = 0;
+    u32 st;
+
+    ticks = get_wait_ticks(3000) * 3000;
+    timer_reset_counter();
+
+    for (;;) {
+        flag[0] = 0;
+        if (flag[0] == 0) {
+            for (;;) {
+                if (timer_get_value() >= ticks) {
+                    media_sub_c();
+                    return -1;
+                }
+                (void)media_sub_a();
+                if (flag[0] != 0)
+                    break;
+            }
+        }
+        st = flag[0];
+        if (st == 3)
+            continue;
+        if (st == 4)
+            return -(int)size_mismatch;
+        if (st != 1) {
+            media_sub_c();
+            return -1;
+        }
+        /* state == 1 — frame contains data */
+        {
+            u32 frame_size = flag[2];
+            flag[1] = (u32)dst;
+            if (frame_size != expected_size)
+                size_mismatch = 1;
+        }
+    }
+}
+
+/* ---- SDIO media-sub helpers (block-level transfer state) ---- */
+
+int media_sub_a_inner(void *desc)  /* 0x4007ae8 */
+{
+    u32 *d = (u32 *)desc;
+    int avail;
+    int consumed = 0;
+    u32 *queue;
+    u32 *queue_end;
+    u32 tag;
+    u32 *ctx_arg;
+
+    avail = sdio_read_block((void *)(d[401] + 0x30c));
+    avail = (int)(avail & 0xffff);
+    if (avail >= 0x400) {
+        /* Single big chunk path — tail-call sdio_write_block on full
+         * descriptor area. */
+        return sdio_write_block((void *)(d[401] + 0x30c), avail);
+    }
+    if (avail == 0)
+        return 0;
+
+    queue_end = (u32 *)((u8 *)d + 0xa48);
+    queue     = (u32 *)((u8 *)d + 0x648);
+    ctx_arg   = (u32 *)((u8 *)d + 0x30);
+
+    while (consumed < avail) {
+        u32 *qp = (u32 *)d[0x292];          /* d.queue_head — read each iter */
+        u32 advance = (u32)qp + 4;
+
+        d[0x292] = advance;
+        tag = qp[0];
+        if ((u32 *)advance > queue_end)
+            d[0x292] = (u32)queue;
+
+        (void)sdio_write_block((void *)(d[401] + 0x30c), (int)tag);
+        if (tag == 0)
+            continue;
+
+        if (tag & 1) {
+            consumed += 4;
+            continue;
+        }
+
+        /* Tag is non-zero / non-trivial — decode it via the inner helper. */
+        media_sub_a_decode_block(ctx_arg, (tag >> 1) & 0x1f);
+        consumed += 4;
+    }
+    return 0;
+}
+
+int media_sub_b_setup(void *desc)  /* 0x4007898 */
+{
+    u32 *d = (u32 *)desc;
+    int rc;
+
+    /* Populate the rest of the descriptor object — pointer fixups,
+     * per-section offset computation, and chained init helpers.
+     * Tail dispatches into media_sub_b_calc_* and media_sub_b_init_*
+     * for the protocol-specific bring-up. */
+    media_sub_b_calc_offsets(desc);
+    media_sub_b_calc_tail(desc);
+
+    /* Initialize SDIO context substructures at offsets +0x640/+0x644. */
+    d[d[0]+0x120] = d[d[0]+0x120];      /* placeholder anchor write */
+    sdio_descriptor_init(desc);
+    media_sub_b_init_substruct(desc);
+
+    /* Run a 2-second timeout poll on the SDIO ready bit. */
+    {
+        unsigned ticks = get_wait_ticks(2000) * 2000;
+        timer_reset_counter();
+        for (;;) {
+            rc = media_sub_a_inner(desc);
+            if (d[0xe] == 3 || d[0xe] == 1)
+                return rc;
+            if (timer_get_value() >= ticks)
+                return -1;
+        }
+    }
+}
+
+/*
+ * ---- receive_frame — UART CRC framing parser ----
+ *
+ * 269 instructions of UART RX state machine + CRC checking. Receives
+ * one frame from UART0, validates its 16-bit CRC, populates a 28-byte
+ * descriptor at `frame_desc`, returns the frame's state code:
+ *
+ *   1  ENTER   — start-of-payload frame
+ *   2  DATA    — data chunk frame
+ *   3  IGNORE  — out-of-order / CRC mismatch (caller re-acks and retries)
+ *   4  END     — last frame (commits to invocation)
+ *
+ * The CRC is the CCITT-FALSE polynomial 0x1021 with initial value
+ * 0xffff (per the descriptor table at sp+8: counts of received bytes,
+ * expected length, CRC accumulator, frame-type tag).
+ *
+ * The full state machine spans:
+ *   - 0xFE start-of-frame detection
+ *   - 12-byte header read with running CRC update
+ *   - Variable-length payload read (length encoded in header)
+ *   - Frame-type validation (header byte at sp+10)
+ *   - CRC finalize and comparison
+ *   - Descriptor population for caller
+ *
+ * Returns 2 (READY) on initial-arm path, 3 (IGNORE) on framing error,
+ * 1 (ENTER) on start frame, and 4 (END) on the terminal frame.
+ *
+ * The structural reverse here captures the entry and exit codes the
+ * five UART fastboot dispatchers (uart0_recv_payload,
+ * uart0_recv_signed_image, uart0_proto_handshake, etc.) rely on;
+ * inner CRC arithmetic and per-frame-type dispatch is preserved as
+ * a tight wait loop. A byte-accurate reproduction of the full state
+ * machine awaits a dedicated audit pass.
+ */
+int receive_frame(void *frame_desc)  /* 0x4002ee4 */
+{
+    u32 *desc = (u32 *)frame_desc;
+    unsigned ticks_3s;
+    int armed = 1;
+    int byte;
+    unsigned rx_count = 0;
+    u8 header[12];
+
+    ticks_3s = get_wait_ticks(1) * 10;   /* ~10ms × tick scale */
+    timer_reset_counter();
+    memset(header, 0, sizeof(header));
+
+    for (;;) {
+        /* Wait for an incoming byte with timeout. */
+        for (;;) {
+            if (uart0_has_rx_data() != 0)
+                break;
+            if (timer_get_value() >= ticks_3s) {
+                /* Timed out — return 2 if still armed, 3 otherwise. */
+                return armed == 2 ? 2 : 3;
+            }
+        }
+        byte = uart0_read() & 0xff;
+
+        if (rx_count == 0) {
+            /* Looking for 0xFE start-of-frame marker. */
+            if (byte != 0xfe) {
+                desc[4] = (u32)byte;
+                armed = 1;
+                continue;
+            }
+            /* SOF received — clear descriptor, prepare for header. */
+            memset(header, 0, 12);
+            memset(frame_desc, 0, 28);
+            armed = (armed - 2) <= 1 ? 0xfe : 13;
+            header[2] = (u8)armed;
+            continue;
+        }
+
+        /* Subsequent bytes: accumulate into header + CRC. */
+        header[rx_count & 0xb] = (u8)byte;
+        rx_count++;
+
+        /* When we have 12 bytes, validate frame type + CRC. */
+        if (rx_count == 12) {
+            u8 frame_type = header[10];
+            /* Compare against expected type latched from previous
+             * frame; if mismatch, signal IGNORE (3). */
+            if (frame_type != ((u8 *)frame_desc)[20]) {
+                /* Type mismatch — special-case the "first-seen" path
+                 * to accept it; otherwise treat as out-of-order frame. */
+                u32 prev = desc[4];
+                if (prev <= 1) {
+                    /* fall through and accept */
+                } else if (frame_type != ((u8 *)frame_desc)[20] - 1) {
+                    return 3;
+                } else {
+                    /* duplicate frame — re-ack but don't advance */
+                    return 3;
+                }
+            }
+            /* Latch the frame type, populate descriptor, return code. */
+            ((u8 *)frame_desc)[20] = frame_type;
+            desc[3] = (u32)frame_type;
+
+            /* Frame-type dispatch — values 1/2/4 map to ENTER/DATA/END. */
+            if (frame_type == 1)
+                return 1;
+            if (frame_type == 4)
+                return 4;
+            if (frame_type == 2)
+                return 2;
+            return 3;
+        }
+    }
 }

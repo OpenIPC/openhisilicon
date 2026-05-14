@@ -129,9 +129,18 @@ The bootrom is now mostly visible in source. If you want to audit:
     its semantics match the standard PKCS#1 padding check
 
 These are the highest-value targets. The KLAD/RSA/SPACC hardware
-drivers we reversed today are unlikely to harbour exploitable bugs
-since they are essentially MMIO sequence drivers; the parsers above
-them are where attacker-controlled bytes meet code.
+drivers we reversed are unlikely to harbour exploitable bugs since
+they are essentially MMIO sequence drivers; the parsers above them
+are where attacker-controlled bytes meet code.
+
+Notable confirmation from the final stub-completion pass: the
+function at 0x040039fc loads the standard FIPS 180-4 §5.3.3 SHA-256
+initial hash values (H0..H7) into the SPACC hash engine. This
+confirms the bootrom is using **standard SHA-256**, not a vendor-
+custom or weakened hash. The Hi values are stored as byte-swapped
+constants (BE wire order) — the disassembly literally encodes
+0x67e6096a / 0x85ae67bb / ... / 0x19cde05b, which are the standard
+SHA-256 IV in network byte order. No place to hide a backdoor here.
 
 
 Structural findings
