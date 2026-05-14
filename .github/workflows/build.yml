@@ -746,3 +746,32 @@ jobs:
           name: qemu-boot-${{ matrix.machine }}
           path: qemu-output.txt
           retention-days: 7
+
+  #
+  # bootrom-lint
+  #
+  # Compile-gate for the reverse-engineered bootrom source under bootrom/.
+  # The .bin and disasm.txt are gitignored (only contributors with the
+  # physical camera can produce them), so CI exercises just the RE'd C/asm:
+  # it must keep linking cleanly under arm-none-eabi-gcc as analysis grows.
+  # NOT a flashable-image check — see bootrom/README.
+  #
+  bootrom-lint:
+    name: bootrom RE compile-gate
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install ARM bare-metal toolchain
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends gcc-arm-none-eabi
+
+      - name: Build bootrom/hi3516av300/re
+        run: |
+          make -C bootrom/hi3516av300 build
+          test -f bootrom/hi3516av300/re.elf
+          arm-none-eabi-objdump -t bootrom/hi3516av300/re.elf | \
+              grep -E ' (_entry|_start|_dead_loop|memcpy32|memset|memcpy|strlen|strncmp|strcmp|enable_instruction_cache|disable_instruction_cache|invalidate_instruction_pipeline|disable_ctrl_features)$' | \
+              sort
+          echo "ok: re.elf links and every expected symbol is present"

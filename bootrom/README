@@ -1,0 +1,54 @@
+bootrom — auditable reverse-engineering of HiSilicon/Goke mask-ROMs
+====================================================================
+
+This tree reconstructs the on-chip mask-ROM (bootrom) of each supported SoC
+into reviewable C and ARM assembly. The mask-ROM is the root of trust for
+every later boot stage that openhisilicon already replaces in kernel/ and
+libraries/; auditing it pins down which authentication, KLAD, RSA, SPACC,
+TRNG, and update-mode behaviour the SoC ships with by silicon.
+
+Per-chip layout (mirrored across siblings as each one is brought online):
+
+  bootrom/<chip>/
+    MANIFEST                  tracked: chip id, dump size, sha256, first16
+                              bytes, ipctool version
+    Makefile                  disasm | build | verify | clean
+    re/                       clean-room reverse-engineered source
+      <chip>-regmap.h         umbrella header
+      regmap-*.h              per-block register offsets, only what's used
+      start.S                 reset vectors, _start, clear-remap trampoline
+      bootloader.c            C bodies (utilities first, main flow later)
+    scratchpad/               human-readable analysis notes
+      bootrom.txt             hex + mnemonic + commentary (vector page)
+      functions.txt           func ledger: address, name, signature
+      sram.txt                SRAM layout discovered during analysis
+
+The raw .bin and the disassembler output stay local — see .gitignore. Each
+contributor reproduces them with scripts/dump.sh and scripts/disasm.sh.
+
+Methodological inspiration: TekuConcept's unfinished hi3516cv500 RE at
+https://github.com/TekuConcept/HI3516CV500-SDK (sdk/bootrom/). No files
+from that project are imported; av300 is reverse-engineered fresh from
+its own dump.
+
+Workflow
+--------
+
+  # 1. Dump the mask-ROM from a live camera (requires ipctool with the
+  #    bootrom subcommand — present in master since May 2026).
+  bootrom/scripts/dump.sh openipc-hi3516av300.dlab.doty.ru hi3516av300
+
+  # 2. Verify the local dump matches the tracked MANIFEST.
+  bootrom/scripts/verify.sh hi3516av300
+
+  # 3. Produce an annotated disassembly (local-only).
+  bootrom/scripts/disasm.sh hi3516av300
+
+  # 4. Sanity-build the RE'd source — must compile cleanly under
+  #    arm-none-eabi-gcc with -nostdlib -ffreestanding.
+  make -C bootrom/hi3516av300 build
+
+The build target produces re.elf, which is NOT flashable — it is a
+parser/well-formedness gate, not a bit-identical reconstruction. Matching
+the original mask-ROM byte-for-byte would require knowing the exact
+compiler, version, and flags HiSilicon used, which is out of scope.
