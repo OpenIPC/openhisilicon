@@ -783,6 +783,21 @@ HI_S32 HI_MPI_IVE_UpdateBgModel(IVE_HANDLE *h, IVE_SRC_IMAGE_S *cur,
     return ret;
 }
 
+/* cv500 LK Optical Flow Pyramid — multi-level Lucas-Kanade tracker.
+ * Arg buffer layout decoded from vendor ive_fill_lk_optical_flow_pyr_task
+ * @0x8ec4 (reads at fixed offsets from arg base). 704-byte total —
+ * matches the IVE_CMD_LK_OPT_FLOW=0xc2c0461c size encoding. */
+#define LK_OFF_PREV     8
+#define LK_OFF_NEXT     296
+#define LK_OFF_PREV_PTS 584
+#define LK_OFF_NEXT_PTS 608
+#define LK_OFF_STATUS   632
+#define LK_OFF_ERR      656
+#define LK_OFF_CTRL     680
+#define LK_OFF_INST     696
+#define LK_ARG_SIZE     704
+#define LK_MAX_LEVELS   4
+
 HI_S32 HI_MPI_IVE_LKOpticalFlowPyr(IVE_HANDLE *h, IVE_SRC_IMAGE_S prev[],
                                    IVE_SRC_IMAGE_S next[],
                                    IVE_SRC_MEM_INFO_S *prevPts,
@@ -792,19 +807,40 @@ HI_S32 HI_MPI_IVE_LKOpticalFlowPyr(IVE_HANDLE *h, IVE_SRC_IMAGE_S prev[],
                                    IVE_LK_OPTICAL_FLOW_PYR_CTRL_S *c,
                                    HI_BOOL inst)
 {
-    /* Vendor lays out 288 bytes per pyramid array (4 levels * 72 bytes).
-     * Kernel stub returns 0 — we just need to keep the buffer sized
-     * correctly enough that the kernel reads its 0-handle slot. */
-    uint8_t buf[800];
+    uint8_t buf[LK_ARG_SIZE];
     HI_S32 ret;
+    int i, levels;
 
-    (void)prev; (void)next; (void)prevPts; (void)nextPts;
-    (void)status; (void)err;
-    IVE_CHECK_NULL("HI_MPI_IVE_LKOpticalFlowPyr", h, "pIveHandle");
+    IVE_CHECK_NULL("HI_MPI_IVE_LKOpticalFlowPyr", h,        "pIveHandle");
+    IVE_CHECK_NULL("HI_MPI_IVE_LKOpticalFlowPyr", prev,     "astPrev");
+    IVE_CHECK_NULL("HI_MPI_IVE_LKOpticalFlowPyr", next,     "astNext");
+    IVE_CHECK_NULL("HI_MPI_IVE_LKOpticalFlowPyr", prevPts,  "pstPrevPts");
+    IVE_CHECK_NULL("HI_MPI_IVE_LKOpticalFlowPyr", nextPts,  "pstNextPts");
+    IVE_CHECK_NULL("HI_MPI_IVE_LKOpticalFlowPyr", c,        "pstLkCtrl");
+
+    if (c->u8MaxLevel >= LK_MAX_LEVELS) {
+        IVE_LOG("HI_MPI_IVE_LKOpticalFlowPyr",
+                "u8MaxLevel(%u) must be 0..%u", c->u8MaxLevel, LK_MAX_LEVELS - 1);
+        return HI_ERR_IVE_ILLEGAL_PARAM;
+    }
+    levels = c->u8MaxLevel + 1;
+
     if (ive_open_fd() != HI_SUCCESS) return HI_FAILURE;
+
     memset(buf, 0, sizeof(buf));
-    if (c) memcpy(buf + 720, c, sizeof(*c));
-    put_u32(buf, 720 + sizeof(*c) + 4, (uint32_t)inst);
+    for (i = 0; i < levels; i++) {
+        memcpy(buf + LK_OFF_PREV + i * sizeof(IVE_IMAGE_S),
+               &prev[i], sizeof(IVE_IMAGE_S));
+        memcpy(buf + LK_OFF_NEXT + i * sizeof(IVE_IMAGE_S),
+               &next[i], sizeof(IVE_IMAGE_S));
+    }
+    memcpy(buf + LK_OFF_PREV_PTS, prevPts, sizeof(*prevPts));
+    memcpy(buf + LK_OFF_NEXT_PTS, nextPts, sizeof(*nextPts));
+    if (status) memcpy(buf + LK_OFF_STATUS, status, sizeof(*status));
+    if (err)    memcpy(buf + LK_OFF_ERR,    err,    sizeof(*err));
+    memcpy(buf + LK_OFF_CTRL, c, sizeof(*c));
+    put_u32(buf, LK_OFF_INST, (uint32_t)inst);
+
     ret = ioctl(g_ive_fd, IVE_CMD_LK_OPT_FLOW, buf);
     *h = (ret == 0) ? (IVE_HANDLE)get_u32(buf, 0) : -1;
     return ret;
