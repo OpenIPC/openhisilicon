@@ -13,6 +13,7 @@ func_06  0x040029a0  memcpy(dst, src, size)                 aligned + unaligned 
 func_07  0x04002cd8  strlen(str)                            LDRB + CMP, returns end-start
 func_08  0x04002d04  strncmp(s1, s2, n)                     two-pointer compare, returns signed diff
 func_09  0x04002e00  strcmp(s1, s2)                         two-pointer compare until first mismatch or NUL
+func_0a  0x04000140  configure_soc_clocks                   polls PLL_LOCK_STAT for APLL+DPLL+EPLL (mask 0xb, timeout 5001 iters), writes 0x592 into SOC_CONFIG, NOP-settles 10 cycles
 
 Reset trampoline (covered by re/start.S, not in the func_N enumeration):
 
@@ -31,5 +32,4 @@ Reset trampoline (covered by re/start.S, not in the func_N enumeration):
 
 Pending (callees of _start not yet reverse-engineered):
 
-  0x04000140  configure_soc_clocks    called from _start; stubbed in bootloader.c
   0x04002704  main                    called from _start; stubbed in bootloader.c

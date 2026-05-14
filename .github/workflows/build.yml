@@ -830,6 +830,6 @@ jobs:
           make -C bootrom/hi3516av300 build
           test -f bootrom/hi3516av300/re.elf
           arm-none-eabi-objdump -t bootrom/hi3516av300/re.elf | \
-              grep -E ' (_entry|_start|_dead_loop|memcpy32|memset|memcpy|strlen|strncmp|strcmp|enable_instruction_cache|disable_instruction_cache|invalidate_instruction_pipeline|disable_ctrl_features)$' | \
+              grep -E ' (_entry|_start|_dead_loop|memcpy32|memset|memcpy|strlen|strncmp|strcmp|enable_instruction_cache|disable_instruction_cache|invalidate_instruction_pipeline|disable_ctrl_features|configure_soc_clocks)$' | \
               sort
           echo "ok: re.elf links and every expected symbol is present"
