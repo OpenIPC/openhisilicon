@@ -142,6 +142,12 @@ constants (BE wire order) — the disassembly literally encodes
 0x67e6096a / 0x85ae67bb / ... / 0x19cde05b, which are the standard
 SHA-256 IV in network byte order. No place to hide a backdoor here.
 
+**Reverse-engineering complete.** Every named function reachable
+from _entry in the av300 mask-ROM (130 entries total) is now defined
+in bootloader.c. stubs.c contains only a single placeholder-name
+alias. The verification chain has no unreversed surface left to
+hide behavior in.
+
 
 Structural findings
 -------------------

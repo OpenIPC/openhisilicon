@@ -3509,13 +3509,13 @@ extern void media_sub_b_calc_offsets(void *ctx);   /* 0x4007688 */
 extern int  media_sub_b_init_substruct(void *ctx); /* 0x4007398 */
 extern int  media_sub_a_decode_block(void *ctx, unsigned tag);  /* 0x4007c70 */
 
-/* Final stub frontier — genuinely deepest SDIO protocol leaves. */
-extern int  sdio_proto_step_a(void);                /* 0x4007578 */
-extern int  sdio_proto_step_b(void);                /* 0x4007a5c */
-extern int  sdio_proto_step_c(void);                /* 0x4005990 */
-extern int  sdio_proto_step_d(void *ctx);           /* 0x40059bc */
-extern int  sdio_proto_step_e(void *ctx, unsigned a, unsigned b, unsigned c);  /* 0x4006fdc */
-extern int  sdio_proto_step_f(void);                /* 0x40075a0 */
+/* All 6 SDIO/USB-PHY leaves now defined below. */
+extern int  sdio_card_present(void);                          /* 0x4007578 */
+extern void sdio_cmd_setup_call(void *ctx, unsigned blocks, unsigned cmd);  /* 0x4007a5c */
+extern int  sdio_query_block_class(void *ctx);                /* 0x4005990 */
+extern void sdio_apply_block_size(void *ctx, unsigned cls);   /* 0x40059bc */
+extern int  sdio_xfer_cmd(void *ctx, unsigned arg1, unsigned arg2, unsigned arg3, void *ep);  /* 0x4006fdc */
+extern void usb_phy_init(void);                               /* 0x40075a0 */
 
 /* ---- SHA-256 initial hash values ----
  *
@@ -3929,7 +3929,7 @@ void sdio_descriptor_init(void *ctx)  /* 0x4006cd8 */
  * Long sequence of read-modify-write against SYSCTRL[0x140] (the boot
  * status register the bootrom uses as a state-machine selector).
  * Programs the bits in this order: set 0x4000, wait 100ms, clear it;
- * tag check via sdio_proto_step_f at 0x40075a0; set bit 2, clear 0x2000,
+ * tag check via usb_phy_init at 0x40075a0; set bit 2, clear 0x2000,
  * set 0x1000, set 0x200, set 0x100, wait 200ms; clear bit 0; wait 2000ms;
  * clear bit 0; etc.
  *
@@ -3949,7 +3949,7 @@ void media_sub_b_calc_offsets(void *ctx)  /* 0x4007688 */
     sysctrl[0x140 / 4] = v & ~0x4000u;
     wait_long_timer_0(20);
 
-    sdio_proto_step_f();
+    usb_phy_init();
 
     v = sysctrl[0x140 / 4];   sysctrl[0x140 / 4] = v | 0x4u;
     v = sysctrl[0x140 / 4];   sysctrl[0x140 / 4] = v & ~0x2000u;
@@ -3975,7 +3975,7 @@ void media_sub_b_calc_offsets(void *ctx)  /* 0x4007688 */
  * Spans 120 instructions of vendor SDIO bring-up. The structural
  * shape is "configure register, wait" repeated ~20 times. We capture
  * the entry/exit and the major calls; deep per-step register decode
- * lives in sdio_proto_step_a (still a stub).
+ * lives in sdio_card_present (still a stub).
  */
 int media_sub_b_init_substruct(void *ctx)  /* 0x4007398 */
 {
@@ -4008,7 +4008,7 @@ int media_sub_b_init_substruct(void *ctx)  /* 0x4007398 */
     p644[16 / 4] = 0x13802004u;
     sdio_pio_loop(ctx);
 
-    sdio_proto_step_b();
+    sdio_cmd_setup_call(ctx, 0x100, (u32)p644);
     d[2632 / 4] = (u32)(d + 1608 / 4);     /* a48 = ctx+0x648 */
 
     /* Repeat: read p160[0], clear bits, write back, settle. */
@@ -4027,10 +4027,184 @@ int media_sub_b_init_substruct(void *ctx)  /* 0x4007398 */
  * Switch on the lower 4 bits of the tag (bits 11..8) for the
  * SDIO descriptor's per-block type. Two real handlers:
  *   tag == 1: device-stop branch (jumps to 0x4007d24)
- *   tag == 2: descriptor-walk branch (calls sdio_proto_step_c/d,
+ *   tag == 2: descriptor-walk branch (calls sdio_query_block_class/d,
  *             reads block table at bootrom 0x7f30+...)
  * Other tags fall through to exit.
  */
+/* ---- sdio_card_present (0x4007578, 5 instr) ----
+ *
+ * Returns SYSCTRL.PERISTAT.bit15 (the card-present indicator). 1 if
+ * an SDIO card is detected on the bus, 0 if slot empty.
+ */
+int sdio_card_present(void)
+{
+    volatile u32 *sysctrl = (volatile u32 *)SYSCTRL_START;
+    return (sysctrl[PERISTAT / 4] >> 15) & 1u;
+}
+
+/* ---- sdio_cmd_setup_call (0x4007a5c, 20 instr) ----
+ *
+ * Programs the 4-word command descriptor block at ctx[0x644]+0x300..0x30c:
+ *   +0x300 = cmd_word    (caller-supplied opcode + flags)
+ *   +0x304 = 0
+ *   +0x308 = blocks << 2 (block count, scaled to bytes-per-DMA-burst)
+ *   +0x30c = 0           (trigger via sdio_write_block tail-call)
+ *
+ * The fourth write tail-calls sdio_write_block, which itself tail-calls
+ * sdio_pio_loop — so the function ends with the bus settle.
+ */
+void sdio_cmd_setup_call(void *ctx, unsigned blocks, unsigned cmd)
+{
+    u32 *d = (u32 *)ctx;
+    u32 ep = d[1604 / 4];
+    sdio_write_block((void *)(ep + 0x300), (int)cmd);
+    sdio_write_block((void *)(ep + 0x304), 0);
+    sdio_write_block((void *)(ep + 0x308), (int)(blocks << 2));
+    sdio_write_block((void *)(ep + 0x30c), 0);
+}
+
+/* ---- sdio_query_block_class (0x4005990, 11 instr) ----
+ *
+ * Reads a 3-bit speed/class field from the SDIO controller status word
+ * at ctx[0x130]+12, then indexes the 5-entry block-class lookup table
+ * at bootrom 0x00007ea0. Returns table[class] or 0 if class > 4.
+ *
+ * The table at bootrom 0x7ea0 maps class index to block-size code,
+ * consumed by sdio_apply_block_size below.
+ */
+int sdio_query_block_class(void *ctx)
+{
+    u32 *d = (u32 *)ctx;
+    const u32 *table = (const u32 *)0x00007ea0;
+    int raw = sdio_read_block((void *)(d[304 / 4] + 12));
+    unsigned cls = (unsigned)raw & 7u;
+    return cls <= 4 ? (int)table[cls] : 0;
+}
+
+/* ---- sdio_apply_block_size (0x40059bc, 28 instr) ----
+ *
+ * Computed-goto switch on cls (1..4) — each branch sets three descriptor
+ * halfwords (at +0xe4, +0x2c, +0x88) to a class-specific block-size pair:
+ *   cls=1: (0,    8,   0)
+ *   cls=2: (0x400, 0x200, 0x400)
+ *   cls=3: (0x200, 0x40,  0x200)
+ *   cls=4: (0x40,  0x40,  0x40)
+ *   other: no-op
+ */
+void sdio_apply_block_size(void *ctx, unsigned cls)
+{
+    u8 *p = (u8 *)ctx;
+    u16 ve4, v2c, v88;
+
+    switch (cls) {
+    case 1: ve4 = 0;     v2c = 8;    v88 = 0;     break;
+    case 2: ve4 = 0x400; v2c = 0x200; v88 = 0x400; break;
+    case 3: ve4 = 0x200; v2c = 0x40;  v88 = 0x200; break;
+    case 4: ve4 = 0x40;  v2c = 0x40;  v88 = 0x40;  break;
+    default: return;
+    }
+    *(volatile u16 *)(p + 0xe4) = ve4;
+    *(volatile u16 *)(p + 0x2c) = v2c;
+    *(volatile u16 *)(p + 0x88) = v88;
+}
+
+/* ---- sdio_xfer_cmd (0x4006fdc, 23 instr) ----
+ *
+ * Configures a 4-word CMD descriptor at *arg1[0..12], settles between
+ * each write via sdio_pio_loop, then polls arg1[12] bit 10 for
+ * completion. 10000 iters × 100ms = ~16 minutes worst case.
+ *
+ *   arg1[0] = ep   (caller-supplied endpoint, passed via sp+24)
+ *   arg1[4] = arg3 (length / count)
+ *   arg1[8] = arg2 (flags)
+ *   arg1[12] = 0x10000401  (cmd word with completion bit cleared)
+ *
+ * Returns 0 on completion, never on timeout (the original just exits
+ * the loop after 10000 iters without flagging failure — a vendor
+ * choice, not our addition).
+ */
+int sdio_xfer_cmd(void *ctx, unsigned arg1, unsigned arg2, unsigned arg3, void *ep)
+{
+    u32 *cmd = (u32 *)arg1;
+    unsigned retry = 10000;
+    (void)ctx;
+
+    cmd[0] = (u32)ep;
+    sdio_pio_loop(ctx);
+    cmd[1] = arg3;
+    sdio_pio_loop(ctx);
+    cmd[2] = arg2;
+    sdio_pio_loop(ctx);
+    cmd[3] = 0x10000401u;
+    sdio_pio_loop(ctx);
+
+    while (retry--) {
+        u32 stat = cmd[3];
+        if ((stat & 0x400u) == 0)
+            return 0;
+        wait_long_timer_0(100);
+    }
+    return 0;
+}
+
+/* ---- usb_phy_init (0x40075a0, 58 instr) ----
+ *
+ * USB_PHY (at 0x10110000) and OTPUSER (0x100a0000) bring-up. Programs
+ * USB_PHY[0x18] = 12, waits 1ms, reads OTPUSER[0x38] bits 0-4 as a
+ * trim value, then dispatches based on PERISTAT bits 6-7:
+ *
+ *   peristat & 0xc0 == 0x80: USB_PHY[0]    = 28, wait 1ms
+ *   peristat & 0xc0 == 0xc0: USB_PHY[8]    = 2, wait 20ms
+ *   peristat & 0xc0 == 0x40: wait 20ms (no PHY register write)
+ *   else: USB_PHY[8] = 2, wait 1ms, USB_PHY[0] = 28, wait 20ms
+ *
+ * Used by media_sub_b_calc_offsets to bring the USB PHY up to a known
+ * state before the SDIO controller starts driving signals. The OTPUSER
+ * trim read is for chip-specific compensation; the dispatch handles
+ * the four PHY voltage rails the av300 family supports.
+ */
+void usb_phy_init(void)
+{
+    volatile u32 *usb_phy = (volatile u32 *)0x10110000u;
+    volatile u32 *otpuser = (volatile u32 *)OTPUSER_START;
+    volatile u32 *sysctrl = (volatile u32 *)SYSCTRL_START;
+    unsigned trim;
+    u32 peristat;
+
+    usb_phy[0x18 / 4] = 12;
+    wait_long_timer_0(1);
+
+    trim = otpuser[0x38 / 4] & 0x1fu;
+    if ((int)(trim - 15) <= 13) {
+        /* trim within range — caller-side configuration loop runs
+         * USB_PHY[12] bit-tweaks against the trim value. Captured
+         * structurally as a single wait + commit. */
+        u32 v = usb_phy[12 / 4];
+        v &= ~0x7cu;
+        v |= trim << 2;
+        usb_phy[12 / 4] = v;
+        wait_long_timer_0(1);
+        wait_long_timer_0(1);   /* repeats — original calls wait twice */
+        return;
+    }
+
+    peristat = sysctrl[PERISTAT / 4] & 0xc0u;
+    if (peristat == 0x80) {
+        usb_phy[0] = 28;
+        wait_long_timer_0(1);
+    } else if (peristat == 0xc0) {
+        usb_phy[8 / 4] = 2;
+        wait_long_timer_0(20);
+    } else if (peristat == 0x40) {
+        wait_long_timer_0(20);
+    } else {
+        usb_phy[8 / 4] = 2;
+        wait_long_timer_0(1);
+        usb_phy[0] = 28;
+        wait_long_timer_0(20);
+    }
+}
+
 int media_sub_a_decode_block(void *ctx, unsigned tag)  /* 0x4007c70 */
 {
     unsigned sub_tag = (tag >> 8) & 0xf;
@@ -4047,15 +4221,15 @@ int media_sub_a_decode_block(void *ctx, unsigned tag)  /* 0x4007c70 */
     /* descriptor-walk path */
     *(volatile u8 *)((u8 *)ctx + 49) = 0;
     {
-        int rc = sdio_proto_step_c();
+        int rc = sdio_query_block_class(ctx);
         *(volatile u8 *)((u8 *)ctx + 344) = (u8)rc;
-        sdio_proto_step_d(ctx);
-        if (sdio_proto_step_a() != 0)
+        sdio_apply_block_size(ctx, (unsigned)rc);
+        if (sdio_card_present() != 0)
             return -1;
 
         /* The 5-entry block-size lookup table at bootrom 0x7f30. */
         ep = (rc - 1 <= 4) ? table[rc - 1] : 0x80000000u;
-        sdio_proto_step_e(ctx, ep, 0x700, (u32)((u8 *)ctx + 46));
+        sdio_xfer_cmd(ctx, ep, 0x700, (u32)((u8 *)ctx + 46), 0);
     }
     return 0;
 }
