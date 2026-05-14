@@ -1306,11 +1306,92 @@ HI_S32 HI_MPI_IVE_KCF_DestroyObjList(IVE_KCF_OBJ_LIST_S *pstObjList)
     return HI_SUCCESS;
 }
 
+/* CreateGaussPeak constants — decoded from vendor `HI_MPI_IVE_KCF_CreateGaussPeak`
+ * @0xd738 + internal cell helper @0x2ca4.
+ *
+ * Output buffer layout (455680 B minimum for padding=96):
+ *   [0 .. 4055]:    169 × IVE_MEM_INFO_S table (13×13 grid)
+ *   [4056 .. 4063]: padding (zeroed by vendor)
+ *   [4064 .. 455647]: 169 cells of Gaussian peak coefficients,
+ *                     sizes varying by (col, row) quadrant.
+ *
+ * Each cell descriptor (24 B):
+ *   u64 phys  ←  pstGaussPeak.phys + 4064 + quadrant_offset(col,row)
+ *   u64 virt  ←  pstGaussPeak.virt + same offset
+ *   u32 size  ←  1024 / 2048 / 4096 per quadrant
+ *
+ * Quadrants (col, row ∈ [0..12], corresponding to HOG grid sizes N=8..32):
+ *
+ *   A  (col<5, row<5):     5×5,  size 1024,  offset = (5·row + col) · 1024
+ *   B1 (col≥5, row<5):     8×5,  size 2048,  offset = 25600 + (col + 8·row − 5) · 2048
+ *   B2 (col<5, row≥5):     5×8,  size 2048,  offset = 107520 + (5·row + col − 25) · 2048
+ *   B3 (col≥5, row≥5):     8×8,  size 4096,  offset = 189440 + (col + 8·row − 45) · 4096
+ *
+ *   25600 + 81920 + 81920 + 262144 + 4064 = 455648 ≤ 455680  (32 B tail pad)
+ *
+ * Cell-data contents (the actual Gaussian peak coefficients per cell)
+ * come from vendor's second-phase loop @0xd7e0 — VFP sqrt+exp math with
+ * constants {d8=4096.0, d10=−0.5, s24=1/32, s23=0.1}. Not yet ported.
+ * Cells stay zero-initialized; downstream KCF_Process will read zero
+ * peaks until the math phase lands in a follow-up stage. The mem-info
+ * table alone is sufficient for GetTrainObj's stGaussPeak slot lookup
+ * (which is the immediate consumer).
+ */
+#define KCF_GP_MIN_SIZE   455680u
+#define KCF_GP_HDR_BYTES  4064u
+
 HI_S32 HI_MPI_IVE_KCF_CreateGaussPeak(HI_U3Q5 u3q5Padding,
                                       IVE_DST_MEM_INFO_S *pstGaussPeak)
 {
-    (void)u3q5Padding; (void)pstGaussPeak;
-    return HI_ERR_IVE_NOT_SUPPORT;
+    HI_U8 *virt;
+    HI_U64 phys;
+    HI_U32 row, col;
+
+    (void)u3q5Padding;  /* placement of the mem-info table doesn't depend on
+                         * padding; only the cell DATA values do (TODO). */
+
+    IVE_CHECK_NULL("HI_MPI_IVE_KCF_CreateGaussPeak", pstGaussPeak, "pstGaussPeak");
+    if (pstGaussPeak->u32Size < KCF_GP_MIN_SIZE) {
+        IVE_LOG("HI_MPI_IVE_KCF_CreateGaussPeak",
+                "buffer too small (%u, need >= %u)",
+                pstGaussPeak->u32Size, KCF_GP_MIN_SIZE);
+        return HI_ERR_IVE_ILLEGAL_PARAM;
+    }
+    virt = (HI_U8 *)(uintptr_t) pstGaussPeak->u64VirAddr;
+    phys = pstGaussPeak->u64PhyAddr;
+    IVE_CHECK_NULL("HI_MPI_IVE_KCF_CreateGaussPeak", virt, "pstGaussPeak->u64VirAddr");
+
+    /* Zero the whole buffer so cells [4064..] are deterministic. */
+    memset(virt, 0, pstGaussPeak->u32Size);
+
+    /* 13×13 mem-info table — row-major iteration order matches vendor. */
+    for (row = 0; row < 13; row++) {
+        for (col = 0; col < 13; col++) {
+            HI_U8 *cell_desc = virt + (row * 13 + col) * 24;
+            HI_U32 size, offset;
+
+            if (col < 5 && row < 5) {
+                size   = 1024;
+                offset = (5 * row + col) * 1024;
+            } else if (col >= 5 && row < 5) {
+                size   = 2048;
+                offset = 25600 + (col + 8 * row - 5) * 2048;
+            } else if (col < 5 && row >= 5) {
+                size   = 2048;
+                offset = 107520 + (5 * row + col - 25) * 2048;
+            } else {
+                size   = 4096;
+                offset = 189440 + (col + 8 * row - 45) * 4096;
+            }
+            offset += KCF_GP_HDR_BYTES;  /* skip the table itself */
+
+            *(HI_U64 *)(cell_desc + 0) = phys + offset;
+            *(HI_U64 *)(cell_desc + 8) = (HI_U64)(uintptr_t)(virt + offset);
+            *(HI_U32 *)(cell_desc + 16) = size;
+            /* cell_desc + 20..23: 4 bytes pad — leave zero, vendor too. */
+        }
+    }
+    return HI_SUCCESS;
 }
 
 /* Hann-window generator, decoded from cv500 vendor libive.so internal
