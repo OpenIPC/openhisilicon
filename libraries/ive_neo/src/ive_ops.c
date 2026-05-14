@@ -26,6 +26,8 @@
 #include <sys/ioctl.h>
 #include <stdint.h>
 #include <stdlib.h>
+#include <string.h>
+#include <errno.h>
 #include <math.h>
 
 /* ioctl cmd numbers (authoritative — extracted from libive.so decomp) */
@@ -1173,10 +1175,14 @@ HI_S32 HI_MPI_IVE_KCF_GetMemSize(HI_U32 u32MaxObjNum, HI_U32 *pu32Size)
  * `mov r6, #184` at libive.so 0x154ec. */
 #define KCF_NODE_BYTES 184u
 
-/* Vendor's pu8TmpBuf is always 22656 (0x5880) bytes regardless of
- * u32MaxObjNum (libive.so 0x1555c). Holds the KCF_Process tmpBuf
- * that the kernel copy_from_user's during ive_kcf_proc. */
-#define KCF_TMP_BUF_BYTES 22656u
+/* Vendor's pu8TmpBuf is 22656 (0x5880) bytes — the KCF_Process staging
+ * area that ive_kcf_proc copy_from_user's verbatim. We allocate 24
+ * extra bytes at the tail for our private pstMem stash (see comment
+ * near ive_kcf_pstmem_stash_t); the kernel only ever sees the first
+ * 22656 bytes via the ioctl arg's tmpBuf pointer. */
+#define KCF_STAGE_BYTES   22656u
+#define KCF_STASH_BYTES      24u
+#define KCF_TMP_BUF_BYTES (KCF_STAGE_BYTES + KCF_STASH_BYTES)
 
 /* Mirrors cv500 vendor libive.so HI_MPI_IVE_KCF_CreateObjList @0xd588 +
  * ive_create_obj_list @0x154e8. Initializes the obj list data structure:
@@ -1229,13 +1235,13 @@ HI_S32 HI_MPI_IVE_KCF_CreateObjList(IVE_MEM_INFO_S *pstMem, HI_U32 u32MaxObjNum,
         return HI_ERR_IVE_NOMEM;
     }
 
-    /* Stash pstMem at head of pu8TmpBuf so GetTrainObj can find it.
-     * Vendor likely uses a private global; we use the tmpBuf head so
-     * the IVE_KCF_OBJ_LIST_S struct stays SDK-compatible. The
-     * ive_kcf_pstmem_stash_t layout is the first 24 bytes; KCF_Process
-     * later uses the remaining 22632 bytes for HW context. */
+    /* Stash pstMem at the TAIL of pu8TmpBuf so GetTrainObj can find it
+     * without polluting the 22656-byte HW staging area the kernel reads
+     * via KCF_Process ioctl. Vendor likely uses a private global; we
+     * tack 24 bytes onto our allocation and use them for the stash. */
     {
-        struct { HI_U64 phys, virt; HI_U32 size, pad; } *stash = (void *)tmp;
+        struct { HI_U64 phys, virt; HI_U32 size, pad; } *stash =
+            (void *)(tmp + KCF_STAGE_BYTES);
         stash->phys = pstMem->u64PhyAddr;
         stash->virt = pstMem->u64VirAddr;
         stash->size = pstMem->u32Size;
@@ -1617,7 +1623,7 @@ HI_S32 HI_MPI_IVE_KCF_CreateCosWin(IVE_DST_MEM_INFO_S *pstCosWinX,
 static void ive_kcf_hog_grid(const IVE_ROI_INFO_S *pstRoi, HI_U8 u3q5Padding,
                              HI_U32 *pu32GridW, HI_U32 *pu32GridH);
 
-/* Hidden per-list state stashed at the head of pu8TmpBuf. */
+/* Hidden per-list state stashed at the tail of pu8TmpBuf. */
 typedef struct {
     HI_U64 mem_phys;
     HI_U64 mem_virt;
@@ -1664,7 +1670,8 @@ HI_S32 HI_MPI_IVE_KCF_GetTrainObj(HI_U3Q5 u3q5Padding, IVE_ROI_INFO_S astRoiInfo
         return HI_ERR_IVE_NOT_PERM;
     }
 
-    stash = (const ive_kcf_pstmem_stash_t *) pstObjList->pu8TmpBuf;
+    stash = (const ive_kcf_pstmem_stash_t *)
+            (pstObjList->pu8TmpBuf + KCF_STAGE_BYTES);
     if (!stash->mem_phys) {
         IVE_LOG("HI_MPI_IVE_KCF_GetTrainObj",
                 "no pstMem stash — Create wasn't called via our libive_neo?");
@@ -1819,15 +1826,92 @@ HI_S32 HI_MPI_IVE_KCF_GetTrainObj(HI_U3Q5 u3q5Padding, IVE_ROI_INFO_S astRoiInfo
  * is_track flag is named misleadingly: in vendor's encoding, 0=TRAIN,
  * 1=TRACK. The TmpBuf slot selection at +72/+11336 confirms this.
  */
+#define KCF_IOCTL_PROCESS    0xc0084633u
+#define KCF_TMPBUF_MIN_SIZE  47616u    /* vendor's ctrl.stTmpBuf min */
+
 HI_S32 HI_MPI_IVE_KCF_Process(IVE_HANDLE *pIveHandle,
                               IVE_SRC_IMAGE_S *pstSrc,
                               IVE_KCF_OBJ_LIST_S *pstObjList,
                               IVE_KCF_PRO_CTRL_S *pstKcfProCtrl,
                               HI_BOOL bInstant)
 {
-    (void)pstSrc; (void)pstObjList; (void)pstKcfProCtrl; (void)bInstant;
-    if (pIveHandle) *pIveHandle = -1;
-    return HI_ERR_IVE_NOT_SUPPORT;
+    HI_U8 *stage;
+    HI_U32 n_train, n_track;
+    IVE_LIST_HEAD_S *cur;
+    HI_S32 ret;
+    struct { HI_U32 handle_out; HI_U32 tmpBuf_va; } arg;
+    (void)bInstant;
+
+    IVE_CHECK_NULL("HI_MPI_IVE_KCF_Process", pIveHandle, "pIveHandle");
+    IVE_CHECK_NULL("HI_MPI_IVE_KCF_Process", pstSrc, "pstSrc");
+    IVE_CHECK_NULL("HI_MPI_IVE_KCF_Process", pstObjList, "pstObjList");
+    IVE_CHECK_NULL("HI_MPI_IVE_KCF_Process", pstKcfProCtrl, "pstKcfProCtrl");
+
+    if (!pstObjList->pu8TmpBuf) {
+        IVE_LOG("HI_MPI_IVE_KCF_Process", "pu8TmpBuf NULL (no Create?)");
+        return HI_ERR_IVE_ILLEGAL_PARAM;
+    }
+    if (pstObjList->enListState != IVE_KCF_LIST_STATE_CREATE) {
+        IVE_LOG("HI_MPI_IVE_KCF_Process", "enListState=%d (need CREATE)",
+                pstObjList->enListState);
+        return HI_ERR_IVE_ILLEGAL_PARAM;
+    }
+    if (pstKcfProCtrl->stTmpBuf.u32Size < KCF_TMPBUF_MIN_SIZE) {
+        IVE_LOG("HI_MPI_IVE_KCF_Process",
+                "ctrl.stTmpBuf.u32Size(%u) < %u (HW scratch min)",
+                pstKcfProCtrl->stTmpBuf.u32Size, KCF_TMPBUF_MIN_SIZE);
+        return HI_ERR_IVE_ILLEGAL_PARAM;
+    }
+    if (pstObjList->u32TrainObjNum > pstObjList->u32MaxObjNum ||
+        pstObjList->u32TrackObjNum > pstObjList->u32MaxObjNum) {
+        IVE_LOG("HI_MPI_IVE_KCF_Process",
+                "train=%u track=%u > max=%u",
+                pstObjList->u32TrainObjNum, pstObjList->u32TrackObjNum,
+                pstObjList->u32MaxObjNum);
+        return HI_ERR_IVE_ILLEGAL_PARAM;
+    }
+
+    stage = pstObjList->pu8TmpBuf;
+    memset(stage, 0, KCF_STAGE_BYTES);
+
+    /* [0..71] = pstSrc copy (72 bytes, IVE_IMAGE_S vendor layout) */
+    memcpy(stage, pstSrc, 72);
+
+    /* [72 + i*176] = TRAIN slot copies (KCF_OBJ_S body, 176 B each).
+     * Walk stTrainObjList without removing entries — GetObjBbox drains
+     * train→track after Process returns. */
+    n_train = 0;
+    for (cur = pstObjList->stTrainObjList.pstNext;
+         cur != &pstObjList->stTrainObjList && n_train < 64;
+         cur = cur->pstNext, n_train++) {
+        IVE_KCF_OBJ_NODE_S *node = (IVE_KCF_OBJ_NODE_S *) cur;
+        memcpy(stage + 72 + n_train * 176, &node->stKcfObj, 176);
+    }
+
+    /* [11336 + i*176] = TRACK slot copies. */
+    n_track = 0;
+    for (cur = pstObjList->stTrackObjList.pstNext;
+         cur != &pstObjList->stTrackObjList && n_track < 64;
+         cur = cur->pstNext, n_track++) {
+        IVE_KCF_OBJ_NODE_S *node = (IVE_KCF_OBJ_NODE_S *) cur;
+        memcpy(stage + 11336 + n_track * 176, &node->stKcfObj, 176);
+    }
+
+    *(HI_U32 *)(stage + 22600) = n_train;
+    *(HI_U32 *)(stage + 22604) = n_track;
+    memcpy(stage + 22608, pstKcfProCtrl, 40);
+
+    arg.handle_out = 0;
+    arg.tmpBuf_va  = (HI_U32)(uintptr_t) stage;
+
+    ret = ioctl(g_ive_fd, KCF_IOCTL_PROCESS, &arg);
+    if (ret) {
+        IVE_LOG("HI_MPI_IVE_KCF_Process", "ioctl errno=%d", errno);
+        *pIveHandle = -1;
+        return HI_ERR_IVE_SYS_TIMEOUT;
+    }
+    *pIveHandle = (IVE_HANDLE) arg.handle_out;
+    return HI_SUCCESS;
 }
 
 /* ---- Internal list-mgmt helpers (mirror cv500 libive.so) ---- */

@@ -21,6 +21,7 @@
 #include <linux/module.h>
 #include <linux/kernel.h>
 #include <linux/io.h>
+#include <linux/math64.h>
 #include <linux/string.h>
 #include <linux/delay.h>
 #include <linux/interrupt.h>
@@ -997,9 +998,15 @@ static long ive_xnn_fwd_slice(unsigned long arg)
 
 static long ive_xnn_query(unsigned long arg)
 {
-	if (!ive_neo_chip.has_xnn)
-		return -EOPNOTSUPP;
-	((u32 *)arg)[1] = 1;
+	/* arg layout = { u32 handle (in), u32 bBlock (in), u32 done (out) }
+	 * (12 B), per vendor libive HI_MPI_IVE_Query @0x76d8 (writes handle
+	 * at sp+16, bBlock at sp+20, reads done from sp+24).
+	 *
+	 * All our dispatch paths (classic IVE, HOG, Resize, PerspTrans, LK,
+	 * KCF, XNN) run synchronously inside their ioctls — by the time
+	 * userspace gets to call Query, the requested handle is always
+	 * complete. So this is a constant done=1. */
+	((u32 *)arg)[2] = 1;
 	return 0;
 }
 
@@ -3122,6 +3129,319 @@ static long ive_op_lk_optical_flow_pyr_cv500(unsigned long arg)
 	pr_info_once("ive_neo: LK handler wired (HW op 0x1c, levels 0..3)\n");
 	return ive_submit_nonxnn(node, buf);
 }
+
+/* ---- cv500 KCF tracker (HW op 0x34, ioctl 0xc0084633) ----
+ *
+ * Kernelized Correlation Filter object tracker. The userspace API
+ * (HI_MPI_IVE_KCF_*) stages train/track object metadata into a
+ * 22656-byte heap buffer (pstObjList->pu8TmpBuf) and ioctls in
+ * with an 8-byte arg = { HI_HANDLE *handle, void *tmpBuf_user_va }.
+ *
+ * Vendor blob symbols (cv500 open_ive.ko): ive_kcf_proc @0x5be0,
+ * ive_check_kcf_param @0x14144, ive_get_kcf_hog_param @0x0,
+ * ive_fill_kcf_task @0x9718, ive_get_mmz_base_addr @0x7680.
+ *
+ * Staging buffer layout (22656 B, copied user→kernel verbatim):
+ *
+ *   [    0 ..    71]  IVE_IMAGE_S src (72 B)
+ *   [   72 .. 11335]  IVE_KCF_OBJ_S train_slots[64] (176 B each)
+ *   [11336 .. 22599]  IVE_KCF_OBJ_S track_slots[64]
+ *   [22600 .. 22603]  u32 train counter (kernel-written, == iter i)
+ *   [22604 .. 22607]  u32 track counter
+ *   [22608 .. 22647]  IVE_KCF_PRO_CTRL_S (40 B): enCscMode (4) + pad +
+ *                       stTmpBuf (MEM_INFO 24) + u1q15InterFactor (2) +
+ *                       u0q16Lamda (2) + u4q12TrancAlfa (2) +
+ *                       u0q8Sigma (1) + u8RespThr (1)
+ *
+ * Each KCF_OBJ_S (176 B): stRoiInfo (20 + 4 pad) + 6 × IVE_MEM_INFO_S
+ *   (24 B each: stCosWinX/Y, stGaussPeak, stHogFeature, stAlpha, stDst)
+ *   + u3q5Padding (1) + reserved.
+ *
+ * Per-obj HW task node (208 B), built from inputs above + a 32-byte
+ * hog_params struct derived by ive_kcf_compute_hog_param. Both train
+ * and track objs emit one node each; nodes are chained and submitted
+ * in a single ive_submit_chain. The 4 KB MMZ chain buffer caps total
+ * nodes at floor(4096/208) = 19, so we enforce n_train + n_track <= 19.
+ *
+ * Note on flag semantics (vendor's naming is misleading):
+ *   In ive_fill_kcf_task the 4th arg "train_flag" is 0 when iterating
+ *   the TRAIN slot region at TmpBuf+72, and 1 when iterating TRACK at
+ *   TmpBuf+11336. Field map below uses the slot-region convention.
+ *
+ * Validator: vendor enforces ctrl.stTmpBuf.u32Size >= 47616 (the HW
+ * scratch region for shared HogFeature pool referenced by node[124,128]
+ * on TRACK iterations). We mirror that check.
+ *
+ * Static decode of ive_get_kcf_hog_param byte-verified against an
+ * av300 kretprobe trace (2026-05) for padding=96, roi=16×16 →
+ * hog_params=[0x800,0x800, 0x10,0x10, -1024,-1024, 56,56, 288].
+ */
+#define IVE_KCF_STAGE_BYTES   22656u    /* 0x5880, vendor copy_from_user size */
+#define IVE_KCF_OBJ_BYTES       176u
+#define IVE_KCF_TMP_BUF_MIN  47616u     /* 0xBA00, HW scratch minimum */
+#define IVE_KCF_MAX_OBJS         19u    /* chain buffer cap: 4096/208 */
+#define IVE_KCF_TRAIN_OFF        72u    /* offset of TRAIN slot array */
+#define IVE_KCF_TRACK_OFF     11336u    /* offset of TRACK slot array */
+#define IVE_KCF_CTRL_OFF      22608u    /* offset of IVE_KCF_PRO_CTRL_S */
+
+/* Replicates vendor ive_get_kcf_hog_param @0x0 (32-byte output). Derives
+ * scan-window parameters from u3q5Padding + ROI. */
+static void ive_kcf_compute_hog_param(u32 padding,
+				      const u8 *roi,    /* 16-byte RECT_S24Q8_S */
+				      u8 *out)          /* 32-byte hog_params */
+{
+	u32 roi_w = *(u32 *)(roi + 8);
+	u32 roi_h = *(u32 *)(roi + 12);
+	u32 roi_x_q8 = *(u32 *)(roi + 0);
+	u32 roi_y_q8 = *(u32 *)(roi + 4);
+	u32 nw, nh, r3x, r3y;
+	u32 step_y_clamped, hog_metric, scaled, round_up;
+	u16 hc4;
+
+	/* nw = ((pad*roi_w) >> 8) + 1, nh = ((pad*roi_h) >> 8) + 1 */
+	nw = ((padding * roi_w) >> 8) + 1;
+	nh = ((padding * roi_h) >> 8) + 1;
+
+	/* hog_params[8,12] = roi_center_q8 - (n*1024), where center is
+	 * roi_xy_q8 + roi_dim*128. */
+	*(s32 *)(out +  8) = (s32)(roi_x_q8 + (roi_w << 7)) - (s32)(nw << 10);
+	*(s32 *)(out + 12) = (s32)(roi_y_q8 + (roi_h << 7)) - (s32)(nh << 10);
+
+	/* hog_params[16,20] = n*8 (step per cell, in image pixels) */
+	*(u32 *)(out + 16) = nw << 3;
+	*(u32 *)(out + 20) = nh << 3;
+
+	/* X scale field (hog_params[0]) and X cells (hog_params[4]).
+	 * Cleared low/high bits mirror vendor's `bic r3, r3, #0xc0000001`
+	 * — this just makes r3 = (nw*2) with bits 0,30,31 forced 0 before
+	 * comparing to 32. For nw up to 0x4000 the bic is a no-op. */
+	r3x = ((nw << 1) & ~0xc0000001u) - 2;
+	if (r3x > 32) {
+		u32 mul = (u32)(((u64)(nw << 14) * 0xf0f0f0f1ULL) >> 32) >> 7;
+		*(u16 *)(out + 0) = (u16)mul;
+		*(u16 *)(out + 4) = 32;
+	} else {
+		*(u16 *)(out + 0) = 0x800;
+		*(u16 *)(out + 4) = (r3x > 16) ? 32 : 16;
+	}
+
+	/* Y scale field (hog_params[2]) and Y cells (hog_params[6]). */
+	r3y = ((nh << 1) & ~0xc0000001u) - 2;
+	if (r3y > 32) {
+		u32 mul = (u32)(((u64)(nh << 14) * 0xf0f0f0f1ULL) >> 32) >> 7;
+		*(u16 *)(out + 2) = (u16)mul;
+		*(u16 *)(out + 6) = 32;
+	} else {
+		*(u16 *)(out + 2) = 0x800;
+		*(u16 *)(out + 6) = (r3y > 16) ? 32 : 16;
+	}
+
+	/* hog_params[24]: precomputed cell metric, rounded up to next
+	 * multiple of 96. Vendor uses two umull-based magic-divides to
+	 * realise round-up-to-96; we use the equivalent direct form. */
+	hc4 = *(u16 *)(out + 4);
+	step_y_clamped = (*(u32 *)(out + 20) < 136) ? *(u32 *)(out + 20) : 136;
+	scaled = ((u32)hc4 * 3u) * ((step_y_clamped >> 2) - 2);
+	scaled >>= 1;
+	round_up = scaled % 96u;
+	hog_metric = round_up ? (scaled + 96u - round_up) : scaled;
+	*(u16 *)(out + 24) = (u16)hog_metric;
+
+	/* out[28..31] is unused / zero. */
+	*(u32 *)(out + 28) = 0;
+}
+
+/* Build one 208-byte KCF HW task node. Mirrors ive_fill_kcf_task @0x9718
+ * field-by-field. obj is a 176-byte KCF_OBJ_S, ctrl is the 40-byte
+ * KCF_PRO_CTRL_S, src is the 72-byte IVE_IMAGE_S, hog_params is the
+ * 32-byte struct produced by ive_kcf_compute_hog_param above.
+ *
+ * is_track distinguishes:
+ *   TRAIN (0): node[124,128] = obj.stHogFeature (per-obj duplicate).
+ *              node[140,144] left zero (HW doesn't write peaks back).
+ *   TRACK (1): node[124,128] = ctrl.stTmpBuf phys (shared scratch pool).
+ *              node[140] = obj.stDst phys (HW writes peak data here),
+ *              node[144] = ctrl.u8RespThr.
+ */
+static void ive_kcf_fill_node(u8 *node, const u8 *src, const u8 *obj,
+			      const u8 *hog_params, const u8 *ctrl,
+			      int is_track)
+{
+	u32 src_phys0 = *(u32 *)(src + 0);
+	u32 src_phys1 = *(u32 *)(src + 8);
+	u32 src_w     = *(u32 *)(src + 60);
+	u32 src_h     = *(u32 *)(src + 64);
+	u32 src_s0    = *(u32 *)(src + 48);
+	u32 src_s1    = *(u32 *)(src + 52);
+	u32 src_type  = *(u32 *)(src + 68);
+
+	u32 cwx_phys  = *(u32 *)(obj + 24);    /* stCosWinX.u64PhyAddr lo32 */
+	u32 cwy_phys  = *(u32 *)(obj + 48);    /* stCosWinY */
+	u32 gp_phys   = *(u32 *)(obj + 72);    /* stGaussPeak */
+	u32 hog_phys  = *(u32 *)(obj + 96);    /* stHogFeature */
+	u32 alpha_phys = *(u32 *)(obj + 120);  /* stAlpha */
+	u32 dst_phys  = *(u32 *)(obj + 144);   /* stDst */
+
+	u32 tmpbuf_phys = *(u32 *)(ctrl + 8);  /* ctrl.stTmpBuf.u64PhyAddr lo32 */
+
+	node[6]  = 0;
+	node[8]  = cv500_src_fmt(src_type);
+	node[9]  = 0;
+	node[10] = 0x34;                        /* KCF op */
+	node[11] = (u8) is_track;
+
+	*(u32 *)(node + 16) = src_phys0;
+	*(u32 *)(node + 24) = src_phys1;
+	*(u16 *)(node + 40) = (u16) src_w;
+	*(u16 *)(node + 42) = (u16) src_h;
+	*(u16 *)(node + 44) = (u16) src_s0;
+	*(u16 *)(node + 46) = (u16) src_s1;
+
+	*(u16 *)(node + 52)  = *(u16 *)(hog_params + 24);
+	*(u16 *)(node + 102) = *(u16 *)(ctrl + 36);   /* u4q12TrancAlfa */
+	*(u16 *)(node + 108) = *(u16 *)(ctrl + 32);   /* u1q15InterFactor */
+	*(u16 *)(node + 110) = *(u16 *)(ctrl + 34);   /* u0q16Lamda */
+
+	*(u32 *)(node + 104) = gp_phys;
+	*(u32 *)(node + 112) = cwx_phys;
+	*(u32 *)(node + 116) = cwy_phys;
+	*(u32 *)(node + 120) = hog_phys;
+
+	if (is_track) {
+		*(u32 *)(node + 124) = tmpbuf_phys;
+		*(u32 *)(node + 128) = tmpbuf_phys;
+	} else {
+		*(u32 *)(node + 124) = hog_phys;
+		*(u32 *)(node + 128) = hog_phys;
+	}
+	*(u32 *)(node + 132) = hog_phys;
+
+	*(u32 *)(node + 84)  = alpha_phys;
+	*(u32 *)(node + 136) = alpha_phys;
+
+	if (is_track) {
+		*(u32 *)(node + 140) = dst_phys;
+		*(u32 *)(node + 144) = ctrl[39];       /* u8RespThr zero-ext */
+	}
+
+	*(u32 *)(node + 148) = *(u32 *)(hog_params +  8);   /* start scan X */
+	*(u32 *)(node + 152) = *(u32 *)(hog_params + 12);   /* start scan Y */
+	*(u32 *)(node + 156) = *(u32 *)(hog_params + 16);   /* scan range X */
+	*(u32 *)(node + 160) = *(u32 *)(hog_params + 20);   /* scan range Y */
+	*(u32 *)(node + 164) = *(u16 *)(hog_params +  0);   /* X step scale */
+	*(u32 *)(node + 168) = *(u16 *)(hog_params +  2);   /* Y step scale */
+
+	/* node[172]: (1<<40) / ((u0q8Sigma+1)^2 * L*H*31), where L,H are
+	 * scan-range-derived cell counts. Replicates the two-stage
+	 * osal_div_u64 sequence in ive_fill_kcf_task @0x98c0-0x98fc. Use
+	 * div_u64 (not bare /) — ARM doesn't have a 64-bit udiv insn and
+	 * the kernel doesn't export __aeabi_uldivmod. */
+	{
+		u32 sx = *(u32 *)(hog_params + 16);
+		u32 sy = *(u32 *)(hog_params + 20);
+		u32 L = (sx <= 135) ? (sx / 4 - 2) : 32;
+		u32 H = (sy <= 135) ? (sy / 4 - 2) : 32;
+		u32 sigma = ctrl[38];
+		u32 p2 = (sigma + 1) * (sigma + 1);
+		u64 step1 = div_u64(1ULL << 40, p2);
+		u32 LH31 = L * H * 31u;
+		u32 result = (LH31) ? (u32)div_u64(step1, LH31) : 0;
+		*(u32 *)(node + 172) = result;
+	}
+
+	node[176] = ctrl[0];                /* enCscMode low byte */
+	node[177] = 4;                       /* constant */
+
+	*(u16 *)(node + 192) = *(u16 *)(hog_params + 4);   /* HOG cells X */
+	*(u16 *)(node + 194) = *(u16 *)(hog_params + 6);   /* HOG cells Y */
+}
+
+static long ive_op_kcf_cv500(unsigned long arg)
+{
+	u8 *iobuf = (u8 *)arg;
+	void __user *user_tmpbuf;
+	u8 *kbuf;
+	u8 *src, *ctrl;
+	u32 n_train, n_track, total, i;
+	u32 tmpbuf_size;
+	u8 *nodes;
+	long ret;
+
+	/* arg is the 8-byte ioctl payload: { HI_HANDLE *handle, void *tmpBuf }.
+	 * iobuf[0..3] is the user-virt of the handle (libive writes it
+	 * back from the pre-zeroed slot we leave in arg_buf for the chain
+	 * submit); iobuf[4..7] is the user-virt of the 22656-byte staging
+	 * buffer. */
+	user_tmpbuf = (void __user *)(uintptr_t)(*(u32 *)(iobuf + 4));
+	if (!user_tmpbuf)
+		return -EINVAL;
+
+	kbuf = kzalloc(IVE_KCF_STAGE_BYTES, GFP_KERNEL);
+	if (!kbuf)
+		return -ENOMEM;
+
+	if (osal_copy_from_user(kbuf, user_tmpbuf, IVE_KCF_STAGE_BYTES)) {
+		ret = -EFAULT;
+		goto out_kbuf;
+	}
+
+	src  = kbuf + 0;
+	n_train = *(u32 *)(kbuf + 22600);
+	n_track = *(u32 *)(kbuf + 22604);
+	ctrl = kbuf + IVE_KCF_CTRL_OFF;
+
+	tmpbuf_size = *(u32 *)(ctrl + 16);   /* stTmpBuf.u32Size */
+	if (tmpbuf_size < IVE_KCF_TMP_BUF_MIN) {
+		pr_info("ive_neo: KCF stTmpBuf.u32Size=%u < %u\n",
+			tmpbuf_size, IVE_KCF_TMP_BUF_MIN);
+		ret = -EINVAL;
+		goto out_kbuf;
+	}
+
+	total = n_train + n_track;
+	if (!total) {                         /* idle Process call: succeed */
+		*(u32 *)iobuf = 0;
+		ret = 0;
+		goto out_kbuf;
+	}
+	if (n_train > 64 || n_track > 64 || total > IVE_KCF_MAX_OBJS) {
+		pr_info("ive_neo: KCF n_train=%u n_track=%u (max %u/%u/%u)\n",
+			n_train, n_track, 64u, 64u, IVE_KCF_MAX_OBJS);
+		ret = -EINVAL;
+		goto out_kbuf;
+	}
+
+	nodes = kzalloc(total * 208, GFP_KERNEL);
+	if (!nodes) {
+		ret = -ENOMEM;
+		goto out_kbuf;
+	}
+
+	for (i = 0; i < n_train; i++) {
+		u8 *obj  = kbuf + IVE_KCF_TRAIN_OFF + i * IVE_KCF_OBJ_BYTES;
+		u8 *node = nodes + i * 208;
+		u8  pad  = obj[168];               /* u3q5Padding */
+		u8  hog_params[32] = { 0 };
+		ive_kcf_compute_hog_param((u32)pad, obj /* ROI at offset 0 */,
+					  hog_params);
+		ive_kcf_fill_node(node, src, obj, hog_params, ctrl, 0);
+	}
+	for (i = 0; i < n_track; i++) {
+		u8 *obj  = kbuf + IVE_KCF_TRACK_OFF + i * IVE_KCF_OBJ_BYTES;
+		u8 *node = nodes + (n_train + i) * 208;
+		u8  pad  = obj[168];
+		u8  hog_params[32] = { 0 };
+		ive_kcf_compute_hog_param((u32)pad, obj, hog_params);
+		ive_kcf_fill_node(node, src, obj, hog_params, ctrl, 1);
+	}
+
+	pr_info_once("ive_neo: KCF handler wired (HW op 0x34, train+track chain)\n");
+	ret = ive_submit_chain(nodes, total, iobuf);
+	kfree(nodes);
+out_kbuf:
+	kfree(kbuf);
+	return ret;
+}
 #endif
 
 #ifndef IVE_STANDALONE
@@ -3349,6 +3669,15 @@ static long ive_dispatch(unsigned int cmd, unsigned long arg)
 		 * u16Num 1..8; supports both Path A (U8C1, 25-B slots) and
 		 * Path B (YUV420SP/YUV422SP/U8C3_PLANAR, 49-B slots). */
 		return ive_op_resize_cv500(arg);
+#else
+		return 0;
+#endif
+	case 0xc0084633u:      /* HI_MPI_IVE_KCF_Process (cv500 op 0x34, 8-B arg + 22656-B staging) */
+#if defined(hi3516cv500)
+		/* HW dispatch — chained nodes (one per train + track obj),
+		 * staging buf copied in from userspace. Cap n_train+n_track
+		 * at 19 (chain MMZ task buffer is 4 KB = 19.69 × 208 B). */
+		return ive_op_kcf_cv500(arg);
 #else
 		return 0;
 #endif
