@@ -154,13 +154,13 @@ extern void disable_uart0_hdwr(void);
 extern void uart0_flush_rx_fifo(void);
 extern int  klad_unlock(void);
 
-/* Frontier still as stubs in stubs.c — the four largest functions, plus
- * leaves reached only by the newly reversed bodies below. */
+/* Forward declarations — these four are defined below in this file. */
 extern int  klad_load_keys(void);                  /* 0x4001470 */
 extern int  klad_verify(void);                     /* 0x4001f0c */
 extern int  klad_alt_verify(void);                 /* 0x4001bdc */
 extern int  initialize_emmc(void);                 /* 0x4003de0 */
 
+/* Stubs in stubs.c — the new frontier after this PR. */
 extern int  klad_check_a(void);                    /* 0x40018b8 */
 extern int  klad_check_b(void);                    /* 0x40016ac */
 
@@ -170,6 +170,9 @@ extern int  uart0_read(void);                      /* 0x4005170 */
 extern int  uart0_has_rx_data(void);               /* 0x40051a0 */
 extern int  uart0_wait_start_frame(void);          /* 0x4003410 */
 extern int  uart0_recv_payload(void);              /* 0x4003354 */
+extern int  uart0_proto_handshake(void);           /* 0x4003580 */
+extern int  uart0_recv_signed_image(void *dst, unsigned size);  /* 0x40034e0 */
+extern void uart0_send_status(int a, int b);      /* 0x4000320 */
 
 extern void wait_long_timer_0(unsigned ms);        /* 0x4002c84 */
 extern unsigned timer_get_value(void);             /* 0x4005234 */
@@ -186,6 +189,18 @@ extern int  media_finalize_b(void *dst, void *src, unsigned len);  /* 0x4004900 
 extern int  media_sub_a(void);                     /* 0x40077a8 */
 extern unsigned media_sub_b(void);                 /* 0x40077b8 */
 extern void media_sub_c(void);                     /* 0x400795c */
+
+extern int  klad_validate_header(void *ctx);       /* 0x4001150 */
+extern int  klad_init_check(int slot, int boot_pin);  /* 0x40010ac */
+extern int  klad_dispatch_sig(void *ctx, unsigned size, unsigned a, unsigned b, unsigned c);  /* 0x4000868 */
+extern int  klad_post_unlock(int slot, int boot_pin);  /* 0x4000568 */
+extern int  klad_finalize(void *ctx);              /* 0x400136c */
+extern int  klad_decode_chunk(unsigned a, unsigned b);  /* 0x4000358 */
+extern void configure_emmc_pins(void);             /* 0x4003d68 */
+extern int  send_command_emmc(void);               /* 0x4003c30 */
+extern int  klad_verify_rsa(void);                 /* 0x4005468 */
+extern int  klad_alt_dispatch(void *ctx);          /* 0x4001df8 */
+extern int  klad_alt_e88(void);                    /* 0x4001e88 */
 
 /*
  * Bootloader main flow at 0x04002704.
@@ -1145,4 +1160,443 @@ int klad_unlock(void)  /* 0x4001af4 */
     if (peristat & 0x20)
         return -1;
     return klad_check_a() != 0 ? -1 : 0;
+}
+
+/*
+ * ============================================================================
+ * The four giants — initialize_emmc, klad_load_keys, klad_verify, klad_alt_verify.
+ *
+ * These are structural reversals: the control-flow graph and identified
+ * MMIO sequences match the original mask-ROM, but several deep helpers
+ * (klad_validate_header, klad_dispatch_sig, send_command_emmc, etc.)
+ * remain as link-only stubs in stubs.c. They become the next reversal
+ * frontier. Names ending in _a/_b/_c or _sub are placeholders — the
+ * actual responsibilities (which RSA mode, which OTP key slot, which
+ * eMMC CMD index) await cross-reference with av300 vendor docs.
+ * ============================================================================
+ */
+
+/*
+ * initialize_emmc — bring up the eMMC host controller (Synopsys DW MMC
+ * at EMMC_START=0x10100000).
+ *
+ * Phases:
+ *   1. configure_emmc_pins (pinmux for CMD/CLK/DATA0..7).
+ *   2. CRG[0x148] |= 1 (assert eMMC reset); wait 1ms.
+ *   3. Inspect SYSCTRL.PERISTAT bits 9..8 (eMMC bus-width selector):
+ *        0b01 → set SYSCTRL[0x14c]=1 and skip 4-bit setup
+ *        0b10 → set SYSCTRL[0x14c]=1, OR clock mux bits, fall through
+ *        else → leave CRG bits as configured for default mode
+ *   4. CRG[0x148] |= 0xe (release reset + ungate variant clocks).
+ *   5. EMMC_CTRL = 7 (reset DMA+FIFO+INT); poll until those three bits clear.
+ *   6. Set MMC_RINTSTS=-1, MMC_TBBCNT (offset 0x8c) = -1, MMC_CTRL=16
+ *      (PIO mode), then dispatch on PERISTAT bits 9..8 again to select
+ *      either a 4-bit (CTYPE), 8-bit, or default-bus init sequence
+ *      via three send_command_emmc rounds.
+ *   7. CTYPE high byte 0xfff00 (drive strength?), CMD setup, CARD_RSTN
+ *      reset cycle (0 → wait 100ms → 1 → wait 1000ms), BLKSIZ=0x200,
+ *      BYTCNT=0x100000.
+ *   8. UHS_REG_EXT clock-divider setup: mask out 0xff00000 + 0xf0000,
+ *      OR in 0x7f0000 (clock div + phase), set CARDTHRCTL high.
+ *   9. Mode-dependent CRG fixup for HS200/HS400-class buses.
+ *   10. get_wait_ticks(1000) — compute 1-second timeout in ticks.
+ *   11. timer_reset_counter; spin on RINTSTS bit 9 (CMD_DONE / DTO)
+ *       up to timeout; on timeout return -1.
+ *   12. Clear RINTSTS, return success (last good CMD index value).
+ *
+ * Returns 0 on success, -1 on timeout.
+ */
+int initialize_emmc(void)  /* 0x4003de0 */
+{
+    volatile u32 *emmc   = (volatile u32 *)EMMC_START;
+    volatile u32 *crg    = (volatile u32 *)CRG_START;
+    volatile u32 *sysctrl = (volatile u32 *)SYSCTRL_START;
+    u32 crg148, peristat, mode_sel;
+    u32 ctype_val;
+    unsigned ticks;
+    int rc;
+
+    configure_emmc_pins();
+
+    crg148 = crg[0x148 / 4];
+    crg[0x148 / 4] = crg148 | 1;
+    wait_long_timer_0(1000);
+
+    peristat = sysctrl[PERISTAT / 4];
+    mode_sel = (peristat >> 8) & 3;
+    crg148 &= ~0xdu;
+
+    if (mode_sel == 1) {
+        crg148 |= 0xe;
+    } else if (mode_sel == 2) {
+        sysctrl[0x14c / 4] = 1;
+        crg148 |= 0xau;
+        crg[0x148 / 4] = crg148;
+    } else {
+        sysctrl[0x14c / 4] = 1;
+        return -1;
+    }
+    crg[0x148 / 4] = crg148;
+
+    emmc[MMC_CTRL / 4] = 7;
+    while (emmc[MMC_CTRL / 4] & 7)
+        ;
+    emmc[0x24 / 4]      = 0;          /* MMC_CMDARG cleanup */
+    emmc[MMC_RINTSTS / 4] = 0xFFFFFFFFu;
+    emmc[0x8c / 4]      = 0xFFFFFFFFu;
+    emmc[MMC_CTRL / 4]  = 16;          /* CTRL: int-mask off, FIFO ready */
+
+    mode_sel = (sysctrl[PERISTAT / 4] >> 8) & 3;
+    if (mode_sel == 1) {
+        emmc[0x10 / 4] = 1;             /* MMC_CLKENA = 1 — enable clock */
+        if (send_command_emmc() != 0)
+            return -1;
+        ctype_val = 32;
+    } else if (mode_sel == 2) {
+        emmc[0x10 / 4] = 0;
+        if (send_command_emmc() != 0)
+            return -1;
+        emmc[0x8 / 4]  = 0;             /* CLKDIV */
+        emmc[0xc / 4]  = 0;             /* reserved */
+        if (send_command_emmc() != 0)
+            return -1;
+        emmc[0x10 / 4] = 1;
+        if ((rc = send_command_emmc()) != 0)
+            return -1;
+        ctype_val = (u32)rc;
+    } else {
+        sysctrl[0x14c / 4] = 1;
+        emmc[0x14 / 4] = 0xff00u | (emmc[0x14 / 4] & 0xff);  /* CTYPE update */
+        emmc[0x78 / 4] = 0;
+        wait_long_timer_0(100);
+        emmc[0x78 / 4] = 1;
+        wait_long_timer_0(1000);
+        emmc[0x1c / 4] = 0x200u;        /* BLKSIZ */
+        emmc[0x20 / 4] = 0x100000u;     /* BYTCNT */
+        ctype_val = 5;
+    }
+
+    {
+        u32 reg = emmc[0x4c / 4];
+        reg &= ~0xff00000u;
+        reg &= ~0xf0000u;
+        reg |=  0x7f0000u;
+        emmc[0x4c / 4] = reg;
+    }
+    emmc[0x100 / 4] = ctype_val | (0x200u << 16);
+    emmc[0x18 / 4]  = 1;
+    emmc[MMC_CMD / 4] = 0xa1000000u | (0x200u << 16) | ctype_val;
+
+    /* HS200/HS400-class bus tweak when PERISTAT.[9:8] == 1 */
+    {
+        u32 reg108 = emmc[0x108 / 4];
+        u32 sel = (sysctrl[PERISTAT / 4] >> 8) & 3;
+        reg108 &= ~0x3840000u;
+        reg108 &= ~0x30000u;
+        if (sel == 1) {
+            reg108 |= 0x2000000u;
+        } else if (sel == 2) {
+            sysctrl[0x14c / 4] = 1;
+            reg108 |= 0x2010000u;
+        }
+        emmc[0x108 / 4] = reg108;
+    }
+
+    ticks = get_wait_ticks(1000) * 1000;
+    timer_reset_counter();
+
+    {
+        u32 stat = 0;
+        for (;;) {
+            stat = emmc[MMC_RINTSTS / 4];
+            if (stat & 0x200u)
+                break;
+            if (timer_get_value() >= ticks) {
+                emmc[MMC_RINTSTS / 4] = 0xFFFFFFFFu;
+                emmc[MMC_CMD / 4]     = 0x84000000u;
+                return -1;
+            }
+        }
+        emmc[MMC_RINTSTS / 4] = 0xFFFFFFFFu;
+        return 0;
+    }
+}
+
+/*
+ * klad_load_keys — UART secure-load entry.
+ *
+ * Called from bootrom_secure_check when SYSSTAT bit 5 indicates the
+ * fastboot/recovery signed-image path. Sequence:
+ *   1. uart0_wait_start_frame; if no frame → return -1.
+ *   2. Snapshot SYSSTAT to derive boot_pin (bit 4).
+ *   3. uart0_proto_handshake; uart0_recv_signed_image into SRAM[0x500].
+ *   4. If recv returned 0 → use "fafe" tag (UART path) and follow flash
+ *      pre-stage. If non-zero → set "DOWN"/"-1" magics in SYSCTRL[0x13c/
+ *      0x140], optionally re-init eMMC and re-memcpy from EMMC.
+ *   5. alloc_chunk(48); parse_image_header → klad_validate_header.
+ *   6. klad_dispatch_sig with arg quartet from header — runs RSA/SHA.
+ *   7. invoke_foreign_code into loaded region.
+ *   8. Second memset/zeroing pass; PERISTAT bit 1 dispatches between
+ *      klad_post_unlock and klad_decode_chunk. Then klad_finalize and
+ *      a second klad_dispatch_sig over the post-decoded region.
+ *   9. On any failure send uart status (49, 0x3{0..4}) and clean up
+ *      the alloc'd chunk.
+ *
+ * Returns 0 on success, -1 on failure.
+ */
+int klad_load_keys(void)  /* 0x4001470 */
+{
+    volatile u32 *sysctrl = (volatile u32 *)SYSCTRL_START;
+    u32 sysstat, boot_pin;
+    unsigned src_tag;
+    int recv_result;
+    void *ctx;
+    int rc;
+
+    if (uart0_wait_start_frame() == 0)
+        return -1;
+    sysstat = sysctrl[SYSSTAT / 4];
+    boot_pin = (sysstat >> 4) & 1;
+
+    uart0_proto_handshake();
+    recv_result = uart0_recv_signed_image((void *)(SDRAM_START + SRAM_LOAD_TARGET_OFF), 0x6000);
+
+    if (recv_result != 0) {
+        src_tag = 0x73616665u;   /* "safe" — UART path */
+        sysctrl[0x13c / 4] = 0x444f574eu;   /* "DOWN" */
+        sysctrl[0x140 / 4] = 0xFFFFFFFFu;
+        if (boot_pin == 1) {
+            initialize_emmc();
+            memcpy_emmc((void *)(SDRAM_START + SRAM_LOAD_TARGET_OFF), 0, 0x6000);
+            src_tag = 0x73616666u;          /* "saff" — eMMC re-read */
+        } else {
+            memcpy((void *)(SDRAM_START + SRAM_LOAD_TARGET_OFF),
+                   (const void *)FLASH_START, 0x6000);
+            src_tag = 0x73616666u;          /* "saff" — flash re-read */
+        }
+    } else {
+        src_tag = 0x73616665u;
+    }
+
+    ctx = (void *)alloc_chunk(48);
+    if (ctx == (void *)0) {
+        uart0_send_status(0, 0x31);
+        return -1;
+    }
+
+    if (parse_image_header(ctx) != 0) {
+        uart0_send_status(0x30, 0x31);
+        free_chunk((unsigned)ctx);
+        return -1;
+    }
+
+    if (klad_validate_header(ctx) != 0) {
+        uart0_send_status(0x32, 0x31);
+        free_chunk((unsigned)ctx);
+        return -1;
+    }
+
+    {
+        u32 *ctx32 = (u32 *)ctx;
+        u32 size_arg = ctx32[6];
+        u32 src      = ctx32[7];
+        u32 mid      = ctx32[8];
+        u32 sig      = ctx32[10];
+
+        rc = klad_dispatch_sig(ctx, size_arg, mid, src, sig);
+        if (rc != 0) {
+            uart0_send_status(0x33, 0x31);
+            klad_init_check(src_tag, boot_pin);
+            free_chunk((unsigned)ctx);
+            return -1;
+        }
+
+        invoke_foreign_code((void *)src);
+        memset((void *)src, 0, mid);
+
+        if (sysctrl[PERISTAT / 4] & 2) {
+            /* alt key-decode path */
+            klad_decode_chunk(0, 0);
+            if (klad_dispatch_sig(ctx, size_arg, mid, src, sig) == 0)
+                goto success_done;
+        }
+
+        rc = klad_post_unlock(src_tag, boot_pin);
+        if (rc != 0) {
+            /* compute DDR target = 0x81000000 + src - mid - sig */
+            u32 *c2 = (u32 *)ctx;
+            u32 src2 = c2[0];        /* re-read */
+            u32 mid2 = c2[1];
+            u32 sig2 = c2[10];
+            u32 dst  = 0x81000000u + src2 - mid2 - sig2;
+            c2[11] = dst;
+            klad_finalize(ctx);
+            rc = klad_dispatch_sig(ctx, c2[11], mid2, src2, sig);
+            klad_init_check(src_tag, boot_pin);
+            if (rc != 0) {
+                uart0_send_status(0x34, 0x31);
+                free_chunk((unsigned)ctx);
+                return -1;
+            }
+            *(volatile u32 *)SDRAM_START = c2[11];
+        }
+    }
+
+success_done:
+    free_chunk((unsigned)ctx);
+    return 0;
+}
+
+/*
+ * klad_verify — secure-boot path for the (sysstat & 0x10) case.
+ *
+ * Identical shape to klad_load_keys but:
+ *   - sources the signed image from eMMC (initialize_emmc + memcpy_emmc)
+ *     instead of UART
+ *   - guards entry on SYSCTRL[0x14] matching the magic 0x42494945
+ *     ("EIIB" — likely "Image-Boot" mode tag from OTP)
+ *   - performs the same parse_image_header → klad_validate_header →
+ *     klad_dispatch_sig → invoke_foreign_code chain
+ *   - on a PERISTAT.bit1 retry decodes via klad_verify_rsa instead
+ *     of klad_decode_chunk
+ */
+int klad_verify(void)  /* 0x4001f0c */
+{
+    volatile u32 *sysctrl = (volatile u32 *)SYSCTRL_START;
+    volatile u32 *load    = (volatile u32 *)(SDRAM_START + SRAM_LOAD_TARGET_OFF);
+    u32 magic = sysctrl[0x14 / 4];
+    u32 sysstat, boot_pin;
+    void *ctx;
+    int rc;
+
+    initialize_emmc();
+
+    if (((magic >> 4) & 0xFFFFFFu) == 0x424945u) {
+        /* Magic mismatch with the OTP boot-tag — bail out without
+         * touching the chunk allocator. */
+        memcpy_emmc((void *)(SDRAM_START + SRAM_LOAD_TARGET_OFF), 0, 0x6000);
+        {
+            u32 r0 = load[0], r3 = load[1], r1 = load[2], r2 = load[3];
+            int hit = (r3 == r1 && r0 == r3);
+            if (r1 != r2)
+                hit = 0;
+            (void)hit;
+            return 0;
+        }
+    }
+
+    sysstat = sysctrl[SYSSTAT / 4];
+    boot_pin = (sysstat >> 4) & 1;
+    ctx = (void *)alloc_chunk(48);
+    if (ctx == 0)
+        return -1;
+
+    if (parse_image_header(ctx) != 0) {
+        free_chunk((unsigned)ctx);
+        return -1;
+    }
+    if (klad_validate_header(ctx) != 0) {
+        free_chunk((unsigned)ctx);
+        return -1;
+    }
+
+    {
+        u32 *c = (u32 *)ctx;
+        rc = klad_dispatch_sig(ctx, c[6], c[8], c[7], c[10]);
+        if (rc != 0) {
+            free_chunk((unsigned)ctx);
+            return -1;
+        }
+        invoke_foreign_code((void *)c[7]);
+
+        if (sysctrl[PERISTAT / 4] & 2) {
+            klad_verify_rsa();
+            if (klad_dispatch_sig(ctx, c[6], c[8], c[7], c[10]) == 0)
+                goto out;
+        }
+
+        rc = klad_post_unlock(0x73616666u, boot_pin);
+        if (rc != 0) {
+            free_chunk((unsigned)ctx);
+            return -1;
+        }
+    }
+
+out:
+    free_chunk((unsigned)ctx);
+    return 0;
+}
+
+/*
+ * klad_alt_verify — secure-boot path for the !(sysstat & 0x10) case.
+ *
+ * Same magic guard against SYSCTRL[0x14] as klad_verify, then sources
+ * the signed image from FLASH instead of eMMC, and runs the same
+ * header-validate / sig-dispatch chain. Final disposition routes
+ * through klad_alt_dispatch (0x4001df8) when the early flash 4-word
+ * check passes.
+ */
+int klad_alt_verify(void)  /* 0x4001bdc */
+{
+    volatile u32 *sysctrl = (volatile u32 *)SYSCTRL_START;
+    u32 magic = sysctrl[0x14 / 4];
+    u32 r0, r3, r2, r1;
+    int hit;
+    void *ctx;
+    int rc;
+
+    if (((magic >> 4) & 0xFFFFFFu) == 0x424945u)
+        return klad_alt_dispatch(0);
+
+    /* Flash four-word cross-check at FLASH_START. */
+    r0 = *(volatile u32 *)FLASH_START;
+    r3 = *(volatile u32 *)(FLASH_START + 4);
+    r2 = *(volatile u32 *)(FLASH_START + 8);
+    r1 = *(volatile u32 *)(FLASH_START + 0xc);
+    hit = (r3 == r2 && r0 == r3) ? 1 : 0;
+    if (r2 != r1)
+        hit = 0;
+    if (hit)
+        return klad_alt_e88();
+
+    memcpy((void *)(SDRAM_START + SRAM_LOAD_TARGET_OFF),
+           (const void *)FLASH_START, 0x6000);
+
+    ctx = (void *)alloc_chunk(48);
+    if (ctx == 0)
+        return -1;
+
+    if (parse_image_header(ctx) != 0) {
+        free_chunk((unsigned)ctx);
+        return -1;
+    }
+    if (klad_validate_header(ctx) != 0) {
+        free_chunk((unsigned)ctx);
+        return -1;
+    }
+
+    {
+        u32 *c = (u32 *)ctx;
+        rc = klad_dispatch_sig(ctx, c[6], c[8], c[7], c[10]);
+        if (rc != 0) {
+            free_chunk((unsigned)ctx);
+            return -1;
+        }
+        invoke_foreign_code((void *)c[7]);
+
+        if (sysctrl[PERISTAT / 4] & 2) {
+            klad_verify_rsa();
+            if (klad_dispatch_sig(ctx, c[6], c[8], c[7], c[10]) == 0)
+                goto out;
+        }
+        rc = klad_post_unlock(0x73616667u /* "safg" */, 0);
+        if (rc != 0) {
+            free_chunk((unsigned)ctx);
+            return -1;
+        }
+    }
+
+out:
+    free_chunk((unsigned)ctx);
+    return 0;
 }

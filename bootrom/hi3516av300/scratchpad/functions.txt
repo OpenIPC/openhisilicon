@@ -49,6 +49,10 @@ func_28  0x04005670  media_init_alt                         poll media_sub_a unt
 func_29  0x040056c0  media_init_alt_finalize                wait for SRAM[0x18c]==1 or ==4, invoke loaded fn, check SYSCTRL[0x150] for "CMEM" magic
 func_2a  0x04002a80  organize_memory_chunks                 build chunk-allocator descriptor table from bootrom 0x7e5c (size,count) array
 func_2b  0x04001af4  klad_unlock                            dispatches on PERISTAT bits 4/5 between klad_check_a and klad_check_b
+func_2c  0x04003de0  initialize_emmc                        DW MMC controller bring-up: pin cfg, CRG reset, 3-mode dispatch (PERISTAT bits 9..8), CMD/CTYPE setup, 1-sec timeout poll on RINTSTS.bit9
+func_2d  0x04001470  klad_load_keys                         UART secure-load entry: uart0_wait_start_frame → uart0_recv_signed_image → alloc 48B chunk → parse_image_header → klad_validate_header → klad_dispatch_sig → invoke_foreign_code → optional klad_decode_chunk + re-dispatch; status codes via uart0_send_status
+func_2e  0x04001f0c  klad_verify                            (SYSSTAT.bit4) secure path: initialize_emmc + memcpy_emmc → same header+sig+verify chain → on PERISTAT.bit1 retry via klad_verify_rsa
+func_2f  0x04001bdc  klad_alt_verify                        !(SYSSTAT.bit4) secure path: magic guard SYSCTRL[0x14] → klad_alt_dispatch on match; else flash 4-word check → klad_alt_e88 on hit; else same header+sig+verify chain from FLASH_START
 
 Reset trampoline (covered by re/start.S, not in the func_N enumeration):
 
@@ -63,15 +67,29 @@ Reset trampoline (covered by re/start.S, not in the func_N enumeration):
 
 Transitive frontier (stubbed in re/stubs.c — bodies await later PRs):
 
-Large security-block functions deferred:
-  0x4001470  klad_load_keys           SYSSTAT.bit5 path entry (143 instructions)
-  0x4001f0c  klad_verify              (sysstat & 0x10) path (222 instructions)
-  0x4001bdc  klad_alt_verify          !(sysstat & 0x10) path (204 instructions)
-  0x4003de0  initialize_emmc          eMMC controller bring-up (160 instructions)
-
 Small helpers used by the reversed functions:
   0x40016ac  klad_check_b             called from klad_unlock when peristat.bit4 clear
   0x40018b8  klad_check_a             called from klad_unlock when peristat.bit4 set
+
+KLAD/RSA crypto entry points (called from klad_load_keys/verify/alt_verify):
+  0x4001150  klad_validate_header     header sanity check before sig dispatch
+  0x40010ac  klad_init_check          (slot, boot_pin) — gate before retry path
+  0x4000868  klad_dispatch_sig        the actual RSA/SHA dispatch — five-arg call
+  0x4000568  klad_post_unlock         retry-path entry when dispatch_sig fails
+  0x400136c  klad_finalize            wrap-up after retry, recomputes DDR offset
+  0x4000358  klad_decode_chunk        chunk-decoded path for PERISTAT bit 1
+  0x4005468  klad_verify_rsa          PERISTAT bit 1 path in klad_verify
+  0x4001df8  klad_alt_dispatch        SYSCTRL[0x14] magic-match path in klad_alt_verify
+  0x4001e88  klad_alt_e88             flash-magic-hit path in klad_alt_verify
+
+UART secure-load helpers:
+  0x4003580  uart0_proto_handshake    extra protocol step between start-frame and payload
+  0x40034e0  uart0_recv_signed_image  receives signed image into buffer over UART
+  0x4000320  uart0_send_status(a,b)   diagnostic status TX
+
+eMMC command primitives:
+  0x4003d68  configure_emmc_pins      pinmux for eMMC CMD/CLK/DATA pads
+  0x4003c30  send_command_emmc        CMD register write + completion poll
   0x4002b78  alloc_chunk(size)        chunk-allocator allocate
   0x4002c1c  free_chunk(addr)         chunk-allocator free
   0x4002c84  wait_long_timer_0(ms)    millisecond delay variant
