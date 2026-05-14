@@ -17,18 +17,38 @@ func_08  0x04002d04  strncmp(s1, s2, n)                     two-pointer compare,
 func_09  0x04002e00  strcmp(s1, s2)                         two-pointer compare until first mismatch or NUL
 func_0a  0x04000140  configure_soc_clocks                   polls PLL_LOCK_STAT for APLL+DPLL+EPLL (mask 0xb, timeout 5001 iters), writes 0x592 into SOC_CONFIG, NOP-settles 10 cycles
 func_0b  0x040001b0  reset_soc_clocks                       inverse of configure_soc_clocks — clears SOC_CONFIG bits 0-10 (bit 9 preserved), 10-NOP settle
-func_0c  0x04002704  main                                   bootloader main flow — 4 boot paths dispatched on SYSSTAT bits 4/5 + PERISTAT bit 0; converges on success (disable_ic + maybe reset_soc_clocks + timer_stop) or erase+SYSRES soft-reset
-func_0d  0x0400105c  is_update_mode                         polls GPIO0 pin 0 — recovery button held LOW for ~20s (two timer_wait_seconds(10) gaps) returns 1
-func_0e  0x04001128  initial_memory_setup                   enable I-cache, copy 12-byte record from bootrom 0x7f44 to SRAM 0x04010004, then organize_memory_chunks
-func_0f  0x04002284  bootrom_secure_check                   ungate KLAD/RSA/TRNG/SPACC via CRG[0x1a0], kick TRNG, dispatch among klad_{load_keys,verify,alt_verify,unlock} based on SYSSTAT bits 4/5 + recovery button
-func_10  0x04002368  fastboot_update                        burn_bootloader over UART; on success consult SYSSTAT.bit4 for eMMC reset path
-func_11  0x040023c4  media_update                           PERISTAT bits 4/5 dispatch between fastboot-media (init_a/b/c + program_a + finalize_a + "ziju" magic) and alt path (init_alt + set_boot_target_addr)
-func_12  0x0400249c  config_use_flash                       flash boot — memcpy 0x6000 from FLASH_START to SRAM, parse header (magic "MBSB"), relocate second-stage into DDR+0x01000000, four-word cross-check
-func_13  0x040025d4  bootrom_alt_media                      eMMC alt boot — initialize_emmc + memcpy_emmc into SRAM, parse same "MBSB" header, relocate into DDR, four-word cross-check
-func_14  0x040051bc  timer_start                            ungate timer clock via SC_CTRL bit 16, TIMER0_CONTROL = 0xc2
+func_0c  0x04002704  main                                   bootloader main flow — 4 boot paths dispatched on SYSSTAT bits 4/5 + PERISTAT bit 0
+func_0d  0x0400105c  is_update_mode                         polls GPIO0 pin 0 — recovery button held LOW for ~20s returns 1
+func_0e  0x04001128  initial_memory_setup                   enable I-cache, copy 12 B from bootrom 0x7f44 to SRAM 0x4010004, then organize_memory_chunks
+func_0f  0x04002284  bootrom_secure_check                   ungate KLAD/RSA/TRNG/SPACC, dispatch among klad_{load_keys,verify,alt_verify,unlock}
+func_10  0x04002368  fastboot_update                        burn_bootloader over UART; eMMC reset path on SYSSTAT.bit4
+func_11  0x040023c4  media_update                           PERISTAT bit 4/5 selects fastboot-media vs alt-media path
+func_12  0x0400249c  config_use_flash                       flash boot — memcpy from FLASH_START, parse "MBSB" header, relocate into DDR
+func_13  0x040025d4  bootrom_alt_media                      eMMC alt boot — initialize_emmc + memcpy_emmc + parse header
+func_14  0x040051bc  timer_start                            ungate SC_CTRL bit 16, TIMER0_CONTROL = 0xc2
 func_15  0x040051e8  timer_stop                             TIMER0_CONTROL = 0
-func_16  0x040051f8  timer_reset_counter                    LOAD = 0xFFFFFFFF, restart timer, snapshot value into SRAM[0x180]
-func_17  0x04002cb4  timer_wait_seconds(n)                  loops n × wait_timer_0(1000); returns immediately if n=0
+func_16  0x040051f8  timer_reset_counter                    LOAD = 0xFFFFFFFF, restart timer, snapshot to SRAM[0x180]
+func_17  0x04002cb4  timer_wait_seconds(n)                  loops n × wait_timer_0(1000)
+func_18  0x04003318  initialize_uart0_hdwr                  set UART0 pinmux (IOCFG1+0x10/0x14), tail-call initialize_uart0
+func_19  0x04003334  disable_uart0_hdwr                     tail-call disable_uart0
+func_1a  0x04003338  uart0_flush_rx_fifo                    while (has_rx_data) uart0_read()
+func_1b  0x040034ac  burn_bootloader                        wait UART start-frame, set SYSCTRL[0x154]=1, recv payload
+func_1c  0x04004060  reset_emmc                             EMMC controller reset cycle via MMC_CARD_RSTN + MMC_CTRL=7
+func_1d  0x0400445c  close_sdio0                            free SDIO0 chunk, MMC_CTRL=7 + MMC_PWREN=0
+func_1e  0x040040a0  memcpy_emmc(dst, off, len)             drain MMC_DATA FIFO into dst until len words consumed
+func_1f  0x040052b4  wait_timer_0(ticks)                    busy-spin on TIMER0.VALUE until target reached
+func_20  0x04005348  invoke_foreign_code(fn)                blx fn, then set SRAM[0x188]=1 (stage-2 loaded flag)
+func_21  0x040001dc  parse_image_header(dst)                validate header at SRAM 0x500: magic, mode, four-word descriptor chain
+func_22  0x040004b8  set_boot_target_addr(boot_pin)         boot_pin==1: init eMMC + memcpy_emmc → SRAM, else flash. Then four-word cross-check.
+func_23  0x0400414c  media_init_a                           pinmux IOCFG0[0x1c..0x24] + IOCFG0[0x28..0x3c] for SDIO0 pads (vendor-specific)
+func_24  0x040041c0  media_init_b                           CRG.SDIO0_CONFIG reset cycle: assert + 1ms wait + deassert with new clock select
+func_25  0x040041f0  media_init_c                           polls SDIO0.PWREN three times; returns 0 if zero, -1 otherwise
+func_26  0x040046c8  media_program_a                        alloc 28-byte chunk in SRAM[0x168], populate context, call media_program_b
+func_27  0x04005384  media_finalize_a                       media_finalize_b(SRAM→target, 0x6000) → invoke_foreign_code, then again at DDR+0x80000
+func_28  0x04005670  media_init_alt                         poll media_sub_a until media_sub_b ticks elapsed, return 0 (no error)
+func_29  0x040056c0  media_init_alt_finalize                wait for SRAM[0x18c]==1 or ==4, invoke loaded fn, check SYSCTRL[0x150] for "CMEM" magic
+func_2a  0x04002a80  organize_memory_chunks                 build chunk-allocator descriptor table from bootrom 0x7e5c (size,count) array
+func_2b  0x04001af4  klad_unlock                            dispatches on PERISTAT bits 4/5 between klad_check_a and klad_check_b
 
 Reset trampoline (covered by re/start.S, not in the func_N enumeration):
 
@@ -37,37 +57,37 @@ Reset trampoline (covered by re/start.S, not in the func_N enumeration):
   0x0400003c  _magic                  .word 0x12345678
   0x04000040  clear_remap_rom_ptr     0x0400009c
   0x04000044  clear_remap_ptr         0x04016500
-  0x04000048  _start                  CPSR setup → disable_ctrl_features →
-                                      stack → configure_soc_clocks →
-                                      zero SDRAM[0..0x268] → main → copy
-                                      clear_remap thunk to SDRAM → jump
-  0x0400009c  clear_remap thunk       sets SC_CTRL.bit8 to release boot
-                                      remap, jumps to *(SDRAM_START)
+  0x04000048  _start                  CPSR setup → disable_ctrl_features → stack → configure_soc_clocks → zero SDRAM[0..0x268] → main → copy clear_remap thunk → jump
+  0x0400009c  clear_remap thunk       sets SC_CTRL.bit8, jumps to *(SDRAM_START)
   0x04000100  _dead_loop              triggers SC_SYSRES soft-reset, spins
 
-Transitive frontier (stubbed in re/stubs.c — addresses are valid `bl` targets in the av300 mask-ROM, bodies await reverse engineering):
+Transitive frontier (stubbed in re/stubs.c — bodies await later PRs):
 
-  0x40001dc  parse_image_header(dst)            extracts header from buffer at sp/r0, returns 0 on success
-  0x40004b8  set_boot_target_addr(boot_pin)     resolves load-destination from SYSSTAT.bit4 selector
-  0x4001470  klad_load_keys                     SYSSTAT.bit5 path entry; KLAD key fetch (placeholder name)
-  0x4001af4  klad_unlock                        called when klad_verify returns -2 OR is_update_mode true (placeholder name)
-  0x4001bdc  klad_alt_verify                    !(sysstat & 0x10) path of bootrom_secure_check (placeholder name)
-  0x4001f0c  klad_verify                        (sysstat & 0x10) path of bootrom_secure_check (placeholder name)
-  0x4002a80  organize_memory_chunks             chunk-allocator setup tail-called by initial_memory_setup
-  0x4003318  initialize_uart0_hdwr              UART0 bring-up before secure dispatch
-  0x4003334  disable_uart0_hdwr                 UART0 tear-down after secure dispatch
-  0x4003338  uart0_flush_rx_fifo                drains UART0 RX FIFO before reads
-  0x40034ac  burn_bootloader                    UART-fastboot loader entry
-  0x4003de0  initialize_emmc                    eMMC controller bring-up
-  0x4004060  reset_emmc                         eMMC controller reset
-  0x40040a0  memcpy_emmc(dst, off, len)         block read from eMMC at offset → memory
-  0x400414c  media_init_a                       fastboot-media init step 1
-  0x40041c0  media_init_b                       fastboot-media init step 2
-  0x40041f0  media_init_c                       fastboot-media init step 3 (returns int)
-  0x400445c  close_sdio0                        SDIO0 teardown after media_finalize_a
-  0x40046c8  media_program_a                    fastboot-media program / write step
-  0x4005348  invoke_foreign_code(fn)            trampoline that calls an arbitrary loaded function
-  0x4005384  media_finalize_a                   fastboot-media finalize
-  0x4005670  media_init_alt                     PERISTAT bit 4 / alt-media init
-  0x40056c0  media_init_alt_finalize            alt-media finalize
-  0x40052b4  wait_timer_0(ticks)                busy-wait on TIMER0 for `ticks` ticks
+Large security-block functions deferred:
+  0x4001470  klad_load_keys           SYSSTAT.bit5 path entry (143 instructions)
+  0x4001f0c  klad_verify              (sysstat & 0x10) path (222 instructions)
+  0x4001bdc  klad_alt_verify          !(sysstat & 0x10) path (204 instructions)
+  0x4003de0  initialize_emmc          eMMC controller bring-up (160 instructions)
+
+Small helpers used by the reversed functions:
+  0x40016ac  klad_check_b             called from klad_unlock when peristat.bit4 clear
+  0x40018b8  klad_check_a             called from klad_unlock when peristat.bit4 set
+  0x4002b78  alloc_chunk(size)        chunk-allocator allocate
+  0x4002c1c  free_chunk(addr)         chunk-allocator free
+  0x4002c84  wait_long_timer_0(ms)    millisecond delay variant
+  0x4002d74  nop_2d74                 vendor "no-op marker" function (single bx lr)
+  0x400422c  media_init_d             called from media_program_a entry
+  0x4004900  media_finalize_b         block-copy + checksum helper
+  0x4004d8c  media_program_b          state-machine for media program transfer
+  0x40050c0  initialize_uart0         UART0 PL011 bring-up
+  0x400512c  disable_uart0            UART0 PL011 teardown
+  0x4005170  uart0_read               single-byte UART0 read
+  0x40051a0  uart0_has_rx_data        UART0 RX FIFO non-empty check
+  0x4003354  uart0_recv_payload       UART payload reception state machine
+  0x4003410  uart0_wait_start_frame   UART fastboot protocol start-of-frame detect
+  0x4005234  timer_get_value          read TIMER0.VALUE delta from SRAM snapshot
+  0x4005244  get_wait_ticks(ms)       convert ms to timer ticks
+  0x400524c  update_timer_0_value     refresh SRAM TIMER0 state from hardware
+  0x40077a8  media_sub_a              alt-media protocol step (poll)
+  0x40077b8  media_sub_b              alt-media protocol setup (timeout calc)
+  0x400795c  media_sub_c              alt-media timeout fallback

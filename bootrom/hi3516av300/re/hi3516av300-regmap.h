@@ -3,6 +3,7 @@
 
 #include "regmap-crg.h"
 #include "regmap-gpio.h"
+#include "regmap-mmc.h"
 #include "regmap-sysctrl.h"
 #include "regmap-timer.h"
 
@@ -26,10 +27,14 @@
 #define SRAM_INIT_RECORD_OFF    0x0004  /* 12-byte record copied from bootrom 0x7f44 */
 
 #define TRNG_START      0x10090000
+#define SDIO0_START     0x100f0000
+#define EMMC_START      0x10100000
 #define IO_CTRL0_START  0x10ff0000
+#define IO_CTRL1_START  0x111f0000
 #define TIMER0_START    0x12000000
 #define CRG_START       0x12010000
 #define SYSCTRL_START   0x12020000
+#define MISC_START      0x12030000
 #define GPIO0_START     0x120d0000
 
 #define BOOTROM_INIT_REC_SRC    (BOOTROM_START + 0x7f44)

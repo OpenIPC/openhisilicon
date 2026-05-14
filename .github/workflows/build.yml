@@ -830,6 +830,6 @@ jobs:
           make -C bootrom/hi3516av300 build
           test -f bootrom/hi3516av300/re.elf
           arm-none-eabi-objdump -t bootrom/hi3516av300/re.elf | \
-              grep -E ' (_entry|_start|_dead_loop|memcpy32|memset|memcpy|strlen|strncmp|strcmp|enable_instruction_cache|disable_instruction_cache|invalidate_instruction_pipeline|disable_ctrl_features|configure_soc_clocks|reset_soc_clocks|main|initial_memory_setup|timer_start|timer_stop|timer_reset_counter|timer_wait_seconds|is_update_mode|fastboot_update|media_update|config_use_flash|bootrom_secure_check|bootrom_alt_media)$' | \
+              grep -E ' (_entry|_start|_dead_loop|memcpy32|memset|memcpy|strlen|strncmp|strcmp|enable_instruction_cache|disable_instruction_cache|invalidate_instruction_pipeline|disable_ctrl_features|configure_soc_clocks|reset_soc_clocks|main|initial_memory_setup|timer_start|timer_stop|timer_reset_counter|timer_wait_seconds|is_update_mode|fastboot_update|media_update|config_use_flash|bootrom_secure_check|bootrom_alt_media|initialize_uart0_hdwr|disable_uart0_hdwr|uart0_flush_rx_fifo|burn_bootloader|reset_emmc|close_sdio0|memcpy_emmc|wait_timer_0|invoke_foreign_code|parse_image_header|set_boot_target_addr|media_init_a|media_init_b|media_init_c|media_init_alt|media_init_alt_finalize|media_program_a|media_finalize_a|organize_memory_chunks|klad_unlock)$' | \
               sort
           echo "ok: re.elf links and every expected symbol is present"
