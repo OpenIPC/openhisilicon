@@ -1734,10 +1734,24 @@ static long ive_op_hist(unsigned long arg)
 
 /* ---- EqualizeHist (op=13 reused, ioctl 0xc0b8462a) ----
  *
- * Vendor cv500 calls `ive_fill_hist_task` to set up the standard Hist
- * node, then overrides node[7]=0x61 (EqualizeHist mode marker) and
- * adds the dst-related fields for the equalized output image. Decoded
- * from `ive_ioctl` dispatcher @0x68dc-0x6938.
+ * Two phases:
+ *
+ *   Phase 1 (HW): submit a standard Hist task (op=13) with node[7]=0x61
+ *                 (EqualizeHist mode marker) + dst.phys/stride. HW
+ *                 writes 256 × u32 histogram bins to stMem[0..0x400).
+ *
+ *   Phase 2 (CPU): compute the standard histogram-equalization LUT
+ *                  (CDF normalization) from the bins, then apply it
+ *                  pixel-by-pixel to dst.
+ *
+ * Vendor cv500 instead chains a second HW task (DMA-with-LUT remap)
+ * filled by `ive_fill_dma_task` @0x76d0; HW does the LUT remap at the
+ * IVE block instead of the CPU. We do it on the CPU because (a) the
+ * vendor's exact DMA-task field map for mode=1 (LUT remap) is non-
+ * trivial to replicate byte-for-byte, and (b) for typical EqualizeHist
+ * input sizes the CPU loop is fine. If a future user needs the HW
+ * fast-path, the hooks are obvious — build a second 208-byte node
+ * mirroring `ive_fill_dma_task` mode 1 and chain-submit both nodes.
  *
  * Arg layout (ioctl size 184 B):
  *   +0:    HI_HANDLE
@@ -1746,8 +1760,9 @@ static long ive_op_hist(unsigned long arg)
  *   +152:  IVE_MEM_INFO_S stMem (24 B — workspace for histogram bins)
  *   +176:  HI_BOOL instant
  *
- * Field map: standard Hist (op=13) + dst.phys @ node[28], dst.stride
- * @ node[52], mode-byte @ node[7]=0x61.
+ * Validator: stMem.u32Size must be >= 1280 (matches vendor
+ * `ive_check_equalize_hist_param` @0xf0e4:f1dc) — 256×u32 bins +
+ * 256-byte LUT region.
  */
 static long ive_op_equalize_hist(unsigned long arg)
 {
@@ -1756,12 +1771,18 @@ static long ive_op_equalize_hist(unsigned long arg)
 	u8 *dst = buf + 80;
 	u8 *stMem = buf + 152;
 	u32 stMem_phys = *(u32 *)stMem;
+	u32 stMem_size = *(u32 *)(stMem + 16);
 	u8 node[208];
+	long ret;
 
 	if (IVE_CHECK_IMG(src) || IVE_CHECK_IMG(dst))
 		return -EINVAL;
 	if (!stMem_phys || (stMem_phys & 0xF)) {
 		pr_info("ive_neo: EqualizeHist stMem.phys=0x%x invalid\n", stMem_phys);
+		return -EINVAL;
+	}
+	if (stMem_size < 1280) {                /* vendor's 0x500 threshold */
+		pr_info("ive_neo: EqualizeHist stMem.size=%u < 1280\n", stMem_size);
 		return -EINVAL;
 	}
 
@@ -1780,8 +1801,55 @@ static long ive_op_equalize_hist(unsigned long arg)
 	*(u32 *)(node + 28) = IMG_PHYS(dst);
 	*(u16 *)(node + 52) = (u16)IMG_STRIDE(dst);
 
-	pr_info_once("ive_neo: EqualizeHist handler wired (HW op 13 + mode 0x61)\n");
-	return ive_submit_nonxnn(node, buf);
+	pr_info_once("ive_neo: EqualizeHist handler wired (HW Hist + CPU LUT remap)\n");
+	ret = ive_submit_nonxnn(node, buf);
+	if (ret < 0)
+		return ret;
+
+	/* Phase 2: CPU computes the equalization LUT from the histogram
+	 * HW just wrote to stMem, then applies it to dst. */
+	{
+		u32 *bins = (u32 *)phys_to_virt((phys_addr_t)stMem_phys);
+		u8 *sv = (u8 *)phys_to_virt((phys_addr_t)IMG_PHYS(src));
+		u8 *dv = (u8 *)phys_to_virt((phys_addr_t)IMG_PHYS(dst));
+		u32 src_w = IMG_WIDTH(src);
+		u32 src_h = IMG_HEIGHT(src);
+		u32 src_s = IMG_STRIDE(src);
+		u32 dst_s = IMG_STRIDE(dst);
+		u32 npx = src_w * src_h;
+		u32 cdf, cdf_min;
+		u8 lut[256];
+		u32 i, y, x;
+
+		if (!bins || !sv || !dv)
+			return -EFAULT;
+
+		/* cdf_min = first non-zero histogram bin. */
+		cdf_min = 0;
+		for (i = 0; i < 256; i++) {
+			if (bins[i]) { cdf_min = bins[i]; break; }
+		}
+		/* Build LUT: lut[i] = round( (cdf[i] - cdf_min) / (npx - cdf_min) * 255 ). */
+		cdf = 0;
+		for (i = 0; i < 256; i++) {
+			cdf += bins[i];
+			if (npx > cdf_min) {
+				u32 num = (cdf - cdf_min) * 255u;
+				u32 den = npx - cdf_min;
+				lut[i] = (u8)((num + den / 2) / den);
+			} else {
+				lut[i] = (u8)i;
+			}
+		}
+		/* Apply LUT to dst. */
+		for (y = 0; y < src_h; y++) {
+			u8 *sp = sv + y * src_s;
+			u8 *dp = dv + y * dst_s;
+			for (x = 0; x < src_w; x++)
+				dp[x] = lut[sp[x]];
+		}
+	}
+	return 0;
 }
 
 /* ---- Thresh_S16 (op=14): arg = {handle(8), src(72), dst(72), ctrl(12+)} ---- */
