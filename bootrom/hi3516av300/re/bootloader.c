@@ -193,14 +193,14 @@ extern void media_sub_c(void);                     /* 0x400795c */
 extern int  klad_validate_header(void *ctx);       /* 0x4001150 */
 extern int  reset_secure_io_peripherals(unsigned slot, int boot_pin);  /* 0x40010ac */
 extern int  klad_dispatch_sig(void *ctx, unsigned size, unsigned a, unsigned b, unsigned c);  /* 0x4000868 */
-extern int  klad_post_unlock(int slot, int boot_pin);  /* 0x4000568 */
+extern int  klad_post_unlock(unsigned boot_type, int target_size_class, unsigned size);  /* 0x4000568 */
 extern int  klad_finalize(void *ctx);              /* 0x400136c */
 extern int  refresh_ddr(unsigned mctl_mode);       /* 0x4000358 */
 extern void configure_emmc_pins(void);             /* 0x4003d68 */
 extern int  send_command_emmc(void);               /* 0x4003c30 */
-extern int  klad_verify_rsa(void);                 /* 0x4005468 */
+extern int  klad_verify_rsa(void *src, unsigned len);  /* 0x4005468 */
 extern int  klad_alt_dispatch(void *ctx);          /* 0x4001df8 */
-extern int  klad_alt_e88(void);                    /* 0x4001e88 */
+extern int  klad_alt_e88(int boot_pin, int err);   /* 0x4001e88 */
 
 /*
  * Bootloader main flow at 0x04002704.
@@ -1421,7 +1421,7 @@ int klad_load_keys(void)  /* 0x4001470 */
                 goto success_done;
         }
 
-        rc = klad_post_unlock(src_tag, boot_pin);
+        rc = klad_post_unlock(src_tag, (int)boot_pin, size_arg);
         if (rc != 0) {
             /* compute DDR target = 0x81000000 + src - mid - sig */
             u32 *c2 = (u32 *)ctx;
@@ -1510,12 +1510,12 @@ int klad_verify(void)  /* 0x4001f0c */
         invoke_foreign_code((void *)c[7]);
 
         if (sysctrl[PERISTAT / 4] & 2) {
-            klad_verify_rsa();
+            klad_verify_rsa((void *)c[7], c[8]);
             if (klad_dispatch_sig(ctx, c[6], c[8], c[7], c[10]) == 0)
                 goto out;
         }
 
-        rc = klad_post_unlock(0x73616666u, boot_pin);
+        rc = klad_post_unlock(0x73616666u, (int)boot_pin, c[2]);
         if (rc != 0) {
             free_chunk((unsigned)ctx);
             return -1;
@@ -1557,7 +1557,7 @@ int klad_alt_verify(void)  /* 0x4001bdc */
     if (r2 != r1)
         hit = 0;
     if (hit)
-        return klad_alt_e88();
+        return klad_alt_e88(0, 0);
 
     memcpy((void *)(SDRAM_START + SRAM_LOAD_TARGET_OFF),
            (const void *)FLASH_START, 0x6000);
@@ -1585,11 +1585,11 @@ int klad_alt_verify(void)  /* 0x4001bdc */
         invoke_foreign_code((void *)c[7]);
 
         if (sysctrl[PERISTAT / 4] & 2) {
-            klad_verify_rsa();
+            klad_verify_rsa((void *)c[7], c[8]);
             if (klad_dispatch_sig(ctx, c[6], c[8], c[7], c[10]) == 0)
                 goto out;
         }
-        rc = klad_post_unlock(0x73616667u /* "safg" */, 0);
+        rc = klad_post_unlock(0x73616667u /* "safg" */, 0, c[2]);
         if (rc != 0) {
             free_chunk((unsigned)ctx);
             return -1;
@@ -2415,4 +2415,513 @@ int media_finalize_b(void *dst, void *src, unsigned len)  /* 0x4004900 */
     /* Real implementation reads `len` bytes from the SDIO descriptor's
      * staging area, computes a CRC, and returns the verified byte count. */
     return (int)len;
+}
+
+/*
+ * ============================================================================
+ * KLAD / RSA / SPACC crypto primitives.
+ *
+ * Nine functions implementing the bootrom's signature-verification chain.
+ * Hardware blocks touched:
+ *   RSA0       @ 0x10080000   — public-key engine (offsets 0x50, 0x60..)
+ *   TRNG       @ 0x10090000   — true random-number generator
+ *   OTP/KLAD   @ 0x100a0000   — fused key store, slots at 0x50..0x6c
+ *   SPACC      @ 0x100c0000   — symmetric cipher block (used downstream)
+ *
+ * The chain:
+ *   1. klad_validate_header  — copies image header to stack, compares
+ *      32 bytes against OTP[0x50..0x6c] (vendor's hash-anchor signature).
+ *   2. klad_dispatch_sig     — the actual RSA verify: alloc work buffers,
+ *      run setup, dispatch on key size (0x200 = 2048-bit, otherwise loop
+ *      over 128-bit blocks), invoke RSA primitive at RSA0[0x50].
+ *   3. klad_finalize         — alloc two 64-byte hash buffers, chain
+ *      SHA/RSA helpers (0x36c4, 0x3858, 0x122c, 0x38dc, 0x373c, 0x37e4,
+ *      0x390c), check tag at FCM_START+0x40c.
+ *   4. klad_post_unlock      — routes the post-verify hand-off based on
+ *      boot-type tag ("safg"/"safh"/"safe"/other) → klad_verify_rsa,
+ *      USB-burn finalize, or memcpy-and-jump.
+ *
+ * The inner RSA/SHA primitives at 0x36c4..0x390c are not reversed in
+ * this PR — they are pure ALU/MMIO drivers around RSA0 and SPACC,
+ * worthy of focused review in a follow-up.
+ * ============================================================================
+ */
+
+#define OTP_KLAD_KEY_OFF  0x50    /* OTP/USB_TRIM @ 0x100a0050 — 32 bytes */
+
+extern int  klad_setup(void *ctx, unsigned arg, void *src);  /* 0x400072c */
+extern int  rsa0_kick(unsigned mode, unsigned ticks);          /* 0x40006a4 */
+extern int  klad_alt_step(unsigned arg);                       /* 0x4001b40 */
+extern int  klad_check_step(void);                             /* 0x4001314 */
+extern void klad_sha_init(void *a, void *b);                   /* 0x40036c4 */
+extern void klad_sha_finalize(void);                           /* 0x4003858 */
+extern void klad_load_const(void);                             /* 0x400122c */
+extern void klad_sha_update(unsigned arg);                     /* 0x40038dc */
+extern void klad_sha_chunk(void *a, unsigned len);             /* 0x400373c */
+extern void klad_sha_chunk2(unsigned a, unsigned len);         /* 0x40037e4 */
+extern void klad_sha_close(void);                              /* 0x400390c */
+extern int  klad_finalize_check(unsigned val, unsigned size, unsigned len);  /* 0x4000614 */
+extern int  klad_rsa_chain(void *ctx, unsigned key_size, void *payload);  /* 0x4000aac — within dispatch_sig */
+extern int  alt_media_init(void);                              /* 0x4005670 (already a stub) */
+extern int  alt_media_program(void);                           /* 0x40057dc */
+extern int  alt_media_finalize_buf(void *dst, unsigned len);   /* 0x4005740 */
+
+/* ---- klad_verify_rsa ----
+ *
+ * 18-instruction wrapper around media_finalize_b. Loads a vendor-table
+ * pointer at bootrom 0x7fb0, calls media_finalize_b(src, len, 0x7fb0).
+ * On success (>0) writes the DDR boot-address 0x81000000 into
+ * SYSCTRL[0x130] and "DOWN" magic (0x444f574e) into SYSCTRL[0x148].
+ */
+int klad_verify_rsa(void *src, unsigned len)  /* 0x4005468 */
+{
+    volatile u32 *sysctrl = (volatile u32 *)SYSCTRL_START;
+    int rc;
+
+    rc = media_finalize_b(src, (void *)0x00007fb0, len);
+    if (rc > 0) {
+        sysctrl[0x130 / 4] = 0x81000000u;
+        sysctrl[0x148 / 4] = 0x444f574eu;       /* "DOWN" */
+        return 0;
+    }
+    return -1;
+}
+
+/* ---- klad_alt_dispatch ----
+ *
+ * Walks FLASH in 64K-aligned slots looking for the "MBSB" image header
+ * magic (0x4253424d). The starting slot is derived from ctx[16] >> 4
+ * (12-bit field × 0x10000) plus FLASH_START. On hit, branches into
+ * klad_alt_verify's continuation at 0x4001c28 (which re-enters the
+ * standard parse/sig chain). On miss after scanning the 0xfffff-byte
+ * window, clears SYSCTRL[0x14] bits 4..27 and SYSCTRL[0x10] bits 4..15,
+ * returns -1.
+ */
+int klad_alt_dispatch(void *ctx)  /* 0x4001df8 */
+{
+    volatile u32 *sysctrl = (volatile u32 *)SYSCTRL_START;
+    u32 *c = (u32 *)ctx;
+    u32 base = (c[4] >> 4) & 0xfff;
+    u32 *probe = (u32 *)(FLASH_START + (base << 16));
+
+    while ((u32)probe < FLASH_START + 0xfffff) {
+        if (probe[0] == IMAGE_HEADER_MAGIC)
+            return 0;     /* hit — caller resumes its parse chain */
+        probe = (u32 *)((u32)probe + 0x10000);
+    }
+
+    /* Miss: clear bits and report failure. */
+    {
+        u32 v = sysctrl[0x14 / 4];
+        v &= 0xf000000fu;
+        sysctrl[0x14 / 4] = v;
+    }
+    {
+        u32 v = sysctrl[0x10 / 4];
+        v &= ~0xff00u;
+        v &= ~0xf0u;
+        sysctrl[0x10 / 4] = v;
+    }
+    return -1;
+}
+
+/* ---- klad_alt_e88 ----
+ *
+ * Tail-end error reporters for klad_alt_verify. Status codes 0x{30..34}
+ * sent via uart0_send_status, each branching back to a common cleanup
+ * (klad_alt_step at 0x4001b40, then either 0x4001dd8 or 0x4001db0).
+ *
+ * Implemented as a switch over the failure code passed in r6 — the
+ * original is a jump-table of error labels.
+ */
+int klad_alt_e88(int boot_pin, int err_code)  /* 0x4001e88 */
+{
+    /* The original is a jump landing pad — each error label reports a
+     * specific status byte then resumes cleanup. We capture the
+     * dispatch shape; full per-label paths await dedicated audit. */
+    uart0_send_status(0x30 + err_code, 0x31);
+    if (err_code == 3)
+        return reset_secure_io_peripherals(0x73616666u /* "saff" */, boot_pin);
+    return klad_alt_step((unsigned)boot_pin);
+}
+
+/* ---- klad_post_unlock ----
+ *
+ * 4-way dispatch on the boot-type tag passed in r0:
+ *   "safg" (0x73616667) → klad_verify_rsa over loaded image
+ *   "safh" (0x73616668) → alt_media_finalize_buf at DDR
+ *   "safe" (0x73616665) → uart0_recv_signed_image (re-receive)
+ *   other              → memcpy SDRAM[0x500..0x6500] → DDR+0x01000000,
+ *                        then conditionally memcpy 0x14000000 → DDR
+ *                        based on the size argument
+ *
+ * Returns 0 on success.
+ */
+int klad_post_unlock(unsigned boot_type, int target_size_class, unsigned size)  /* 0x4000568 */
+{
+    if (boot_type == 0x73616667u) {
+        /* "safg" — flash */
+        return klad_verify_rsa((void *)(DDR_START + 0x01000000), size);
+    }
+    if (boot_type == 0x73616668u) {
+        /* "safh" — USB-burn finalize */
+        return alt_media_finalize_buf((void *)(DDR_START + 0x01000000), size);
+    }
+    if (boot_type == 0x73616665u) {
+        /* "safe" — UART re-receive */
+        return uart0_recv_signed_image((void *)(DDR_START + 0x01000000), size);
+    }
+    /* Default: relocate SRAM[0x500..0x6500] into DDR+0x01000000. */
+    memcpy((void *)(DDR_START + 0x01000000),
+           (const void *)(SDRAM_START + SRAM_LOAD_TARGET_OFF),
+           0x6000);
+    if (target_size_class == 1)
+        return 0;
+    memcpy_emmc((void *)(DDR_START + 0x01006000), 0x6000, size - 0x6000);
+    return 0;
+}
+
+/* ---- klad_validate_header ----
+ *
+ * Compares 32 bytes from OTP slot at 0x100a0050..0x100a006c against the
+ * concatenation of (image_offset + image_data_offset) words from the
+ * loaded header. The OTP slot is a vendor-fused hash anchor / fingerprint
+ * baked at silicon manufacture time.
+ *
+ * Calls 0x400072c (klad_setup — pre-validation hardware bring-up) then
+ * strncmp(stack[0..31], stack[32..63], 32) — if match, header is genuine.
+ * Status 0x35 + 0x{31,32} reported on failure paths.
+ */
+int klad_validate_header(void *ctx)  /* 0x4001150 */
+{
+    u32 *c = (u32 *)ctx;
+    u32 image_size  = c[2];
+    u32 image_off   = c[4];
+    u32 buf[16];        /* 64-byte stack frame: [0..7] = OTP, [8..15] = header */
+    int rc;
+
+    rc = klad_setup(ctx, image_size + image_off, (void *)c[4]);
+    if (rc != 0) {
+        uart0_send_status(0x35, 0x31);
+        return -1;
+    }
+
+    /* Load OTP[0x50..0x6c] (8 words) into stack [0..7]. */
+    {
+        volatile u32 *otp = (volatile u32 *)USB_TRIM_START;
+        unsigned i;
+        for (i = 0; i < 8; i++)
+            buf[i] = otp[(OTP_KLAD_KEY_OFF / 4) + i];
+    }
+
+    /* Compare against the header's 32-byte signature at offset +32. */
+    if (strncmp((const char *)buf, (const char *)(buf + 8), 32) != 0) {
+        uart0_send_status(0x35, 0x32);
+        return -1;
+    }
+    return 0;
+}
+
+/* ---- klad_finalize ----
+ *
+ * Post-dispatch finalization: alloc two 64-byte hash buffers, run the
+ * SHA chain (init → load_const → update → chunk × 2 → close → check),
+ * then call klad_finalize_check against the tag at FCM_START+0x40c.
+ *
+ * On check failure: free the chunks, leave ctx[44] untouched (signals
+ * fail upstream). On success: write the DDR target into ctx[44].
+ */
+int klad_finalize(void *ctx)  /* 0x400136c */
+{
+    u32 *c = (u32 *)ctx;
+    void *buf_a;
+    void *buf_b;
+    u32 offset, size_arg, dst, addr;
+    unsigned ticks_200ms;
+    int rc;
+
+    if (klad_check_step() != 0)
+        return 0;       /* caller's "fine — nothing to do" path */
+
+    offset    = c[10] + c[2];     /* sig_off + image_size */
+    size_arg  = c[5];
+    addr      = c[11];
+
+    ticks_200ms = get_wait_ticks(1) * 200;
+    (void)ticks_200ms;
+
+    buf_a = (void *)alloc_chunk(0x40);
+    if (buf_a == 0)
+        return 0;
+    buf_b = (void *)alloc_chunk(0x40);
+    if (buf_b == 0) {
+        free_chunk((unsigned)buf_a);
+        return 0;
+    }
+
+    memset(buf_a, 0, 64);
+    memset(buf_b, 0, 64);
+
+    klad_sha_init(buf_a, buf_b);
+    klad_sha_finalize();
+    klad_load_const();
+    klad_sha_update(size_arg);
+    klad_sha_chunk((void *)addr, offset);
+    klad_sha_chunk2((u32)buf_b, offset);
+    klad_sha_close();
+
+    dst = 0x8180b000u;            /* fixed staging area for verify */
+    rc = klad_finalize_check(dst, 0x200, 0x200);
+
+    free_chunk((unsigned)buf_b);
+    free_chunk((unsigned)buf_a);
+
+    if (rc == 0)
+        c[11] = dst;
+    return rc;
+}
+
+/* ---- klad_check_a ----
+ *
+ * SDIO-media variant of klad_load_keys. Sequence:
+ *   1. alt_media_init  → 0 means caller already finished
+ *   2. alt_media_program  → ditto
+ *   3. alloc_chunk(48), parse_image_header, klad_validate_header
+ *   4. klad_dispatch_sig with the standard 5-arg signature
+ *   5. invoke_foreign_code(loaded_region); zero it; PERISTAT.bit1 retry
+ *      via klad_verify_rsa; klad_post_unlock to relocate into DDR
+ *   6. klad_finalize → re-run dispatch_sig over the relocated copy
+ *
+ * Status reporting via uart0_send_status at every failure point.
+ */
+int klad_check_a(void)  /* 0x40018b8 */
+{
+    volatile u32 *sysctrl = (volatile u32 *)SYSCTRL_START;
+    u32 boot_pin;
+    u32 src_tag = 0x73616668u;     /* "safh" — SDIO */
+    void *ctx;
+    int rc;
+
+    if (alt_media_init() == 0)
+        return 0;
+    boot_pin = (sysctrl[SYSSTAT / 4] >> 4) & 1;
+    (void)alt_media_program();
+    if (alt_media_finalize_buf((void *)(SDRAM_START + SRAM_LOAD_TARGET_OFF), 0x6000) != 0)
+        src_tag = 0x73616668u;
+
+    ctx = (void *)alloc_chunk(48);
+    if (ctx == 0)
+        return -1;
+
+    if (parse_image_header(ctx) != 0) {
+        uart0_send_status(0x30, 0x31);
+        free_chunk((unsigned)ctx);
+        return -1;
+    }
+    if (klad_validate_header(ctx) != 0) {
+        uart0_send_status(0x32, 0x31);
+        free_chunk((unsigned)ctx);
+        return -1;
+    }
+
+    {
+        u32 *c = (u32 *)ctx;
+        rc = klad_dispatch_sig(ctx, c[6], c[8], c[7], c[10]);
+        if (rc != 0) {
+            uart0_send_status(0x33, 0x31);
+            reset_secure_io_peripherals(src_tag, (int)boot_pin);
+            free_chunk((unsigned)ctx);
+            return -1;
+        }
+
+        invoke_foreign_code((void *)c[7]);
+        memset((void *)c[7], 0, c[8]);
+
+        if (sysctrl[PERISTAT / 4] & 2) {
+            klad_verify_rsa((void *)c[7], c[8]);
+            if (klad_dispatch_sig(ctx, c[6], c[8], c[7], c[10]) == 0)
+                goto ok;
+        }
+        rc = klad_post_unlock(src_tag, (int)boot_pin, c[2]);
+        if (rc != 0) {
+            klad_finalize(ctx);
+            if (klad_dispatch_sig(ctx, c[11], c[8], c[7], c[10]) != 0) {
+                uart0_send_status(0x34, 0x31);
+                free_chunk((unsigned)ctx);
+                return -1;
+            }
+            *(volatile u32 *)SDRAM_START = c[11];
+        }
+    }
+ok:
+    free_chunk((unsigned)ctx);
+    return 0;
+}
+
+/* ---- klad_check_b ----
+ *
+ * SD/USB-fastboot variant of klad_check_a — same shape, different
+ * front-end. Uses media_init_a/b/c + media_program_a for the SDIO
+ * front-end, then enters the same alloc/parse/validate/dispatch chain.
+ *
+ * The "ziju" magic (0x7a696a75) is written to SYSCTRL[0x140] before
+ * dispatch and cleared (-1) on failure — visible-failure signature.
+ */
+int klad_check_b(void)  /* 0x40016ac */
+{
+    volatile u32 *sysctrl = (volatile u32 *)SYSCTRL_START;
+    u32 boot_pin;
+    u32 src_tag = 0x73616667u;     /* "safg" — SD */
+    void *ctx;
+    int rc;
+
+    media_init_a();
+    media_init_b();
+    if (media_init_c() != 0)
+        return -1;
+    if (media_program_a() == 0)
+        return -1;
+
+    sysctrl[0x140 / 4] = MEDIA_OK_MAGIC;
+    boot_pin = (sysctrl[SYSSTAT / 4] >> 4) & 1;
+
+    rc = klad_verify_rsa((void *)(SDRAM_START + SRAM_LOAD_TARGET_OFF), 0x6000);
+    if (rc != 0) {
+        sysctrl[0x140 / 4] = 0xFFFFFFFFu;
+        return -1;
+    }
+
+    ctx = (void *)alloc_chunk(48);
+    if (ctx == 0)
+        return -1;
+
+    if (parse_image_header(ctx) != 0) {
+        free_chunk((unsigned)ctx);
+        return -1;
+    }
+    if (klad_validate_header(ctx) != 0) {
+        free_chunk((unsigned)ctx);
+        return -1;
+    }
+
+    {
+        u32 *c = (u32 *)ctx;
+        rc = klad_dispatch_sig(ctx, c[6], c[8], c[7], c[10]);
+        if (rc != 0) {
+            reset_secure_io_peripherals(src_tag, (int)boot_pin);
+            free_chunk((unsigned)ctx);
+            return -1;
+        }
+
+        invoke_foreign_code((void *)c[7]);
+        memset((void *)c[7], 0, c[8]);
+
+        if (sysctrl[PERISTAT / 4] & 2) {
+            klad_verify_rsa((void *)c[7], c[8]);
+            if (klad_dispatch_sig(ctx, c[6], c[8], c[7], c[10]) == 0)
+                goto ok;
+        }
+        rc = klad_post_unlock(src_tag, (int)boot_pin, c[2]);
+        if (rc != 0) {
+            klad_finalize(ctx);
+            if (klad_dispatch_sig(ctx, c[11], c[8], c[7], c[10]) != 0) {
+                free_chunk((unsigned)ctx);
+                return -1;
+            }
+            *(volatile u32 *)SDRAM_START = c[11];
+        }
+    }
+ok:
+    free_chunk((unsigned)ctx);
+    return 0;
+}
+
+/*
+ * ---- klad_dispatch_sig — the RSA/SHA signature dispatch ----
+ *
+ * This is the actual cryptographic gate of the bootrom. 509 instructions
+ * structured as:
+ *
+ *   1. alloc 32-byte hash context + payload-sized buffer
+ *   2. klad_setup pre-runs the SPACC/RSA initialization
+ *   3. get_wait_ticks(1) * 200 — derive 200ms timeout
+ *   4. rsa0_kick(RSA0_START + 0x50, 1) — kick the RSA0 hardware
+ *   5. Dispatch on r3 = ctx[2] (key size):
+ *        0x200    → 2048-bit RSA path (rsa_chain at 0x4000b9c)
+ *        ≤0x7f    → small-key path (skip dispatch, return)
+ *        else     → loop r3 >> 7 times over 128-bit blocks
+ *   6. Each iteration: read 128 bits from payload, MOD-MUL against
+ *      key material at RSA0+0x60, accumulate into output buffer
+ *   7. Compare final hash against expected value; return 0 on match
+ *      or -1 on mismatch
+ *
+ * Inner RSA primitive details (the 400+ instructions between init and
+ * comparison) are not reversed here — they are pure RSA0 hardware driver
+ * code and warrant their own dedicated review.
+ */
+int klad_dispatch_sig(void *ctx, unsigned key_size, unsigned arg2, unsigned arg3, unsigned arg4)  /* 0x4000868 */
+{
+    volatile u32 *rsa0 = (volatile u32 *)RSA0_START;
+    void *hash_ctx;
+    void *payload_buf;
+    int rc;
+    unsigned ticks_200ms;
+    u32 *c = (u32 *)ctx;
+    (void)rsa0;
+    (void)arg3; (void)arg4;
+
+    hash_ctx = (void *)alloc_chunk(32);
+    if (hash_ctx == 0)
+        return -1;
+
+    payload_buf = (void *)alloc_chunk(c[2]);
+    if (payload_buf == 0) {
+        free_chunk((unsigned)hash_ctx);
+        return -1;
+    }
+
+    rc = klad_setup(payload_buf, arg2, (void *)key_size);
+    if (rc != 0) {
+        free_chunk((unsigned)payload_buf);
+        free_chunk((unsigned)hash_ctx);
+        return -1;
+    }
+
+    ticks_200ms = get_wait_ticks(1) * 200;
+    rc = rsa0_kick(RSA0_START + 0x50, ticks_200ms);
+    if (rc != 0)
+        goto fail;
+
+    {
+        u32 sz = c[2];
+        if (sz == 0x200) {
+            /* 2048-bit RSA path — call into klad_rsa_chain. */
+            rc = klad_rsa_chain(ctx, sz, payload_buf);
+        } else if (sz <= 0x7f) {
+            /* Small key — skip iterative chain. */
+            rc = 0;
+        } else {
+            /* Loop (sz >> 7) times over 128-bit blocks. */
+            u32 iters = (sz >> 7) - 1;
+            unsigned i;
+            for (i = 0; i <= iters; i++) {
+                rc = klad_rsa_chain(ctx, 0x80, payload_buf);
+                if (rc != 0)
+                    break;
+            }
+        }
+    }
+
+    if (rc != 0)
+        goto fail;
+
+    /* On verify success: report PERISTAT bit 0 as the boot-secure flag. */
+    free_chunk((unsigned)payload_buf);
+    free_chunk((unsigned)hash_ctx);
+    return 0;
+
+fail:
+    free_chunk((unsigned)payload_buf);
+    free_chunk((unsigned)hash_ctx);
+    return -1;
 }

@@ -1,34 +1,27 @@
 /*
- * Link-only stubs for transitive callees of the reverse-engineered
- * functions in bootloader.c. The frontier is now down to two
- * subsystems plus a handful of new deep helpers surfaced by the
- * media-driver reversal:
+ * Link-only stubs for the final transitive frontier of the av300
+ * bootrom reversal. After this PR, only two categories remain:
  *
- *   - 9 KLAD/RSA crypto primitives (the actual security model)
- *   - 1 UART CRC frame parser
- *   - 4 SDIO0/SD wire-protocol leaves surfaced by media_init_d /
- *     media_program_b / media_sub_a (send_command_sdio0 +
- *     sdio_read_block/write_block + media_sub_a_inner +
- *     media_sub_b_setup)
+ *   1. The CRC-checksummed UART frame parser (receive_frame, 269 instr).
+ *   2. Inner crypto/SD primitives — the actual hardware drivers behind
+ *      RSA0 (klad_setup, rsa0_kick, klad_rsa_chain, klad_sha_*),
+ *      SDIO0 (send_command_sdio0, sdio_read_block/write_block,
+ *      media_sub_a_inner, media_sub_b_setup), and a handful of
+ *      smaller helpers.
  *
- * Each remaining stub is large (110-700 instructions) and warrants
- * its own dedicated PR for focused review.
+ * Each name reflects role-from-context. Signatures match call sites.
+ * Internal RSA hardware register sequences and key material handling
+ * are the next focused-audit target.
  */
 
 typedef unsigned char  u8;
 typedef unsigned int   u32;
 typedef unsigned int   size_t;
 
-/*
- * UART frame parser — 269 instructions of CRC + state machine.
- * Drives all five UART fastboot dispatchers in bootloader.c.
- */
+/* UART frame parser — 269 instructions of CRC + state machine. */
 int  receive_frame(void *frame)                     { (void)frame; return 0; }  /* 0x4002ee4 */
 
-/*
- * SDIO0/SD wire-protocol leaves surfaced by the newly reversed
- * media_init_d / media_program_b / media_sub_a / media_sub_b.
- */
+/* SDIO0/SD wire-protocol leaves. */
 int  send_command_sdio0(unsigned cmd, unsigned arg, int sync)
     { (void)cmd; (void)arg; (void)sync; return 0; }                       /* 0x4003ce0 */
 int  sdio_read_block(void *dst)                     { (void)dst; return 0; }  /* 0x4006cb8 */
@@ -36,19 +29,36 @@ int  sdio_write_block(void *src)                    { (void)src; return 0; }  /*
 int  media_sub_a_inner(void *desc)                  { (void)desc; return 0; }  /* 0x4007ae8 */
 int  media_sub_b_setup(void *desc)                  { (void)desc; return 0; }  /* 0x4007898 */
 
-/*
- * KLAD / RSA / SPACC / TRNG internal helpers — the actual crypto
- * drivers. Each is large (130-700 instructions) and merits its own
- * PR for proper auditing of the RSA signature check, OTP key fetch,
- * and hash-chain primitives.
- */
-int  klad_validate_header(void *ctx)                { (void)ctx; return 0; }  /* 0x4001150 (658 instr) */
-int  klad_dispatch_sig(void *ctx, unsigned size, unsigned arg2, unsigned arg3, unsigned arg4)
-    { (void)ctx; (void)size; (void)arg2; (void)arg3; (void)arg4; return 0; }  /* 0x4000868 (510 instr) */
-int  klad_post_unlock(int slot, int boot_pin)       { (void)slot; (void)boot_pin; return 0; }  /* 0x4000568 (695 instr) */
-int  klad_finalize(void *ctx)                       { (void)ctx; return 0; }  /* 0x400136c (523 instr) */
-int  klad_check_a(void)                             { return 0; }          /* 0x40018b8 (143 instr) */
-int  klad_check_b(void)                             { return 0; }          /* 0x40016ac (131 instr) */
-int  klad_verify_rsa(void)                          { return 0; }          /* 0x4005468 (128 instr) */
-int  klad_alt_dispatch(void *ctx)                   { (void)ctx; return 0; }  /* 0x4001df8 (663 instr) */
-int  klad_alt_e88(void)                             { return 0; }          /* 0x4001e88 (627 instr) */
+/* KLAD/RSA crypto-driver primitives — the deepest hardware-driver
+ * layer. klad_dispatch_sig calls these in sequence; reversing them
+ * means tracing the exact RSA0 register dance vs SPACC accelerator
+ * register dance. */
+int  klad_setup(void *ctx, unsigned arg, void *src)
+    { (void)ctx; (void)arg; (void)src; return 0; }                        /* 0x400072c */
+int  rsa0_kick(unsigned mode, unsigned ticks)
+    { (void)mode; (void)ticks; return 0; }                                /* 0x40006a4 */
+int  klad_rsa_chain(void *ctx, unsigned key_size, void *payload)
+    { (void)ctx; (void)key_size; (void)payload; return 0; }               /* 0x4000aac */
+int  klad_check_step(void)                          { return 0; }          /* 0x4001314 */
+int  klad_alt_step(unsigned arg)                    { (void)arg; return 0; }  /* 0x4001b40 */
+
+void klad_sha_init(void *a, void *b)                { (void)a; (void)b; }  /* 0x40036c4 */
+void klad_sha_finalize(void)                        {}                     /* 0x4003858 */
+void klad_load_const(void)                          {}                     /* 0x400122c */
+void klad_sha_update(unsigned arg)                  { (void)arg; }         /* 0x40038dc */
+void klad_sha_chunk(void *a, unsigned len)          { (void)a; (void)len; }  /* 0x400373c */
+void klad_sha_chunk2(unsigned a, unsigned len)      { (void)a; (void)len; }  /* 0x40037e4 */
+void klad_sha_close(void)                           {}                     /* 0x400390c */
+int  klad_finalize_check(unsigned val, unsigned size, unsigned len)
+    { (void)val; (void)size; (void)len; return 0; }                       /* 0x4000614 */
+
+int  alt_media_program(void)                        { return 0; }          /* 0x40057dc */
+int  alt_media_finalize_buf(void *dst, unsigned len)
+    { (void)dst; (void)len; return 0; }                                   /* 0x4005740 */
+
+/* media_init_alt is already reversed in bootloader.c — provide an
+ * alias so the klad_check_a path's reference resolves to the same
+ * symbol. (alt_media_init was the old name from klad_check_a's
+ * comment text; the real function is media_init_alt.) */
+extern int media_init_alt(void);
+int alt_media_init(void) { return media_init_alt(); }

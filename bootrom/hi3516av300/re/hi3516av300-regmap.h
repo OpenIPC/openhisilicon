@@ -30,7 +30,9 @@
 #define SRAM_CHUNK_TABLE_OFF    0x0010  /* organize_memory_chunks descriptor base */
 #define SRAM_UART_BASE_OFF      0x017c  /* SRAM holds the active UART base pointer */
 
+#define RSA0_START      0x10080000
 #define TRNG_START      0x10090000
+#define USB_TRIM_START  0x100a0000   /* (OTP slot mirror at 0x50..0x6c) */
 #define SDIO0_START     0x100f0000
 #define EMMC_START      0x10100000
 #define IO_CTRL0_START  0x10ff0000

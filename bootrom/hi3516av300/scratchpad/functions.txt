@@ -81,6 +81,15 @@ func_48  0x040077b8  media_sub_b                            alloc 2636-byte SDIO
 func_49  0x0400422c  media_init_d                           SDIO0 controller bring-up: PWREN→CTRL=7 reset→PIO mode→CMD0/CMD8/ACMD41/CMD2/CMD3/CMD7/CMD16 sequence via send_command_sdio0
 func_4a  0x04004d8c  media_program_b                        SD-card MBR-aware sector loader: read block 0, check 0x55/0xaa MBR signature, copy partition or raw via callback
 func_4b  0x04004900  media_finalize_b(dst, src, len)        block-copy + CRC verify — outermost shape preserved; multi-stage state machine deferred
+func_4c  0x04005468  klad_verify_rsa(src, len)              18-instr wrapper around media_finalize_b — on success writes 0x81000000 to SYSCTRL[0x130] and "DOWN" magic to SYSCTRL[0x148]
+func_4d  0x04001df8  klad_alt_dispatch(ctx)                 walk FLASH in 64K slots looking for "MBSB" magic; on miss clear SYSCTRL[0x14]/[0x10] bits, return -1
+func_4e  0x04001e88  klad_alt_e88(boot_pin, err)            jump-table of error status reporters (uart0_send_status 0x{30..34}, 0x31)
+func_4f  0x04000568  klad_post_unlock(tag, class, size)     4-way dispatch on boot_type tag: "safg"→klad_verify_rsa, "safh"→alt_media_finalize_buf, "safe"→uart0_recv_signed_image, else memcpy SRAM→DDR
+func_50  0x04001150  klad_validate_header(ctx)              load OTP slot 0x100a0050..0x100a006c (8 words = vendor fused hash anchor), strncmp against header signature
+func_51  0x0400136c  klad_finalize(ctx)                     alloc 2×64B hash bufs, run SHA chain (init→load_const→update→chunk×2→close), call klad_finalize_check, write DDR target into ctx[44]
+func_52  0x040016ac  klad_check_b                           SD/USB-fastboot variant of klad_load_keys — media_init_a/b/c + media_program_a then alloc/parse/validate/dispatch chain
+func_53  0x040018b8  klad_check_a                           SDIO-media variant — alt_media_init + alt_media_program then same chain
+func_54  0x04000868  klad_dispatch_sig(ctx,sz,a2,a3,a4)     the actual RSA verify: alloc work bufs, klad_setup, rsa0_kick(RSA0+0x50), dispatch on key_size (0x200=2048-bit RSA path / ≤0x7f skip / else loop sz>>7 over 128-bit blocks); 509 instr — outer-shape preserved, RSA0 register dance deferred to klad_rsa_chain
 
 Reset trampoline (covered by re/start.S, not in the func_N enumeration):
 
@@ -106,14 +115,20 @@ SDIO0/SD wire-protocol leaves (surfaced by the media-driver reversal):
   0x4007898  media_sub_b_setup(desc)          descriptor population tail (split from media_sub_b for size)
   0x4007ae8  media_sub_a_inner(desc)          block-read worker driven by media_sub_a
 
-KLAD/RSA/SPACC/TRNG crypto primitives (the actual security model — each
-deserves dedicated PR with side-by-side cv500 cross-reference):
-  0x4001150  klad_validate_header     header sanity check (658 instr)
-  0x4000868  klad_dispatch_sig        RSA/SHA dispatch — 5-arg (510 instr)
-  0x4000568  klad_post_unlock         retry-path entry (695 instr)
-  0x400136c  klad_finalize            wrap-up + DDR offset recompute (523 instr)
-  0x40016ac  klad_check_b             klad_unlock dispatch leaf (131 instr)
-  0x40018b8  klad_check_a             klad_unlock dispatch leaf (143 instr)
-  0x4005468  klad_verify_rsa          PERISTAT.bit1 path in klad_verify (128 instr)
-  0x4001df8  klad_alt_dispatch        SYSCTRL[0x14] magic-match path (663 instr)
-  0x4001e88  klad_alt_e88             flash-magic-hit path (627 instr)
+KLAD/RSA inner hardware drivers (the next focused-audit frontier — these
+are the actual RSA0/SPACC register sequences and SHA chain):
+  0x400072c  klad_setup(ctx,arg,src)        pre-validation hardware bring-up — clocks/reset SPACC+RSA0
+  0x40006a4  rsa0_kick(mode, ticks)         kick RSA0 hardware engine; runs until done or timeout
+  0x4000aac  klad_rsa_chain(ctx,sz,pl)      iterates RSA0 over the payload — actual MOD-MUL chain
+  0x4001314  klad_check_step                pre-step in klad_finalize
+  0x4001b40  klad_alt_step                  pre-step in klad_alt_e88 error recovery
+  0x40036c4  klad_sha_init(a, b)            SHA context init (chained from klad_finalize)
+  0x4003858  klad_sha_finalize              vendor-specific finalize before chunk-feed
+  0x400122c  klad_load_const                load constants from bootrom 0x7e28 (was inside klad_validate_header's prologue)
+  0x40038dc  klad_sha_update(arg)           feed one SHA block
+  0x400373c  klad_sha_chunk(a, len)         feed addr+len chunk
+  0x40037e4  klad_sha_chunk2(a, len)        feed second chunk variant
+  0x400390c  klad_sha_close                 close SHA context, output digest
+  0x4000614  klad_finalize_check(v,sz,len)  compare digest against expected, return 0/-1
+  0x40057dc  alt_media_program              alt-media writer (klad_check_a path)
+  0x4005740  alt_media_finalize_buf         alt-media completion (klad_post_unlock "safh" path)
