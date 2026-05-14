@@ -2386,9 +2386,10 @@ static long ive_op_persp_trans_cv500(unsigned long arg)
 	u32 src_w = *(u32 *)(src + 60);
 	u32 src_h = *(u32 *)(src + 64);
 	u32 src_type = *(u32 *)(src + 68);
-	u8 nodes[IVE_PT_MAX_ROIS * 208];
+	u8 *nodes;
 	u8 src_fmt;
 	u32 i;
+	long ret;
 
 	if (!roi_num || roi_num > IVE_PT_MAX_ROIS) {
 		pr_info("ive_neo: PerspTrans bad roi_num=%u (max %u)\n",
@@ -2412,7 +2413,10 @@ static long ive_op_persp_trans_cv500(unsigned long arg)
 	if (csc_mode == 0 && src_type == 2)
 		src_fmt = 5;
 
-	memset(nodes, 0, sizeof(nodes));
+	/* 1664 B is over the kernel's 1024 B stack-frame budget — heap. */
+	nodes = kzalloc(IVE_PT_MAX_ROIS * 208, GFP_KERNEL);
+	if (!nodes)
+		return -ENOMEM;
 
 	for (i = 0; i < roi_num; i++) {
 		u8 *roi  = buf + 80 + i * 16;
@@ -2435,18 +2439,21 @@ static long ive_op_persp_trans_cv500(unsigned long arg)
 
 		if (ive_check_buf(dst_phys0, dst_stride0, dst_w, dst_h)) {
 			pr_info("ive_neo: PerspTrans dst[%u] check failed\n", i);
-			return -EINVAL;
+			ret = -EINVAL;
+			goto out;
 		}
 		if (!pp_phys || (pp_phys & 0xf)) {
 			pr_info("ive_neo: PerspTrans pp[%u] phys=0x%x invalid\n",
 				i, pp_phys);
-			return -EINVAL;
+			ret = -EINVAL;
+			goto out;
 		}
 		if (!roi_w || !roi_h ||
 		    roi_x + roi_w > src_w || roi_y + roi_h > src_h) {
 			pr_info("ive_neo: PerspTrans roi[%u] x=%u y=%u w=%u h=%u out of src %ux%u\n",
 				i, roi_x, roi_y, roi_w, roi_h, src_w, src_h);
-			return -EINVAL;
+			ret = -EINVAL;
+			goto out;
 		}
 
 		/* node[9] mirrors the vendor's switch on astDst[i].enType:
@@ -2489,7 +2496,10 @@ static long ive_op_persp_trans_cv500(unsigned long arg)
 	 * `nodes` into g_ive_task_virt at offset 0, so each subsequent
 	 * node lives at g_ive_task_phys + i*208. Last node leaves
 	 * next-ptr = 0 (end of chain). */
-	return ive_submit_chain(nodes, roi_num, buf);
+	ret = ive_submit_chain(nodes, roi_num, buf);
+out:
+	kfree(nodes);
+	return ret;
 }
 
 /* ---- cv500 Hog (HW op 0x34, ioctl 0xd0684634) ----
@@ -2553,8 +2563,9 @@ static long ive_op_hog_cv500(unsigned long arg)
 	u32 src_w = *(u32 *)(src + 60);
 	u32 src_h = *(u32 *)(src + 64);
 	u32 src_type = *(u32 *)(src + 68);
-	u8 nodes[IVE_HOG_MAX_ROIS * 208];
+	u8 *nodes;
 	u32 i;
+	long ret;
 
 	/* node[8] = LUT[src.enType] (issue #113 fix). No PerspTrans-style
 	 * YUV420SP override in Hog — vendor blob just loads the LUT entry. */
@@ -2572,7 +2583,10 @@ static long ive_op_hog_cv500(unsigned long arg)
 	if (ive_check_buf(src_phys0, src_stride0, src_w, src_h))
 		return -EINVAL;
 
-	memset(nodes, 0, sizeof(nodes));
+	/* 1664 B is over the kernel's 1024 B stack-frame budget — heap. */
+	nodes = kzalloc(IVE_HOG_MAX_ROIS * 208, GFP_KERNEL);
+	if (!nodes)
+		return -ENOMEM;
 
 	for (i = 0; i < roi_num; i++) {
 		u8 *roi  = buf + 80 + i * 16;
@@ -2594,7 +2608,8 @@ static long ive_op_hog_cv500(unsigned long arg)
 		if (capped_w_cells < 2 || capped_h_cells < 2) {
 			pr_info("ive_neo: Hog roi[%u] too small w=%u h=%u (need ≥8 each)\n",
 				i, roi_w, roi_h);
-			return -EINVAL;
+			ret = -EINVAL;
+			goto out;
 		}
 		capped_w_cells -= 2;
 		capped_h_cells -= 2;
@@ -2602,13 +2617,15 @@ static long ive_op_hog_cv500(unsigned long arg)
 		if (!dst_phys || (dst_phys & 0xf)) {
 			pr_info("ive_neo: Hog dst[%u] phys=0x%x invalid\n",
 				i, dst_phys);
-			return -EINVAL;
+			ret = -EINVAL;
+			goto out;
 		}
 		if (!roi_w || !roi_h ||
 		    roi_x + roi_w > src_w || roi_y + roi_h > src_h) {
 			pr_info("ive_neo: Hog roi[%u] x=%u y=%u w=%u h=%u out of src %ux%u\n",
 				i, roi_x, roi_y, roi_w, roi_h, src_w, src_h);
-			return -EINVAL;
+			ret = -EINVAL;
+			goto out;
 		}
 
 		node[6]  = 0;
@@ -2643,7 +2660,10 @@ static long ive_op_hog_cv500(unsigned long arg)
 		*(u16 *)(node + 194) = (u16) capped_h_cells;
 	}
 
-	return ive_submit_chain(nodes, roi_num, buf);
+	ret = ive_submit_chain(nodes, roi_num, buf);
+out:
+	kfree(nodes);
+	return ret;
 }
 #endif
 
