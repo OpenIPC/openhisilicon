@@ -1145,11 +1145,25 @@ HI_S32 HI_MPI_IVE_CNN_GetResult(IVE_SRC_DATA_S *pstSrc, IVE_DST_MEM_INFO_S *pstD
  *     ive_fill_kcf_task @0x9718 in obj/hi3516cv500/hi_ive.o)
  * =================================================================== */
 
+/* Per-object workspace size, decoded from cv500 vendor libive.so
+ * HI_MPI_IVE_KCF_GetMemSize @0xd4cc:
+ *   `*pu32Size = u32MaxObjNum * 0xda10` (= 55824 bytes/obj).
+ * Each object's workspace holds its cosine windows, Gaussian peak,
+ * HOG features, alpha-FFT state, dst slot, plus a shared FFT scratch
+ * pad. u32MaxObjNum is capped at 64. */
+#define KCF_PER_OBJ_BYTES 0xda10u
+#define KCF_MAX_OBJ_NUM   64u
+
 HI_S32 HI_MPI_IVE_KCF_GetMemSize(HI_U32 u32MaxObjNum, HI_U32 *pu32Size)
 {
-    (void)u32MaxObjNum;
-    if (pu32Size) *pu32Size = 0;
-    return HI_ERR_IVE_NOT_SUPPORT;
+    IVE_CHECK_NULL("HI_MPI_IVE_KCF_GetMemSize", pu32Size, "pu32Size");
+    if (u32MaxObjNum > KCF_MAX_OBJ_NUM) {
+        IVE_LOG("HI_MPI_IVE_KCF_GetMemSize",
+                "u32MaxObjNum(%u) > %u", u32MaxObjNum, KCF_MAX_OBJ_NUM);
+        return HI_ERR_IVE_ILLEGAL_PARAM;
+    }
+    *pu32Size = u32MaxObjNum * KCF_PER_OBJ_BYTES;
+    return HI_SUCCESS;
 }
 
 HI_S32 HI_MPI_IVE_KCF_CreateObjList(IVE_MEM_INFO_S *pstMem, HI_U32 u32MaxObjNum,
@@ -1161,9 +1175,22 @@ HI_S32 HI_MPI_IVE_KCF_CreateObjList(IVE_MEM_INFO_S *pstMem, HI_U32 u32MaxObjNum,
     return HI_ERR_IVE_NOT_SUPPORT;
 }
 
+/* Mirrors cv500 vendor libive.so HI_MPI_IVE_KCF_DestroyObjList @0xd668:
+ * idempotent state-machine teardown — accepts a list in CREATE state,
+ * leaves it in DESTORY (sic). No actual memory free because pstMem is
+ * user-owned and pstObjNodeBuf / pu8TmpBuf are populated by CreateObjList
+ * (not implemented yet — Stage 2 follow-up). */
 HI_S32 HI_MPI_IVE_KCF_DestroyObjList(IVE_KCF_OBJ_LIST_S *pstObjList)
 {
-    (void)pstObjList;
+    IVE_CHECK_NULL("HI_MPI_IVE_KCF_DestroyObjList", pstObjList, "pstObjList");
+    if (pstObjList->enListState == IVE_KCF_LIST_STATE_DESTORY)
+        return HI_SUCCESS;
+    if (pstObjList->enListState != IVE_KCF_LIST_STATE_CREATE) {
+        IVE_LOG("HI_MPI_IVE_KCF_DestroyObjList",
+                "invalid enListState=%d", pstObjList->enListState);
+        return HI_ERR_IVE_NOT_PERM;
+    }
+    pstObjList->enListState = IVE_KCF_LIST_STATE_DESTORY;
     return HI_SUCCESS;
 }
 
