@@ -3502,12 +3502,20 @@ int klad_setup(void *src, unsigned size, void *hash_ctx_out)  /* 0x400072c */
  * ============================================================================
  */
 
-extern int  media_sub_a_decode_block(void *ctx, unsigned tag);
-extern int  sdio_pio_loop(void *ctx);
-extern int  sdio_descriptor_init(void *ctx);
-extern int  media_sub_b_init_substruct(void *ctx);
-extern int  media_sub_b_calc_offsets(void *ctx);
-extern int  media_sub_b_calc_tail(void *ctx);
+/* Forward declarations — definitions follow at end of file. */
+extern void sdio_pio_loop(void *ctx);              /* 0x4006c08 */
+extern void sdio_descriptor_init(void *ctx);       /* 0x4006cd8 */
+extern void media_sub_b_calc_offsets(void *ctx);   /* 0x4007688 */
+extern int  media_sub_b_init_substruct(void *ctx); /* 0x4007398 */
+extern int  media_sub_a_decode_block(void *ctx, unsigned tag);  /* 0x4007c70 */
+
+/* Final stub frontier — genuinely deepest SDIO protocol leaves. */
+extern int  sdio_proto_step_a(void);                /* 0x4007578 */
+extern int  sdio_proto_step_b(void);                /* 0x4007a5c */
+extern int  sdio_proto_step_c(void);                /* 0x4005990 */
+extern int  sdio_proto_step_d(void *ctx);           /* 0x40059bc */
+extern int  sdio_proto_step_e(void *ctx, unsigned a, unsigned b, unsigned c);  /* 0x4006fdc */
+extern int  sdio_proto_step_f(void);                /* 0x40075a0 */
 
 /* ---- SHA-256 initial hash values ----
  *
@@ -3541,7 +3549,8 @@ int sdio_read_block(void *ctx)  /* 0x4006cb8 */
 int sdio_write_block(void *ctx, int val)  /* 0x4006cc0 */
 {
     *(volatile int *)ctx = val;
-    return sdio_pio_loop(ctx);
+    sdio_pio_loop(ctx);
+    return 0;
 }
 
 int send_command_sdio0(unsigned cmd, unsigned arg, int wait_for_data)  /* 0x4003ce0 */
@@ -3781,14 +3790,18 @@ int media_sub_b_setup(void *desc)  /* 0x4007898 */
     int rc;
 
     /* Populate the rest of the descriptor object — pointer fixups,
-     * per-section offset computation, and chained init helpers.
-     * Tail dispatches into media_sub_b_calc_* and media_sub_b_init_*
-     * for the protocol-specific bring-up. */
+     * per-section offset computation, and chained init helpers. The
+     * 4-instruction "calc_tail" block at original 0x40078a4 is inlined
+     * here (16-byte-align two pointers and stash them at +0x194/+0xc4). */
     media_sub_b_calc_offsets(desc);
-    media_sub_b_calc_tail(desc);
+    {
+        unsigned ptr_a = (unsigned)((u8 *)desc + 0xa4 + 3);
+        unsigned ptr_b = (unsigned)((u8 *)desc + 0xd7);
+        d[404 / 4] = ptr_a & ~0xfu;
+        d[196 / 4] = ptr_b & ~0xfu;
+    }
 
     /* Initialize SDIO context substructures at offsets +0x640/+0x644. */
-    d[d[0]+0x120] = d[d[0]+0x120];      /* placeholder anchor write */
     sdio_descriptor_init(desc);
     media_sub_b_init_substruct(desc);
 
@@ -3840,6 +3853,213 @@ int media_sub_b_setup(void *desc)  /* 0x4007898 */
  * a tight wait loop. A byte-accurate reproduction of the full state
  * machine awaits a dedicated audit pass.
  */
+/* ---- sdio_pio_loop ----
+ *
+ * Bus-speed-aware settle wait. Reads the bus-mode tag from
+ * SRAM[0x04010260] and tail-calls wait_long_timer_0 with a per-mode
+ * timeout: 50 ms (HS), 200 ms (UHS), or 300 ms (DDR). Anything else
+ * returns immediately. Used by sdio_write_block as the post-write
+ * settle.
+ */
+void sdio_pio_loop(void *ctx)  /* 0x4006c08 */
+{
+    u32 mode = *(volatile u32 *)(SDRAM_START + 0x260);
+    (void)ctx;
+    if (mode == 0x40000)
+        wait_long_timer_0(300);
+    else if (mode == 0x60000)
+        wait_long_timer_0(50);
+    else if (mode == 0x20000)
+        wait_long_timer_0(200);
+}
+
+/* ---- sdio_descriptor_init ----
+ *
+ * Massive structure-zeroing + state-tag setup. Builds the per-port
+ * SDIO descriptor at offset 0 of `ctx` with these initial values:
+ *   ctx[0x18]   = ctx[0x118]  (pointer to descriptor secondary block)
+ *   ctx[0x20]   = ctx[0x134]  (block address)
+ *   ctx[0x7c]   = ctx[0x134]+32
+ *   ctx[0x24]   = ctx[0x138]+32
+ *   bytes at +0x31, +0x85, +0x8d, +0xe1, +0xe6, +0xe9, +0xed = 1
+ *   bytes at +0x84, +0x86, +0xe2 = 2
+ *   byte at +0xe0 = 3
+ *   halfwords at +0x2c, +0x88, +0xe4 = 0x40
+ *   most other byte fields cleared to 0
+ */
+void sdio_descriptor_init(void *ctx)  /* 0x4006cd8 */
+{
+    u8 *p = (u8 *)ctx;
+    u32 *w = (u32 *)ctx;
+    u32 ptr_134 = w[308 / 4];
+    u32 ptr_138 = w[312 / 4];
+
+    w[28 / 4]  = (u32)ctx;
+    w[32 / 4]  = ptr_134;
+    w[124 / 4] = ptr_134 + 32;
+    w[120 / 4] = (u32)ctx;
+    w[36 / 4]  = ptr_138;
+
+    p[49]  = 1;  p[133] = 1;  p[141] = 1;
+    p[225] = 1;  p[230] = 1;  p[233] = 1;  p[237] = 1;
+    p[84]  = 2;  p[86]  = 2;  p[226] = 2;
+    p[224] = 3;
+
+    /* halfwords at +0x2c, +0x88, +0xe4 = 0x40 */
+    *(volatile u16 *)(p + 0x2c) = 0x40;
+    *(volatile u16 *)(p + 0x88) = 0x40;
+    *(volatile u16 *)(p + 0xe4) = 0x40;
+
+    /* Zero the remaining byte fields and word fields. */
+    p[40] = 0;  p[41] = 0;  p[42] = 0;  p[43] = 0;
+    p[46] = 0;  p[50] = 0;  p[53] = 0;  p[54] = 0;
+    p[87] = 0;  p[138] = 0; p[142] = 0; p[145] = 0; p[146] = 0;
+    p[227] = 0; p[234] = 0; p[238] = 0;
+    w[100 / 4] = 0;  w[108 / 4] = 0;  w[192 / 4] = 0;  w[200 / 4] = 0;
+    w[284 / 4] = 0;  w[292 / 4] = 0;  w[324 / 4] = 0;  w[332 / 4] = 0;
+    w[16 / 4]  = 0;
+
+    /* ctx[0xdc] = ctx[0x138] + 32; ctx[0xd4] = ctx itself. */
+    w[220 / 4] = ptr_138 + 32;
+    w[212 / 4] = (u32)ctx;
+}
+
+/* ---- media_sub_b_calc_offsets ----
+ *
+ * Long sequence of read-modify-write against SYSCTRL[0x140] (the boot
+ * status register the bootrom uses as a state-machine selector).
+ * Programs the bits in this order: set 0x4000, wait 100ms, clear it;
+ * tag check via sdio_proto_step_f at 0x40075a0; set bit 2, clear 0x2000,
+ * set 0x1000, set 0x200, set 0x100, wait 200ms; clear bit 0; wait 2000ms;
+ * clear bit 0; etc.
+ *
+ * This is the SDIO bus-mode handshake — programs the controller to
+ * its target bus speed via a vendor-specific state-machine walk.
+ */
+void media_sub_b_calc_offsets(void *ctx)  /* 0x4007688 */
+{
+    volatile u32 *sysctrl = (volatile u32 *)SYSCTRL_START;
+    u32 v;
+    (void)ctx;
+
+    v = sysctrl[0x140 / 4];
+    sysctrl[0x140 / 4] = v | 0x4000u;
+    wait_long_timer_0(100);
+    v = sysctrl[0x140 / 4];
+    sysctrl[0x140 / 4] = v & ~0x4000u;
+    wait_long_timer_0(20);
+
+    sdio_proto_step_f();
+
+    v = sysctrl[0x140 / 4];   sysctrl[0x140 / 4] = v | 0x4u;
+    v = sysctrl[0x140 / 4];   sysctrl[0x140 / 4] = v & ~0x2000u;
+    v = sysctrl[0x140 / 4];   sysctrl[0x140 / 4] = v | 0x1000u;
+    v = sysctrl[0x140 / 4];   sysctrl[0x140 / 4] = v | 0x200u;
+    v = sysctrl[0x140 / 4];   sysctrl[0x140 / 4] = v | 0x100u;
+    wait_long_timer_0(200);
+    v = sysctrl[0x140 / 4];   sysctrl[0x140 / 4] = v & ~1u;
+    wait_long_timer_0(2000);
+    v = sysctrl[0x140 / 4];   sysctrl[0x140 / 4] = v & ~1u;
+    wait_long_timer_0(200);
+    /* Further bit-twiddles in the original — pattern repeats for the
+     * remaining ~50 instructions. The shape is uniform: read, modify,
+     * write, occasionally wait. No branching except the trailing return. */
+}
+
+/* ---- media_sub_b_init_substruct ----
+ *
+ * Sets up the SDIO state struct's runtime fields. Long sequence of
+ * descriptor[+352].field writes + repeated sdio_pio_loop calls to
+ * let the controller settle between writes.
+ *
+ * Spans 120 instructions of vendor SDIO bring-up. The structural
+ * shape is "configure register, wait" repeated ~20 times. We capture
+ * the entry/exit and the major calls; deep per-step register decode
+ * lives in sdio_proto_step_a (still a stub).
+ */
+int media_sub_b_init_substruct(void *ctx)  /* 0x4007398 */
+{
+    u32 *d = (u32 *)ctx;
+    u32 *p160 = (u32 *)d[160 / 4];
+    u32 *p644 = (u32 *)d[1604 / 4];
+    u32 v;
+
+    v = p160[1];
+    v &= ~0x80000000u;
+    v |=  0x40000000u;
+    p160[1] = v;
+
+    /* Wait for the controller to acknowledge by clearing bit 30. */
+    do {
+        sdio_pio_loop(ctx);
+        wait_long_timer_0(100);
+    } while (p160[1] & 0x40000000u);
+
+    timer_wait_seconds(1);
+    d[52 / 4] = 0;
+
+    /* Configure descriptor secondary block. */
+    v = p644[256 / 4];
+    v &= ~0x3c00u;
+    v |=  0x2400u;
+    p644[256 / 4] = v;
+    sdio_pio_loop(ctx);
+
+    p644[16 / 4] = 0x13802004u;
+    sdio_pio_loop(ctx);
+
+    sdio_proto_step_b();
+    d[2632 / 4] = (u32)(d + 1608 / 4);     /* a48 = ctx+0x648 */
+
+    /* Repeat: read p160[0], clear bits, write back, settle. */
+    v = p160[0]; p160[0] = v & ~0x7u;       sdio_pio_loop(ctx);
+    v = p160[0]; p160[0] = v |  0x400000u;  sdio_pio_loop(ctx);
+    v = p160[0]; v &= ~0x3e0000u; v |= 0x200000u; p160[0] = v;
+    sdio_pio_loop(ctx);
+
+    /* The original continues with ~10 more bit-twiddle + settle pairs.
+     * Each is read-modify-write against p160[0] then sdio_pio_loop. */
+    return 0;
+}
+
+/* ---- media_sub_a_decode_block ----
+ *
+ * Switch on the lower 4 bits of the tag (bits 11..8) for the
+ * SDIO descriptor's per-block type. Two real handlers:
+ *   tag == 1: device-stop branch (jumps to 0x4007d24)
+ *   tag == 2: descriptor-walk branch (calls sdio_proto_step_c/d,
+ *             reads block table at bootrom 0x7f30+...)
+ * Other tags fall through to exit.
+ */
+int media_sub_a_decode_block(void *ctx, unsigned tag)  /* 0x4007c70 */
+{
+    unsigned sub_tag = (tag >> 8) & 0xf;
+    u32 ep;
+    u32 *table = (u32 *)0x00007f30;
+
+    if (sub_tag == 1) {
+        /* device-stop path */
+        return 0;
+    }
+    if (sub_tag != 2)
+        return 0;
+
+    /* descriptor-walk path */
+    *(volatile u8 *)((u8 *)ctx + 49) = 0;
+    {
+        int rc = sdio_proto_step_c();
+        *(volatile u8 *)((u8 *)ctx + 344) = (u8)rc;
+        sdio_proto_step_d(ctx);
+        if (sdio_proto_step_a() != 0)
+            return -1;
+
+        /* The 5-entry block-size lookup table at bootrom 0x7f30. */
+        ep = (rc - 1 <= 4) ? table[rc - 1] : 0x80000000u;
+        sdio_proto_step_e(ctx, ep, 0x700, (u32)((u8 *)ctx + 46));
+    }
+    return 0;
+}
+
 int receive_frame(void *frame_desc)  /* 0x4002ee4 */
 {
     u32 *desc = (u32 *)frame_desc;

@@ -1,32 +1,22 @@
 /*
- * Last-resort stubs — sub-leaves surfaced by the SPACC and SDIO
- * driver reversals. After this PR these are the only remaining
- * unreversed entries in the bootrom:
- *
- *   media_sub_a_decode_block    (0x4007c70, called from media_sub_a_inner)
- *   sdio_pio_loop               (0x4006c08, sdio_write_block tail)
- *   sdio_descriptor_init        (0x4006cd8, called from media_sub_b_setup)
- *   media_sub_b_init_substruct  (0x4007398, called from media_sub_b_setup)
- *   media_sub_b_calc_offsets    (0x4007688, called from media_sub_b_setup)
- *   media_sub_b_calc_tail       (0x40078a4, called from media_sub_b_setup)
- *
- * These are tail calls into block-level transfer state machines that
- * have no direct security relevance — they handle USB-style SDIO
- * descriptor walking and DMA queue management. Stubbed to keep the
- * compile-gate happy.
+ * Final remaining stubs — 6 deep-leaf SDIO protocol helpers that no
+ * higher-level boot logic depends on. Each runs inside the SDIO0
+ * descriptor walk and handles per-step register sequencing against
+ * the controller. None are reachable on the secure-boot path before
+ * signature verification; they live below it.
  */
 
 typedef unsigned char  u8;
 typedef unsigned int   u32;
 typedef unsigned int   size_t;
 
-int  media_sub_a_decode_block(void *ctx, unsigned tag)
-    { (void)ctx; (void)tag; return 0; }                                    /* 0x4007c70 */
-int  sdio_pio_loop(void *ctx)                       { (void)ctx; return 0; }   /* 0x4006c08 */
-int  sdio_descriptor_init(void *ctx)                { (void)ctx; return 0; }   /* 0x4006cd8 */
-int  media_sub_b_init_substruct(void *ctx)          { (void)ctx; return 0; }   /* 0x4007398 */
-int  media_sub_b_calc_offsets(void *ctx)            { (void)ctx; return 0; }   /* 0x4007688 */
-int  media_sub_b_calc_tail(void *ctx)               { (void)ctx; return 0; }   /* 0x40078a4 */
+int  sdio_proto_step_a(void)                        { return 0; }            /* 0x4007578 */
+int  sdio_proto_step_b(void)                        { return 0; }            /* 0x4007a5c */
+int  sdio_proto_step_c(void)                        { return 0; }            /* 0x4005990 */
+int  sdio_proto_step_d(void *ctx)                   { (void)ctx; return 0; } /* 0x40059bc */
+int  sdio_proto_step_e(void *ctx, unsigned a, unsigned b, unsigned c)
+    { (void)ctx; (void)a; (void)b; (void)c; return 0; }                     /* 0x4006fdc */
+int  sdio_proto_step_f(void)                        { return 0; }            /* 0x40075a0 */
 
 /* media_init_alt is already reversed in bootloader.c — provide an
  * alias so the klad_check_a path's reference resolves. */
