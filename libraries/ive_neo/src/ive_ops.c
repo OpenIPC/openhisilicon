@@ -1241,13 +1241,56 @@ HI_S32 HI_MPI_IVE_KCF_GetObjBbox(IVE_KCF_OBJ_LIST_S *pstObjList,
     return HI_ERR_IVE_NOT_SUPPORT;
 }
 
+/* HOG feature-grid dim helper, decoded from cv500 vendor
+ * `ive_get_hog_feature_rect` @0x13a7c. Returns the HOG cell-grid
+ * width/height that a ROI of (w, h) maps to after the u3q5Padding
+ * multiplier is applied. Cells are 4x4 pixels, with a clamp at 136
+ * pixels per axis and a "minus 2 cells" border subtraction.
+ *
+ *   eff = ((roi_dim * padding) >> 8 + 1) * 8       (Q3.5 → integer count)
+ *   eff = min(eff, 136)
+ *   cells = (eff / 4) - 2
+ */
+static void ive_kcf_hog_grid(const IVE_ROI_INFO_S *pstRoi, HI_U8 u3q5Padding,
+                             HI_U32 *pu32GridW, HI_U32 *pu32GridH)
+{
+    HI_U32 w = pstRoi->stRoi.u32Width  * (HI_U32)u3q5Padding;
+    HI_U32 h = pstRoi->stRoi.u32Height * (HI_U32)u3q5Padding;
+    w = ((w >> 8) + 1) << 3;
+    h = ((h >> 8) + 1) << 3;
+    if (w >= 136) w = 136;
+    if (h >= 136) h = 136;
+    *pu32GridW = (w >> 2) - 2;
+    *pu32GridH = (h >> 2) - 2;
+}
+
+/* Mirrors cv500 vendor libive.so HI_MPI_IVE_KCF_JudgeObjBboxTrackState
+ * @0xe5d4: a bbox is still tracking the same object iff its HOG cell
+ * grid (after padding) has the same dimensions as the candidate ROI's.
+ * Vendor uses `ive_get_hog_feature_rect` for both sides and compares
+ * the W,H output. */
 HI_S32 HI_MPI_IVE_KCF_JudgeObjBboxTrackState(IVE_ROI_INFO_S *pstRoiInfo,
                                              IVE_KCF_BBOX_S *pstBbox,
                                              HI_BOOL *pbTrackOk)
 {
-    (void)pstRoiInfo; (void)pstBbox;
-    if (pbTrackOk) *pbTrackOk = HI_FALSE;
-    return HI_ERR_IVE_NOT_SUPPORT;
+    HI_U32 a_w, a_h, b_w, b_h;
+    HI_U8  padding;
+
+    IVE_CHECK_NULL("HI_MPI_IVE_KCF_JudgeObjBboxTrackState",
+                   pstRoiInfo, "pstRoiInfo");
+    IVE_CHECK_NULL("HI_MPI_IVE_KCF_JudgeObjBboxTrackState",
+                   pstBbox,    "pstBbox");
+    IVE_CHECK_NULL("HI_MPI_IVE_KCF_JudgeObjBboxTrackState",
+                   pbTrackOk,  "pbTrackOk");
+    IVE_CHECK_NULL("HI_MPI_IVE_KCF_JudgeObjBboxTrackState",
+                   pstBbox->pstNode, "pstBbox->pstNode");
+
+    padding = pstBbox->pstNode->stKcfObj.u3q5Padding;
+    ive_kcf_hog_grid(pstRoiInfo,           padding, &a_w, &a_h);
+    ive_kcf_hog_grid(&pstBbox->stRoiInfo,  padding, &b_w, &b_h);
+
+    *pbTrackOk = (a_w == b_w && a_h == b_h) ? HI_TRUE : HI_FALSE;
+    return HI_SUCCESS;
 }
 
 HI_S32 HI_MPI_IVE_KCF_ObjUpdate(IVE_KCF_OBJ_LIST_S *pstObjList,
