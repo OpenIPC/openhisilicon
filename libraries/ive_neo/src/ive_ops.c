@@ -1203,8 +1203,9 @@ HI_S32 HI_MPI_IVE_KCF_CreateGaussPeak(HI_U3Q5 u3q5Padding,
 }
 
 /* Hann-window generator, decoded from cv500 vendor libive.so internal
- * helper @0x2e08. Writes a u16 cosine-window (Hann shape) into `dst`
- * for size N, padding the result to a fixed buffer width:
+ * helper @0x2e08 and verified against on-target output. Writes a u16
+ * cosine-window (Hann shape) into `dst` for size N, padding the result
+ * to a fixed buffer width:
  *
  *   if (N < 17): buf_width = 16 samples (32 B), step = 8
  *   else      : buf_width = 32 samples (64 B), step = 16
@@ -1213,10 +1214,19 @@ HI_S32 HI_MPI_IVE_KCF_CreateGaussPeak(HI_U3Q5 u3q5Padding,
  * give the source position; for k outside that range the value is the
  * edge sample (flat padding). The cosine itself is:
  *
- *   v = (1.0 - cos(2π * idx / N)) * 0.5 * 65536, cast to u16
+ *   v = (1.0 - cos(2π * idx / (N - 1))) * 0.5 * 16384, cast to u16
  *
- * Constants 2π and 65536.0 come from the .rodata pool at vendor offsets
- * 0x2ec0 and 0x2ec8. Float ops use double precision to match vendor.
+ * Constants verified at .rodata vendor offsets:
+ *   0x2ec0: 2π (double 0x401921FB54442D18)
+ *   0x2ec8: 16384.0 (double 0x40D0000000000000)
+ *
+ * Denominator is (N - 1), not N — vendor's `vcvt.f64.u32 d8, s16` is
+ * fed by `sub r3, r0, #1` at function entry. Easy to miss in static
+ * decode; the on-target probe (kcf_probe2) showed u16[5]=0x0c0c=3084
+ * for N=8 which matches `(1 - cos(2π*1/7)) * 0.5 * 16384 = 3084.5`
+ * exactly, ruling out the prior N-denominator + 65536-scale guess.
+ *
+ * Float ops use double precision to match vendor's VFP d-register path.
  */
 static void ive_kcf_gen_hann_window(HI_U32 u32N, HI_U16 *pu16Dst)
 {
@@ -1235,8 +1245,8 @@ static void ive_kcf_gen_hann_window(HI_U32 u32N, HI_U16 *pu16Dst)
         else                      clamped = i;
         clamped += half;          /* shift to [0, N-1] */
 
-        f = (double)clamped * (2.0 * 3.141592653589793238) / (double)u32N;
-        v = (1.0 - cos(f)) * 0.5 * 65536.0;
+        f = (double)clamped * (2.0 * 3.141592653589793238) / (double)(u32N - 1);
+        v = (1.0 - cos(f)) * 0.5 * 16384.0;
         q = (HI_U32) v;           /* vcvt.u32.f64 truncation */
         *pu16Dst++ = (HI_U16) q;
     }
