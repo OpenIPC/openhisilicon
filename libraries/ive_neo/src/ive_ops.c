@@ -1229,6 +1229,19 @@ HI_S32 HI_MPI_IVE_KCF_CreateObjList(IVE_MEM_INFO_S *pstMem, HI_U32 u32MaxObjNum,
         return HI_ERR_IVE_NOMEM;
     }
 
+    /* Stash pstMem at head of pu8TmpBuf so GetTrainObj can find it.
+     * Vendor likely uses a private global; we use the tmpBuf head so
+     * the IVE_KCF_OBJ_LIST_S struct stays SDK-compatible. The
+     * ive_kcf_pstmem_stash_t layout is the first 24 bytes; KCF_Process
+     * later uses the remaining 22632 bytes for HW context. */
+    {
+        struct { HI_U64 phys, virt; HI_U32 size, pad; } *stash = (void *)tmp;
+        stash->phys = pstMem->u64PhyAddr;
+        stash->virt = pstMem->u64VirAddr;
+        stash->size = pstMem->u32Size;
+        stash->pad  = 0;
+    }
+
     /* Init train/track lists as empty (point to self). */
     pstObjList->stTrainObjList.pstNext = &pstObjList->stTrainObjList;
     pstObjList->stTrainObjList.pstPrev = &pstObjList->stTrainObjList;
@@ -1481,6 +1494,90 @@ HI_S32 HI_MPI_IVE_KCF_CreateCosWin(IVE_DST_MEM_INFO_S *pstCosWinX,
     return HI_SUCCESS;
 }
 
+/* Per-obj buffer sizes inside pstMem (decoded via kcf_probe4 on av300).
+ * pstMem is structure-of-arrays: all N stHogFeature[] first, then all
+ * stAlpha[], then all stDst[]. */
+#define KCF_HOG_FEATURE_BYTES 47616u
+#define KCF_ALPHA_BYTES       8192u
+#define KCF_DST_BYTES         16u
+
+/* CosWin slot is 64 bytes (= 32 u16 elements) regardless of cell_dim. */
+#define KCF_COSWIN_SLOT_BYTES 64u
+
+/* Mirrors cv500 vendor libive.so HI_MPI_IVE_KCF_GetTrainObj @0xdaec.
+ *
+ * For each ROI in astRoiInfo[i] (i < u32ObjNum):
+ *   1. Pop first node from pstObjList->stFreeObjList.
+ *   2. Set node.stKcfObj.stRoiInfo = astRoiInfo[i], .u3q5Padding = u3q5Padding.
+ *   3. Compute HOG grid (grid_w, grid_h) via ive_kcf_hog_grid().
+ *   4. slot_w = (grid_w - 8) / 2,  slot_h = (grid_h - 8) / 2  ∈ [0..12].
+ *   5. Fill stCosWinX = pstCosWinX + slot_w * 64,  size 64.
+ *      Fill stCosWinY = pstCosWinY + slot_h * 64,  size 64.
+ *   6. Look up stGaussPeak from pstGaussPeak's mem-info table at
+ *      cell index (slot_h * 13 + slot_w), copying its {phys, virt, size}.
+ *   7. Slice pstMem (the user buffer from CreateObjList) for stHogFeature,
+ *      stAlpha, stDst — structure-of-arrays layout:
+ *        stHogFeature[i].phys = pstMem.phys + i * 47616
+ *        stAlpha[i].phys      = pstMem.phys + N*47616 + i * 8192
+ *        stDst[i].phys        = pstMem.phys + N*(47616+8192) + i * 16
+ *      where N = list.u32MaxObjNum.
+ *   8. Append node to pstObjList->stTrainObjList.
+ *   9. u32FreeObjNum--, u32TrainObjNum++.
+ *
+ * Bookkeeping only — no HW touch, no Gaussian math. The actual tracking
+ * happens later in KCF_Process which reads these slot pointers.
+ *
+ * The pstMem in pstObjList is set by CreateObjList's caller but not
+ * STORED in pstObjList — instead, vendor's CreateObjList copied
+ * {phys, virt, size} from pstMem somewhere. Actually NO: my kcf_probe
+ * confirmed CreateObjList ignores pstMem entirely. So GetTrainObj
+ * must be passed pstMem implicitly via... wait the signature here
+ * doesn't include pstMem either. Vendor stashes the pstMem fields in
+ * pstObjList during CreateObjList? Let me check the IVE_KCF_OBJ_LIST_S
+ * struct... no, no pstMem field there.
+ *
+ * Re-read kcf_probe output: pstMem stays sentinel-filled after both
+ * CreateObjList and GetTrainObj. The stHogFeature.phys = 0xa9c80000
+ * which WAS pstMem.phys. So the per-obj slice fields ARE filled, but
+ * the writes happen to the node, not back into pstMem.
+ *
+ * Where does GetTrainObj get pstMem.phys from? The function doesn't
+ * take pstMem as an argument. The answer must be: vendor's
+ * CreateObjList captured pstMem into a private place (perhaps using
+ * the pstObjNodeBuf or pu8TmpBuf header). Since vendor's blob is
+ * opaque we can't see this in the public struct.
+ *
+ * Our solution: stash pstMem at the head of pu8TmpBuf. That's a 22656-B
+ * scratch the user can't see; we own it. The cost is the user-visible
+ * pstMem field is hidden — but our CreateObjList is the only writer
+ * and our GetTrainObj is the only reader.
+ */
+
+/* Forward declaration — definition lives near JudgeObjBboxTrackState. */
+static void ive_kcf_hog_grid(const IVE_ROI_INFO_S *pstRoi, HI_U8 u3q5Padding,
+                             HI_U32 *pu32GridW, HI_U32 *pu32GridH);
+
+/* Hidden per-list state stashed at the head of pu8TmpBuf. */
+typedef struct {
+    HI_U64 mem_phys;
+    HI_U64 mem_virt;
+    HI_U32 mem_size;
+    HI_U32 pad;
+} ive_kcf_pstmem_stash_t;
+
+/* Look up cell descriptor in pstGaussPeak's mem-info table.
+ * Cells are at offset (slot_h * 13 + slot_w) * 24 in pstGaussPeak.virt. */
+static void ive_kcf_lookup_gp_cell(IVE_MEM_INFO_S *pstGaussPeak,
+                                   HI_U32 slot_w, HI_U32 slot_h,
+                                   IVE_MEM_INFO_S *dst)
+{
+    const HI_U8 *table_base = (const HI_U8 *)(uintptr_t) pstGaussPeak->u64VirAddr;
+    const HI_U8 *cell = table_base + (slot_h * 13 + slot_w) * 24;
+    dst->u64PhyAddr = *(const HI_U64 *)(cell + 0);
+    dst->u64VirAddr = *(const HI_U64 *)(cell + 8);
+    dst->u32Size    = *(const HI_U32 *)(cell + 16);
+}
+
 HI_S32 HI_MPI_IVE_KCF_GetTrainObj(HI_U3Q5 u3q5Padding, IVE_ROI_INFO_S astRoiInfo[],
                                   HI_U32 u32ObjNum,
                                   IVE_MEM_INFO_S *pstCosWinX,
@@ -1488,9 +1585,101 @@ HI_S32 HI_MPI_IVE_KCF_GetTrainObj(HI_U3Q5 u3q5Padding, IVE_ROI_INFO_S astRoiInfo
                                   IVE_MEM_INFO_S *pstGaussPeak,
                                   IVE_KCF_OBJ_LIST_S *pstObjList)
 {
-    (void)u3q5Padding; (void)astRoiInfo; (void)u32ObjNum;
-    (void)pstCosWinX; (void)pstCosWinY; (void)pstGaussPeak; (void)pstObjList;
-    return HI_ERR_IVE_NOT_SUPPORT;
+    HI_U32 i, N;
+    const ive_kcf_pstmem_stash_t *stash;
+
+    IVE_CHECK_NULL("HI_MPI_IVE_KCF_GetTrainObj", astRoiInfo,   "astRoiInfo");
+    IVE_CHECK_NULL("HI_MPI_IVE_KCF_GetTrainObj", pstCosWinX,   "pstCosWinX");
+    IVE_CHECK_NULL("HI_MPI_IVE_KCF_GetTrainObj", pstCosWinY,   "pstCosWinY");
+    IVE_CHECK_NULL("HI_MPI_IVE_KCF_GetTrainObj", pstGaussPeak, "pstGaussPeak");
+    IVE_CHECK_NULL("HI_MPI_IVE_KCF_GetTrainObj", pstObjList,   "pstObjList");
+
+    if (pstObjList->enListState != IVE_KCF_LIST_STATE_CREATE) {
+        IVE_LOG("HI_MPI_IVE_KCF_GetTrainObj",
+                "list not in CREATE state (got %d)", pstObjList->enListState);
+        return HI_ERR_IVE_NOT_PERM;
+    }
+    if (!pstObjList->pu8TmpBuf) {
+        IVE_LOG("HI_MPI_IVE_KCF_GetTrainObj", "pu8TmpBuf NULL (no Create?)");
+        return HI_ERR_IVE_NOT_PERM;
+    }
+
+    stash = (const ive_kcf_pstmem_stash_t *) pstObjList->pu8TmpBuf;
+    if (!stash->mem_phys) {
+        IVE_LOG("HI_MPI_IVE_KCF_GetTrainObj",
+                "no pstMem stash — Create wasn't called via our libive_neo?");
+        return HI_ERR_IVE_NOT_PERM;
+    }
+    N = pstObjList->u32MaxObjNum;
+
+    for (i = 0; i < u32ObjNum; i++) {
+        IVE_LIST_HEAD_S *free_head = &pstObjList->stFreeObjList;
+        IVE_LIST_HEAD_S *train_head = &pstObjList->stTrainObjList;
+        IVE_LIST_HEAD_S *node_list;
+        IVE_KCF_OBJ_NODE_S *node;
+        HI_U32 grid_w, grid_h, slot_w, slot_h, slot_off_w, slot_off_h;
+
+        if (pstObjList->u32FreeObjNum == 0) {
+            IVE_LOG("HI_MPI_IVE_KCF_GetTrainObj",
+                    "free list exhausted at i=%u (asked for %u)", i, u32ObjNum);
+            return HI_ERR_IVE_NOT_PERM;
+        }
+
+        ive_kcf_hog_grid(&astRoiInfo[i], u3q5Padding, &grid_w, &grid_h);
+        if (grid_w < 8 || grid_w > 32 || (grid_w & 1) ||
+            grid_h < 8 || grid_h > 32 || (grid_h & 1)) {
+            IVE_LOG("HI_MPI_IVE_KCF_GetTrainObj",
+                    "roi[%u] gives invalid grid (%u, %u)", i, grid_w, grid_h);
+            return HI_ERR_IVE_ILLEGAL_PARAM;
+        }
+        slot_w = (grid_w - 8) >> 1;
+        slot_h = (grid_h - 8) >> 1;
+        slot_off_w = slot_w * KCF_COSWIN_SLOT_BYTES;
+        slot_off_h = slot_h * KCF_COSWIN_SLOT_BYTES;
+
+        /* Pop first free node. */
+        node_list = free_head->pstNext;
+        node_list->pstNext->pstPrev = free_head;
+        free_head->pstNext = node_list->pstNext;
+        /* stList is at offset 0 of IVE_KCF_OBJ_NODE_S. */
+        node = (IVE_KCF_OBJ_NODE_S *) node_list;
+
+        node->stKcfObj.stRoiInfo   = astRoiInfo[i];
+        node->stKcfObj.u3q5Padding = u3q5Padding;
+
+        node->stKcfObj.stCosWinX.u64PhyAddr = pstCosWinX->u64PhyAddr + slot_off_w;
+        node->stKcfObj.stCosWinX.u64VirAddr = pstCosWinX->u64VirAddr + slot_off_w;
+        node->stKcfObj.stCosWinX.u32Size    = KCF_COSWIN_SLOT_BYTES;
+
+        node->stKcfObj.stCosWinY.u64PhyAddr = pstCosWinY->u64PhyAddr + slot_off_h;
+        node->stKcfObj.stCosWinY.u64VirAddr = pstCosWinY->u64VirAddr + slot_off_h;
+        node->stKcfObj.stCosWinY.u32Size    = KCF_COSWIN_SLOT_BYTES;
+
+        ive_kcf_lookup_gp_cell(pstGaussPeak, slot_w, slot_h,
+                               &node->stKcfObj.stGaussPeak);
+
+        node->stKcfObj.stHogFeature.u64PhyAddr = stash->mem_phys + i * KCF_HOG_FEATURE_BYTES;
+        node->stKcfObj.stHogFeature.u64VirAddr = stash->mem_virt + i * KCF_HOG_FEATURE_BYTES;
+        node->stKcfObj.stHogFeature.u32Size    = KCF_HOG_FEATURE_BYTES;
+
+        node->stKcfObj.stAlpha.u64PhyAddr = stash->mem_phys + N * KCF_HOG_FEATURE_BYTES + i * KCF_ALPHA_BYTES;
+        node->stKcfObj.stAlpha.u64VirAddr = stash->mem_virt + N * KCF_HOG_FEATURE_BYTES + i * KCF_ALPHA_BYTES;
+        node->stKcfObj.stAlpha.u32Size    = KCF_ALPHA_BYTES;
+
+        node->stKcfObj.stDst.u64PhyAddr = stash->mem_phys + N * (KCF_HOG_FEATURE_BYTES + KCF_ALPHA_BYTES) + i * KCF_DST_BYTES;
+        node->stKcfObj.stDst.u64VirAddr = stash->mem_virt + N * (KCF_HOG_FEATURE_BYTES + KCF_ALPHA_BYTES) + i * KCF_DST_BYTES;
+        node->stKcfObj.stDst.u32Size    = KCF_DST_BYTES;
+
+        /* Append node to train list tail. */
+        node_list->pstPrev = train_head->pstPrev;
+        node_list->pstNext = train_head;
+        train_head->pstPrev->pstNext = node_list;
+        train_head->pstPrev = node_list;
+
+        pstObjList->u32FreeObjNum--;
+        pstObjList->u32TrainObjNum++;
+    }
+    return HI_SUCCESS;
 }
 
 HI_S32 HI_MPI_IVE_KCF_Process(IVE_HANDLE *pIveHandle,
