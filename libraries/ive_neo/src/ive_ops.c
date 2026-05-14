@@ -1402,6 +1402,66 @@ HI_S32 HI_MPI_IVE_KCF_CreateGaussPeak(HI_U3Q5 u3q5Padding,
             *(HI_U64 *)(cell_desc + 8) = (HI_U64)(uintptr_t)(virt + offset);
             *(HI_U32 *)(cell_desc + 16) = size;
             /* cell_desc + 20..23: 4 bytes pad — leave zero, vendor too. */
+
+            /* Fill per-cell Gaussian coefficients into [virt+offset..+size).
+             * Cell holds a (buf_w_w × buf_w_h) grid of u32 values, where
+             * buf_w_d ∈ {16, 32} depending on cell_dim_d ≤ 16 or > 16.
+             *
+             * Math (decoded from vendor d7e0+):
+             *   pad_f      = padding / 32  (Q3.5 → float)
+             *   sigma_inv  = sqrt(cell_h * cell_w) / pad_f * 0.1
+             *   coef       = -0.5 / sigma_inv²  (=  -50 · pad_f² / area)
+             *   value(dy,dx) = exp(coef · (dx² + dy²)) · 4096² → u32
+             *
+             * (dy, dx) ∈ buf_w_d range, but clamped to ±half_cell_d before
+             * squaring → flat-plateau edges for cells smaller than buf_w_d.
+             *
+             * Verified byte-equivalent vs vendor cell-by-cell on av300. */
+            {
+                HI_U32 cell_dim_w = col * 2 + 8;
+                HI_U32 cell_dim_h = row * 2 + 8;
+                HI_U32 buf_w_w = (cell_dim_w <= 16) ? 16 : 32;
+                HI_U32 buf_w_h = (cell_dim_h <= 16) ? 16 : 32;
+                HI_S32 half_w = (HI_S32) (buf_w_w >> 1);
+                HI_S32 half_h = (HI_S32) (buf_w_h >> 1);
+                HI_S32 half_cell_w = (HI_S32) (cell_dim_w >> 1);
+                HI_S32 half_cell_h = (HI_S32) (cell_dim_h >> 1);
+                HI_U32 *dst = (HI_U32 *)(virt + offset);
+                HI_S32 r, c;
+                float pad_f, sigma_inv;
+                double coef;
+
+                pad_f = (float) u3q5Padding * (1.0f / 32.0f);
+                sigma_inv = (sqrtf((float) cell_dim_w * (float) cell_dim_h)
+                             / pad_f) * 0.1f;
+                /* Vendor squares in f32 BEFORE promoting to f64 (vmul.f32
+                 * + vcvt.f64.f32 at d8dc/d8e0). Match to keep LSB rounding
+                 * identical at the Gaussian peak — promoting first would
+                 * give ±1 ULP differences at the brightest u32 values. */
+                {
+                    float sq = sigma_inv * sigma_inv;
+                    coef = -0.5 / (double) sq;
+                }
+
+                for (r = -half_h; r < half_h; r++) {
+                    HI_S32 dy = r;
+                    HI_S32 dy2;
+                    if (dy <= -half_cell_h)      dy = -half_cell_h;
+                    else if (dy > half_cell_h)   dy = half_cell_h;
+                    dy2 = dy * dy;
+
+                    for (c = -half_w; c < half_w; c++) {
+                        HI_S32 dx = c;
+                        HI_S32 r2;
+                        double v;
+                        if (dx <= -half_cell_w)      dx = -half_cell_w;
+                        else if (dx > half_cell_w)   dx = half_cell_w;
+                        r2 = dx * dx + dy2;
+                        v = exp(coef * (double) r2) * 4096.0 * 4096.0;
+                        *dst++ = (HI_U32) v;
+                    }
+                }
+            }
         }
     }
     return HI_SUCCESS;
