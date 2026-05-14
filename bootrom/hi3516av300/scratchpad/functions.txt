@@ -3,6 +3,8 @@ hi3516av300 bootrom — function ledger
 
 Format: <addr> <name> <signature/notes>
 
+Reversed in re/bootloader.c + re/start.S:
+
 func_00  0x040000e0  memcpy32(src, dst, size)               LDM/STM r3-r10 loop, used by _start to copy clear_remap thunk to SDRAM
 func_01  0x04002844  disable_ctrl_features                  MRC/BIC c1c0: clear I-cache, D-cache, MMU, branch prediction, align check
 func_02  0x04002858  enable_instruction_cache               sets parity, calls invalidate_instruction_pipeline, enables I-cache, ISB
@@ -16,6 +18,17 @@ func_09  0x04002e00  strcmp(s1, s2)                         two-pointer compare 
 func_0a  0x04000140  configure_soc_clocks                   polls PLL_LOCK_STAT for APLL+DPLL+EPLL (mask 0xb, timeout 5001 iters), writes 0x592 into SOC_CONFIG, NOP-settles 10 cycles
 func_0b  0x040001b0  reset_soc_clocks                       inverse of configure_soc_clocks — clears SOC_CONFIG bits 0-10 (bit 9 preserved), 10-NOP settle
 func_0c  0x04002704  main                                   bootloader main flow — 4 boot paths dispatched on SYSSTAT bits 4/5 + PERISTAT bit 0; converges on success (disable_ic + maybe reset_soc_clocks + timer_stop) or erase+SYSRES soft-reset
+func_0d  0x0400105c  is_update_mode                         polls GPIO0 pin 0 — recovery button held LOW for ~20s (two timer_wait_seconds(10) gaps) returns 1
+func_0e  0x04001128  initial_memory_setup                   enable I-cache, copy 12-byte record from bootrom 0x7f44 to SRAM 0x04010004, then organize_memory_chunks
+func_0f  0x04002284  bootrom_secure_check                   ungate KLAD/RSA/TRNG/SPACC via CRG[0x1a0], kick TRNG, dispatch among klad_{load_keys,verify,alt_verify,unlock} based on SYSSTAT bits 4/5 + recovery button
+func_10  0x04002368  fastboot_update                        burn_bootloader over UART; on success consult SYSSTAT.bit4 for eMMC reset path
+func_11  0x040023c4  media_update                           PERISTAT bits 4/5 dispatch between fastboot-media (init_a/b/c + program_a + finalize_a + "ziju" magic) and alt path (init_alt + set_boot_target_addr)
+func_12  0x0400249c  config_use_flash                       flash boot — memcpy 0x6000 from FLASH_START to SRAM, parse header (magic "MBSB"), relocate second-stage into DDR+0x01000000, four-word cross-check
+func_13  0x040025d4  bootrom_alt_media                      eMMC alt boot — initialize_emmc + memcpy_emmc into SRAM, parse same "MBSB" header, relocate into DDR, four-word cross-check
+func_14  0x040051bc  timer_start                            ungate timer clock via SC_CTRL bit 16, TIMER0_CONTROL = 0xc2
+func_15  0x040051e8  timer_stop                             TIMER0_CONTROL = 0
+func_16  0x040051f8  timer_reset_counter                    LOAD = 0xFFFFFFFF, restart timer, snapshot value into SRAM[0x180]
+func_17  0x04002cb4  timer_wait_seconds(n)                  loops n × wait_timer_0(1000); returns immediately if n=0
 
 Reset trampoline (covered by re/start.S, not in the func_N enumeration):
 
@@ -32,16 +45,29 @@ Reset trampoline (covered by re/start.S, not in the func_N enumeration):
                                       remap, jumps to *(SDRAM_START)
   0x04000100  _dead_loop              triggers SC_SYSRES soft-reset, spins
 
-Pending (callees of main, stubbed in re/stubs.c — addresses confirmed by `bl` sites in main):
+Transitive frontier (stubbed in re/stubs.c — addresses are valid `bl` targets in the av300 mask-ROM, bodies await reverse engineering):
 
-  0x0400105c  is_update_mode          consulted between fastboot try and flash/alt fallback
-  0x04001128  initial_memory_setup    main's first call after entry
-  0x04002284  bootrom_secure_check    path_a entry (PERISTAT bit 0 == 1); name inferred from position, awaits real RE
-  0x04002368  fastboot_update         tried when SYSSTAT bit 5 set
-  0x040023c4  media_update            shared between paths b/c/d as the bulk image loader
-  0x0400249c  config_use_flash        path_b entry (flash boot)
-  0x040025d4  bootrom_alt_media       path_c entry (SYSSTAT bit 4 == 1); name inferred
-  0x04002cb4  timer_wait_seconds      pre-soft-reset wait of 500 units
-  0x040051bc  timer_start             called early in main
-  0x040051e8  timer_stop              called on every main exit
-  0x040051f8  timer_reset_counter     called after timer_start
+  0x40001dc  parse_image_header(dst)            extracts header from buffer at sp/r0, returns 0 on success
+  0x40004b8  set_boot_target_addr(boot_pin)     resolves load-destination from SYSSTAT.bit4 selector
+  0x4001470  klad_load_keys                     SYSSTAT.bit5 path entry; KLAD key fetch (placeholder name)
+  0x4001af4  klad_unlock                        called when klad_verify returns -2 OR is_update_mode true (placeholder name)
+  0x4001bdc  klad_alt_verify                    !(sysstat & 0x10) path of bootrom_secure_check (placeholder name)
+  0x4001f0c  klad_verify                        (sysstat & 0x10) path of bootrom_secure_check (placeholder name)
+  0x4002a80  organize_memory_chunks             chunk-allocator setup tail-called by initial_memory_setup
+  0x4003318  initialize_uart0_hdwr              UART0 bring-up before secure dispatch
+  0x4003334  disable_uart0_hdwr                 UART0 tear-down after secure dispatch
+  0x4003338  uart0_flush_rx_fifo                drains UART0 RX FIFO before reads
+  0x40034ac  burn_bootloader                    UART-fastboot loader entry
+  0x4003de0  initialize_emmc                    eMMC controller bring-up
+  0x4004060  reset_emmc                         eMMC controller reset
+  0x40040a0  memcpy_emmc(dst, off, len)         block read from eMMC at offset → memory
+  0x400414c  media_init_a                       fastboot-media init step 1
+  0x40041c0  media_init_b                       fastboot-media init step 2
+  0x40041f0  media_init_c                       fastboot-media init step 3 (returns int)
+  0x400445c  close_sdio0                        SDIO0 teardown after media_finalize_a
+  0x40046c8  media_program_a                    fastboot-media program / write step
+  0x4005348  invoke_foreign_code(fn)            trampoline that calls an arbitrary loaded function
+  0x4005384  media_finalize_a                   fastboot-media finalize
+  0x4005670  media_init_alt                     PERISTAT bit 4 / alt-media init
+  0x40056c0  media_init_alt_finalize            alt-media finalize
+  0x40052b4  wait_timer_0(ticks)                busy-wait on TIMER0 for `ticks` ticks

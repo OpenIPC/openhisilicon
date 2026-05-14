@@ -2,6 +2,7 @@
 #define BOOTROM_HI3516AV300_REGMAP_CRG_H
 
 #define SOC_CONFIG     0x0080
+#define PERI_CRG104    0x01A0   /* KLAD/RSA/SPACC/TRNG clock+reset */
 #define PLL_LOCK_STAT  0x01E8
 
 #endif
