@@ -1145,11 +1145,25 @@ HI_S32 HI_MPI_IVE_CNN_GetResult(IVE_SRC_DATA_S *pstSrc, IVE_DST_MEM_INFO_S *pstD
  *     ive_fill_kcf_task @0x9718 in obj/hi3516cv500/hi_ive.o)
  * =================================================================== */
 
+/* Per-object workspace size, decoded from cv500 vendor libive.so
+ * HI_MPI_IVE_KCF_GetMemSize @0xd4cc:
+ *   `*pu32Size = u32MaxObjNum * 0xda10` (= 55824 bytes/obj).
+ * Each object's workspace holds its cosine windows, Gaussian peak,
+ * HOG features, alpha-FFT state, dst slot, plus a shared FFT scratch
+ * pad. u32MaxObjNum is capped at 64. */
+#define KCF_PER_OBJ_BYTES 0xda10u
+#define KCF_MAX_OBJ_NUM   64u
+
 HI_S32 HI_MPI_IVE_KCF_GetMemSize(HI_U32 u32MaxObjNum, HI_U32 *pu32Size)
 {
-    (void)u32MaxObjNum;
-    if (pu32Size) *pu32Size = 0;
-    return HI_ERR_IVE_NOT_SUPPORT;
+    IVE_CHECK_NULL("HI_MPI_IVE_KCF_GetMemSize", pu32Size, "pu32Size");
+    if (u32MaxObjNum > KCF_MAX_OBJ_NUM) {
+        IVE_LOG("HI_MPI_IVE_KCF_GetMemSize",
+                "u32MaxObjNum(%u) > %u", u32MaxObjNum, KCF_MAX_OBJ_NUM);
+        return HI_ERR_IVE_ILLEGAL_PARAM;
+    }
+    *pu32Size = u32MaxObjNum * KCF_PER_OBJ_BYTES;
+    return HI_SUCCESS;
 }
 
 HI_S32 HI_MPI_IVE_KCF_CreateObjList(IVE_MEM_INFO_S *pstMem, HI_U32 u32MaxObjNum,
@@ -1161,9 +1175,22 @@ HI_S32 HI_MPI_IVE_KCF_CreateObjList(IVE_MEM_INFO_S *pstMem, HI_U32 u32MaxObjNum,
     return HI_ERR_IVE_NOT_SUPPORT;
 }
 
+/* Mirrors cv500 vendor libive.so HI_MPI_IVE_KCF_DestroyObjList @0xd668:
+ * idempotent state-machine teardown — accepts a list in CREATE state,
+ * leaves it in DESTORY (sic). No actual memory free because pstMem is
+ * user-owned and pstObjNodeBuf / pu8TmpBuf are populated by CreateObjList
+ * (not implemented yet — Stage 2 follow-up). */
 HI_S32 HI_MPI_IVE_KCF_DestroyObjList(IVE_KCF_OBJ_LIST_S *pstObjList)
 {
-    (void)pstObjList;
+    IVE_CHECK_NULL("HI_MPI_IVE_KCF_DestroyObjList", pstObjList, "pstObjList");
+    if (pstObjList->enListState == IVE_KCF_LIST_STATE_DESTORY)
+        return HI_SUCCESS;
+    if (pstObjList->enListState != IVE_KCF_LIST_STATE_CREATE) {
+        IVE_LOG("HI_MPI_IVE_KCF_DestroyObjList",
+                "invalid enListState=%d", pstObjList->enListState);
+        return HI_ERR_IVE_NOT_PERM;
+    }
+    pstObjList->enListState = IVE_KCF_LIST_STATE_DESTORY;
     return HI_SUCCESS;
 }
 
@@ -1214,13 +1241,56 @@ HI_S32 HI_MPI_IVE_KCF_GetObjBbox(IVE_KCF_OBJ_LIST_S *pstObjList,
     return HI_ERR_IVE_NOT_SUPPORT;
 }
 
+/* HOG feature-grid dim helper, decoded from cv500 vendor
+ * `ive_get_hog_feature_rect` @0x13a7c. Returns the HOG cell-grid
+ * width/height that a ROI of (w, h) maps to after the u3q5Padding
+ * multiplier is applied. Cells are 4x4 pixels, with a clamp at 136
+ * pixels per axis and a "minus 2 cells" border subtraction.
+ *
+ *   eff = ((roi_dim * padding) >> 8 + 1) * 8       (Q3.5 → integer count)
+ *   eff = min(eff, 136)
+ *   cells = (eff / 4) - 2
+ */
+static void ive_kcf_hog_grid(const IVE_ROI_INFO_S *pstRoi, HI_U8 u3q5Padding,
+                             HI_U32 *pu32GridW, HI_U32 *pu32GridH)
+{
+    HI_U32 w = pstRoi->stRoi.u32Width  * (HI_U32)u3q5Padding;
+    HI_U32 h = pstRoi->stRoi.u32Height * (HI_U32)u3q5Padding;
+    w = ((w >> 8) + 1) << 3;
+    h = ((h >> 8) + 1) << 3;
+    if (w >= 136) w = 136;
+    if (h >= 136) h = 136;
+    *pu32GridW = (w >> 2) - 2;
+    *pu32GridH = (h >> 2) - 2;
+}
+
+/* Mirrors cv500 vendor libive.so HI_MPI_IVE_KCF_JudgeObjBboxTrackState
+ * @0xe5d4: a bbox is still tracking the same object iff its HOG cell
+ * grid (after padding) has the same dimensions as the candidate ROI's.
+ * Vendor uses `ive_get_hog_feature_rect` for both sides and compares
+ * the W,H output. */
 HI_S32 HI_MPI_IVE_KCF_JudgeObjBboxTrackState(IVE_ROI_INFO_S *pstRoiInfo,
                                              IVE_KCF_BBOX_S *pstBbox,
                                              HI_BOOL *pbTrackOk)
 {
-    (void)pstRoiInfo; (void)pstBbox;
-    if (pbTrackOk) *pbTrackOk = HI_FALSE;
-    return HI_ERR_IVE_NOT_SUPPORT;
+    HI_U32 a_w, a_h, b_w, b_h;
+    HI_U8  padding;
+
+    IVE_CHECK_NULL("HI_MPI_IVE_KCF_JudgeObjBboxTrackState",
+                   pstRoiInfo, "pstRoiInfo");
+    IVE_CHECK_NULL("HI_MPI_IVE_KCF_JudgeObjBboxTrackState",
+                   pstBbox,    "pstBbox");
+    IVE_CHECK_NULL("HI_MPI_IVE_KCF_JudgeObjBboxTrackState",
+                   pbTrackOk,  "pbTrackOk");
+    IVE_CHECK_NULL("HI_MPI_IVE_KCF_JudgeObjBboxTrackState",
+                   pstBbox->pstNode, "pstBbox->pstNode");
+
+    padding = pstBbox->pstNode->stKcfObj.u3q5Padding;
+    ive_kcf_hog_grid(pstRoiInfo,           padding, &a_w, &a_h);
+    ive_kcf_hog_grid(&pstBbox->stRoiInfo,  padding, &b_w, &b_h);
+
+    *pbTrackOk = (a_w == b_w && a_h == b_h) ? HI_TRUE : HI_FALSE;
+    return HI_SUCCESS;
 }
 
 HI_S32 HI_MPI_IVE_KCF_ObjUpdate(IVE_KCF_OBJ_LIST_S *pstObjList,
