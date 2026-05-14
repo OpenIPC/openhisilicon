@@ -1,3 +1,5 @@
+_dead_loop
+_start
 alloc_chunk
 alt_media_finalize_buf
 alt_media_init
@@ -6,11 +8,10 @@ bootrom_alt_media
 bootrom_secure_check
 burn_bootloader
 close_sdio0
+config_use_flash
 configure_emmc_pins
 configure_soc_clocks
-config_use_flash
 crc16_checksum
-_dead_loop
 disable_ctrl_features
 disable_instruction_cache
 disable_uart0
@@ -20,10 +21,10 @@ fastboot_update
 free_chunk
 get_random_value
 get_wait_ticks
+initial_memory_setup
 initialize_emmc
 initialize_uart0
 initialize_uart0_hdwr
-initial_memory_setup
 invalidate_instruction_pipeline
 invoke_foreign_code
 is_update_mode
@@ -105,7 +106,6 @@ spacc_chunk_prep
 spacc_chunk_run
 spacc_finalize
 spacc_init
-_start
 strcmp
 strlen
 strncmp

@@ -833,7 +833,7 @@ jobs:
           # Drift in either direction (additions or removals) fails the
           # diff; updating the manifest is a deliberate, reviewable act.
           arm-none-eabi-objdump -t bootrom/hi3516av300/re.elf \
-              | grep ' F ' | awk '{ print $NF }' | sort -u \
+              | grep ' F ' | awk '{ print $NF }' | LC_ALL=C sort -u \
               > /tmp/actual-symbols
           diff -u bootrom/hi3516av300/.expected-symbols /tmp/actual-symbols
           echo "ok: re.elf symbol set matches manifest ($(wc -l < /tmp/actual-symbols) functions)"

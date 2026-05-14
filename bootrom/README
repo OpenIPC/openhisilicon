@@ -54,6 +54,82 @@ the original mask-ROM byte-for-byte would require knowing the exact
 compiler, version, and flags HiSilicon used, which is out of scope.
 
 
+Running re.elf inside QEMU
+--------------------------
+
+The reconstructed bootrom is a real, runnable binary — qemu-hisilicon
+can load it at the silicon-accurate mask-ROM base (0x04000000) and
+start the CPU there. This is end-to-end evidence the reversal matches
+what the silicon does, not just plausible-looking C.
+
+Requires qemu-hisilicon with the maskrom -bios path
+(widgetii/qemu-hisilicon#98 or later):
+
+  cd ~/git/qemu-hisilicon && bash qemu/setup.sh   # one-time
+
+Run the bootrom:
+
+  ~/git/qemu-hisilicon/qemu-src/build/qemu-system-arm \
+      -M hi3516av300 \
+      -bios bootrom/hi3516av300/re.elf \
+      -display none -monitor none -serial stdio
+
+What you should see on stdout: bytes 0x20 0x20 0x20 0x20 0x20 0x0a
+repeating. This is uart0_wait_start_frame's handshake — five space
+characters per inner loop, five inner loops per call, then a newline
+on timeout. Each cycle = 26 bytes; without a reply the bootrom loops
+through reset, emitting one cycle per ~250 ms.
+
+Reply 0xAA mid-handshake to advance past the handshake into the
+receive loop:
+
+  ( sleep 0.5; printf '\xaa'; sleep 5 ) | qemu-system-arm \
+      -M hi3516av300 -bios bootrom/hi3516av300/re.elf \
+      -display none -monitor none -serial stdio
+
+Output should stop after one or two handshake cycles — the bootrom
+consumed the ACK, uart0_wait_start_frame returned 1, burn_bootloader
+wrote SC_RECOVERY=1 and entered uart0_recv_payload, which sits
+silently waiting for CRC frame data.
+
+Together these two runs exercise the full chain:
+  _entry → reset trampoline → _start → cache init → CRG setup
+  → main() → SYSSTAT pinstrap dispatch → fastboot_update
+  → burn_bootloader → uart0_wait_start_frame → initialize_uart0
+  → uart0_write(0x20) [emission verified]
+  → uart0_has_rx_data → uart0_read → 0xAA accepted [recv verified]
+  → uart0_recv_payload [silent wait verified]
+
+312 unique basic blocks across our reverse executed verbatim inside
+an emulator that knows nothing about the reversal.
+
+CI gate
+~~~~~~~
+
+A `bootrom RE compile-gate` job in this repo's .github/workflows/build.yml
+builds re.elf and diffs its function-symbol set against
+.expected-symbols (drift in either direction fails the diff). A
+separate `maskrom-av300` job in widgetii/qemu-hisilicon runs the two
+end-to-end QEMU checks above on every PR — handshake-pattern match
+and ACK-advance — gating any future qemu-hisilicon change against
+silently breaking the bootrom path.
+
+Build-time gotchas:
+
+* The symbol-manifest diff is order-sensitive. Sort the manifest with
+  LC_ALL=C sort to match CI's byte-order collation — locale-aware
+  sort treats underscores differently and produces drift.
+
+* re.elf is 32-bit ARM little-endian, ENTRY=_entry at 0x04000000.
+  arm-none-eabi-gcc 13 or 14 is the tested toolchain;
+  arm-linux-gnueabi-gcc also works with -nostdlib -ffreestanding.
+
+* Clang LSP false-positives: `qemu/osdep.h not found`,
+  `Incompatible redeclaration of memset/memcpy/strlen`. These come
+  from clangd applying a 64-bit hosted-libc view to 32-bit freestanding
+  ARM code. arm-none-eabi-gcc builds clean.
+
+
 Findings from the hi3516av300 reversal
 =======================================
 
