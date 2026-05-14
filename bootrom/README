@@ -52,3 +52,183 @@ The build target produces re.elf, which is NOT flashable — it is a
 parser/well-formedness gate, not a bit-identical reconstruction. Matching
 the original mask-ROM byte-for-byte would require knowing the exact
 compiler, version, and flags HiSilicon used, which is out of scope.
+
+
+Findings from the hi3516av300 reversal
+=======================================
+
+This section captures observations worth knowing before auditing or
+extending the av300 reverse-engineered source. Each item references
+addresses in the original mask-ROM (re/bootloader.c is the C side).
+
+
+Structural findings
+-------------------
+
+* **Boot dispatch.** main() at 0x4002704 picks one of four boot paths
+  based on two SYSCTRL state bits sampled once on entry:
+    PERISTAT bit 0 set  → bootrom_secure_check  (signed/RSA path)
+    SYSSTAT  bit 5 set  → fastboot_update       (UART recovery)
+    SYSSTAT  bit 4 set  → bootrom_alt_media     (eMMC raw)
+    else                → config_use_flash      (NOR/parallel flash)
+  is_update_mode() interposes between fastboot and flash/alt — if the
+  recovery button (GPIO0 pin 0) is held low for ~20 seconds, media_update
+  is tried directly before any of the above. PERISTAT bits 4..5 then
+  further select between fastboot-media and alt-media inside
+  media_update.
+
+* **Image header magic.** parse_image_header (0x40001dc) validates a
+  "MBSB" magic (0x4253424d) at the start of the loaded image, plus a
+  per-mode descriptor table at offset 0x510..0x520. The validation here
+  is structural — field-range checks only — not cryptographic. RSA
+  signature verification happens later inside klad_dispatch_sig (still
+  a stub at the time of writing).
+
+* **Four-word cross-check.** config_use_flash and bootrom_alt_media
+  both do `r3==r2 && r0==r3 && r2==r1` over the first 16 bytes of the
+  loaded image as an early sanity check. This is again structural, not
+  cryptographic — a sentinel pattern check, not a hash.
+
+* **Status magics.** Several little-endian ASCII constants pass state
+  through SYSCTRL slots and SRAM:
+    "ziju"  (0x7a696a75)  SYSCTRL[0x140]  bootloader-ack from media path
+    "DOWN"  (0x444f574e)  SYSCTRL[0x13c]  download mode is active
+    "EMMC"  (0x454d4d43)  SYSCTRL[0x150]  loaded payload returned cleanly
+    "MBSB"  (0x4253424d)  image[0]        valid image header
+  uart0_recv_payload spins on SYSCTRL[0x150] looking for "EMMC" after
+  the loaded payload runs — that is how the payload signals back into
+  the bootrom.
+
+* **DDR PHY randomization.** refresh_ddr (0x4000358) consumes four TRNG
+  random values to randomize DDR PHY tap calibration — an intentional
+  anti-bias measure. The boot timing therefore has nontrivial entropy
+  on every cold start. If TRNG returns deterministic values (failure
+  or attack), PHY calibration falls back to a deterministic path.
+
+* **clear_remap thunk.** The first six instructions at SDRAM_START
+  decide where execution resumes after the bootrom clears the SC_CTRL
+  remap bit. The thunk itself is memcpy32'd from bootrom 0x9c to
+  SDRAM 0x4016500 before being executed. This is the moment of
+  handover — the bootrom is no longer in control after `mov pc, r0`
+  at 0x40000b4.
+
+* **Recovery-console pinmux.** When SYSSTAT bit 4 is clear (default
+  boot), main() programs IOCFG1[0..5] with vendor-specific values
+  (0x6c1 / 0x4f1×4 / 0x5f1) — almost certainly UART0 plus a couple of
+  GPIO function selects for the recovery console. uart0_send_status's
+  output "\nE<code>D<extra>" is the boot-failure signature visible
+  on this console.
+
+* **Compiler tells.** configure_soc_clocks (0x4000140), reset_soc_clocks
+  (0x40001b0), and the timer_{start,stop,reset_counter} family all
+  compile back to byte-identical instruction sequences. That is a
+  strong signal the original was written in straightforward C with
+  similar idioms — useful when proposing changes (the compiler is
+  unlikely to surprise you on these). main() and the larger media /
+  klad paths compile with the same CFG but reordered basic blocks.
+
+
+Boot-attack surface
+-------------------
+
+These observations are not theoretical vulnerabilities — they are
+properties of the bootrom that an attacker with the listed precondition
+could potentially exploit. Each assumes the chip is in non-secure boot
+mode (PERISTAT bit 0 clear); a secure-mode chip routes everything
+through the still-stubbed KLAD/RSA chain and would refuse anything
+that does not pass klad_dispatch_sig at 0x4000868.
+
+* **Physical SD-card swap (most realistic).** Sequence:
+    1. Pull SD/eMMC, mount on workbench.
+    2. Write a crafted MBR at block 0 with the standard 0x55/0xaa
+       signature plus partition entries pointing at attacker-staged
+       sectors.
+    3. Stage a payload with valid "MBSB" header (magic + matching
+       mode/mode2 fields + 16-byte all-equal-words sentinel at the
+       start).
+    4. Reinsert media, power up.
+  Result: media_program_b (0x4004d8c) accepts the MBR signature,
+  walks the partition table without strict bounds-checking, then
+  hands the partition contents to media_finalize_b which copies
+  them into DDR at 0x81000000 and invokes_foreign_code() into them.
+  Defence: keep PERISTAT bit 0 set in OTP so the secure path runs
+  klad_dispatch_sig.
+
+* **Physical UART access (also realistic).** Sequence:
+    1. Attach to the recovery UART pads (TX/RX/GND on PCB).
+    2. Within ~20 seconds of power-on, reply 0xAA to the bootrom's
+       "are you there?" 0x20-probe at uart0_wait_start_frame.
+    3. Drive the framing protocol: ENTER → DATA × N → END,
+       each acked with 0xAA/0x55/0xAA respectively.
+    4. burn_bootloader (0x40034ac) accepts the framed payload and
+       invokes it via uart0_recv_payload's callback dispatch.
+  Result: same as the SD path — arbitrary code execution as the
+  bootrom, with full DDR + KLAD register access. Defence: same as
+  above; secure mode forces RSA verify of the received image.
+
+* **Recovery-button race.** Sequence:
+    1. Hold GPIO0 pin 0 low across power-on for 20+ seconds.
+    2. is_update_mode (0x400105c) returns 1 after three consecutive
+       LOW samples.
+    3. main()'s update-mode branch runs media_update directly
+       without entering the secure dispatch.
+  Result: forces the alt-media path even if the chip was configured
+  for flash boot. Useful for recovery; useful for attack iff combined
+  with a media swap.
+
+* **SRAM[0x188] clock-state flag.** After invoke_foreign_code,
+  invoke_foreign_code sets SRAM[0x188] = 1. main()'s success path
+  reads this slot and SKIPS reset_soc_clocks if it is non-zero.
+  Result: an attacker-controlled payload that wants to leave the
+  clock tree in a high-frequency state for a follow-up second-stage
+  attack just needs to set this single SRAM word.
+
+* **Four-word check is bypassable.** The early sentinel check is a
+  byte-for-byte equality of the first four 32-bit words. Trivially
+  satisfied by 16 zero bytes (or any 16 bytes of the same word
+  repeated). It exists to detect erased media — it is not a
+  signature and should not be relied on for trust.
+
+* **"EMMC" magic race in SYSCTRL[0x150].** uart0_recv_payload spins
+  on this slot to detect the loaded payload returning. The slot is
+  writable from any code that has SYSCTRL mapped. A foreign payload
+  that did not actually finish but writes the magic anyway would
+  trick the bootrom into returning cleanly — followed by
+  disable_instruction_cache, optional reset_soc_clocks, timer_stop,
+  and the clear_remap handover. Combined with the SRAM[0x188] flag,
+  this gives precise control over the bootrom-to-payload handover
+  state.
+
+* **Glitch window at clear_remap.** Between memcpy32 copying the
+  thunk to SDRAM at 0x4016500 and the `LDR PC, =0x4016500` jump,
+  the bootrom is still running but SDRAM is writable from any DMA-
+  capable peripheral (USB, eMMC, SDIO0). A targeted EM injection
+  or voltage glitch during this window — roughly 6 instructions —
+  could alter the thunk before it runs. The thunk's only job is to
+  clear SC_CTRL bit 8 and jump to *(SDRAM_START), so altering the
+  jump target would let an attacker run arbitrary code with the
+  remap-already-cleared state set up.
+
+What you cannot easily attack from these findings: the actual RSA
+signature check (klad_dispatch_sig, 510 instructions, still stubbed),
+the OTP-key fetch (klad_load_keys), and the SHA chain (klad_finalize
++ klad_check_a/b). These are the next reversal frontier — they are
+where the secure-mode chip's actual trust boundary lives.
+
+
+Reading order suggestion for new auditors
+-----------------------------------------
+
+  1. scratchpad/bootrom.txt — annotated hex of the vector page and
+     reset trampoline (first ~512 bytes).
+  2. re/start.S — _entry, _start, clear_remap thunk, _dead_loop,
+     memcpy32, the four cache/control-feature MCR ops.
+  3. re/bootloader.c, top half — leaf utilities (memset/memcpy/strXxx,
+     timer, UART, eMMC, configure/reset_soc_clocks).
+  4. re/bootloader.c, main() at 0x4002704 — the four-path dispatch.
+  5. re/bootloader.c, the four giants — initialize_emmc,
+     klad_load_keys, klad_verify, klad_alt_verify.
+  6. scratchpad/functions.txt — full ledger; cross-check anything
+     surprising against disasm.txt locally.
+  7. re/stubs.c — the still-stubbed frontier; this is where the
+     audit work continues.
