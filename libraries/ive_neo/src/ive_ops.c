@@ -1753,14 +1753,152 @@ HI_S32 HI_MPI_IVE_KCF_Process(IVE_HANDLE *pIveHandle,
     return HI_ERR_IVE_NOT_SUPPORT;
 }
 
+/* ---- Internal list-mgmt helpers (mirror cv500 libive.so) ---- */
+
+static void ive_kcf_list_del(IVE_LIST_HEAD_S *entry)
+{
+    entry->pstPrev->pstNext = entry->pstNext;
+    entry->pstNext->pstPrev = entry->pstPrev;
+}
+
+static void ive_kcf_list_add_tail(IVE_LIST_HEAD_S *entry, IVE_LIST_HEAD_S *head)
+{
+    entry->pstPrev = head->pstPrev;
+    entry->pstNext = head;
+    head->pstPrev->pstNext = entry;
+    head->pstPrev = entry;
+}
+
+static void ive_kcf_free_track_node(IVE_KCF_OBJ_LIST_S *list,
+                                    IVE_KCF_OBJ_NODE_S *node)
+{
+    ive_kcf_list_del(&node->stList);
+    if (list->u32TrackObjNum) list->u32TrackObjNum--;
+}
+
+static void ive_kcf_put_free(IVE_KCF_OBJ_LIST_S *list,
+                             IVE_KCF_OBJ_NODE_S *node)
+{
+    ive_kcf_list_add_tail(&node->stList, &list->stFreeObjList);
+    list->u32FreeObjNum++;
+}
+
+static IVE_KCF_OBJ_NODE_S *ive_kcf_get_train(IVE_KCF_OBJ_LIST_S *list)
+{
+    IVE_LIST_HEAD_S *head = &list->stTrainObjList;
+    IVE_LIST_HEAD_S *first;
+    if (head->pstNext == head) return NULL;
+    first = head->pstNext;
+    ive_kcf_list_del(first);
+    if (list->u32TrainObjNum) list->u32TrainObjNum--;
+    return (IVE_KCF_OBJ_NODE_S *) first;
+}
+
+static void ive_kcf_put_track(IVE_KCF_OBJ_LIST_S *list,
+                              IVE_KCF_OBJ_NODE_S *node)
+{
+    ive_kcf_list_add_tail(&node->stList, &list->stTrackObjList);
+    list->u32TrackObjNum++;
+}
+
+/* Mirrors cv500 vendor libive.so HI_MPI_IVE_KCF_GetObjBbox @0xe2bc.
+ *
+ * Two phases:
+ *  1. Walk EXISTING track list. For each track node:
+ *     - read s32Response from dst.virt[+8] (filled by KCF_Process)
+ *     - if response < bbox_ctrl->s32RespThr: free node → free list
+ *     - else compute new ROI center from peak + previous ROI, check it
+ *       falls inside list.u32Width × list.u32Height; emit bbox and
+ *       update node->stKcfObj.stRoiInfo.stRoi.s24q8{X,Y} in place
+ *  2. Drain train list into track list (the "active" trackers for
+ *     the next Process call).
+ *
+ * Peak position math (per vendor d3f0-d420):
+ *   dst.virt layout (16 bytes, written by HW during KCF_Process):
+ *     +0..3:  peak.s24q8X (signed)
+ *     +4..7:  peak.s24q8Y
+ *     +8..11: s32Response
+ *     +12..15: unused
+ *   new_x = (peak.x + roi.s24q8X + (sum<0 ? 255 : 0)) >> 8   (floor-toward-0)
+ */
 HI_S32 HI_MPI_IVE_KCF_GetObjBbox(IVE_KCF_OBJ_LIST_S *pstObjList,
                                  IVE_KCF_BBOX_S astBbox[],
                                  HI_U32 *pu32BboxObjNum,
                                  IVE_KCF_BBOX_CTRL_S *pstKcfBboxCtrl)
 {
-    (void)pstObjList; (void)astBbox; (void)pstKcfBboxCtrl;
-    if (pu32BboxObjNum) *pu32BboxObjNum = 0;
-    return HI_ERR_IVE_NOT_SUPPORT;
+    HI_U32 max_bbox, bbox_cnt = 0;
+    HI_S32 resp_thr;
+    HI_U32 drain_count, drained;
+    IVE_LIST_HEAD_S *cur, *next;
+
+    IVE_CHECK_NULL("HI_MPI_IVE_KCF_GetObjBbox", pstObjList,      "pstObjList");
+    IVE_CHECK_NULL("HI_MPI_IVE_KCF_GetObjBbox", astBbox,         "astBbox");
+    IVE_CHECK_NULL("HI_MPI_IVE_KCF_GetObjBbox", pu32BboxObjNum,  "pu32BboxObjNum");
+    IVE_CHECK_NULL("HI_MPI_IVE_KCF_GetObjBbox", pstKcfBboxCtrl,  "pstKcfBboxCtrl");
+
+    max_bbox = pstKcfBboxCtrl->u32MaxBboxNum;
+    resp_thr = pstKcfBboxCtrl->s32RespThr;
+    if (max_bbox > pstObjList->u32TrackObjNum + pstObjList->u32TrainObjNum)
+        max_bbox = pstObjList->u32TrackObjNum + pstObjList->u32TrainObjNum;
+
+    /* Phase 1 — walk track list with safe-iteration (may delete cur). */
+    cur = pstObjList->stTrackObjList.pstNext;
+    while (cur != &pstObjList->stTrackObjList && bbox_cnt < max_bbox) {
+        IVE_KCF_OBJ_NODE_S *node = (IVE_KCF_OBJ_NODE_S *) cur;
+        HI_U8 *dst_virt = (HI_U8 *)(uintptr_t) node->stKcfObj.stDst.u64VirAddr;
+        HI_S32 response, peak_x, peak_y, sum_x, sum_y, new_x, new_y;
+        next = cur->pstNext;
+
+        response = *(HI_S32 *)(dst_virt + 8);
+        if (response < resp_thr)
+            goto free_track;
+
+        peak_x = *(HI_S32 *)(dst_virt + 0);
+        peak_y = *(HI_S32 *)(dst_virt + 4);
+        sum_x  = peak_x + (HI_S32) node->stKcfObj.stRoiInfo.stRoi.s24q8X;
+        sum_y  = peak_y + (HI_S32) node->stKcfObj.stRoiInfo.stRoi.s24q8Y;
+        new_x  = (sum_x >= 0 ? sum_x : sum_x + 255) >> 8;
+        new_y  = (sum_y >= 0 ? sum_y : sum_y + 255) >> 8;
+
+        if (new_x < 0 || new_y < 0 ||
+            (HI_U32) new_x >= pstObjList->u32Width ||
+            (HI_U32) new_y >= pstObjList->u32Height)
+            goto free_track;
+
+        /* Update node ROI in place — vendor stores the s24q8 sum
+         * back to the node, not the integer new_x/new_y. */
+        node->stKcfObj.stRoiInfo.stRoi.s24q8X = sum_x;
+        node->stKcfObj.stRoiInfo.stRoi.s24q8Y = sum_y;
+
+        astBbox[bbox_cnt].pstNode                    = node;
+        astBbox[bbox_cnt].s32Response                = response;
+        astBbox[bbox_cnt].stRoiInfo.stRoi.s24q8X     = sum_x;
+        astBbox[bbox_cnt].stRoiInfo.stRoi.s24q8Y     = sum_y;
+        astBbox[bbox_cnt].stRoiInfo.stRoi.u32Width   = node->stKcfObj.stRoiInfo.stRoi.u32Width;
+        astBbox[bbox_cnt].stRoiInfo.stRoi.u32Height  = node->stKcfObj.stRoiInfo.stRoi.u32Height;
+        astBbox[bbox_cnt].stRoiInfo.u32RoiId         = node->stKcfObj.stRoiInfo.u32RoiId;
+        astBbox[bbox_cnt].bTrackOk                   = HI_TRUE;
+        astBbox[bbox_cnt].bRoiRefresh                = HI_FALSE;
+        bbox_cnt++;
+        cur = next;
+        continue;
+
+free_track:
+        ive_kcf_free_track_node(pstObjList, node);
+        ive_kcf_put_free(pstObjList, node);
+        cur = next;
+    }
+
+    *pu32BboxObjNum = bbox_cnt;
+
+    /* Phase 2 — drain train list into track list. */
+    drain_count = pstObjList->u32TrainObjNum;
+    for (drained = 0; drained < drain_count; drained++) {
+        IVE_KCF_OBJ_NODE_S *t = ive_kcf_get_train(pstObjList);
+        if (!t) break;
+        ive_kcf_put_track(pstObjList, t);
+    }
+    return HI_SUCCESS;
 }
 
 /* HOG feature-grid dim helper, decoded from cv500 vendor
@@ -1815,10 +1953,44 @@ HI_S32 HI_MPI_IVE_KCF_JudgeObjBboxTrackState(IVE_ROI_INFO_S *pstRoiInfo,
     return HI_SUCCESS;
 }
 
+/* Mirrors cv500 vendor libive.so HI_MPI_IVE_KCF_ObjUpdate @0xe6f4.
+ *
+ * For each bbox in input array:
+ *   - if bTrackOk == HI_TRUE:
+ *       - if bRoiRefresh == HI_TRUE: caller overrode the ROI; memcpy
+ *         it into the node so the next Process call uses the new
+ *         position
+ *       - else: keep as-is (GetObjBbox already updated the node)
+ *   - if bTrackOk == HI_FALSE: tracker lost; remove the node from
+ *     the track list and return it to the free list */
 HI_S32 HI_MPI_IVE_KCF_ObjUpdate(IVE_KCF_OBJ_LIST_S *pstObjList,
                                 IVE_KCF_BBOX_S astBbox[],
                                 HI_U32 u32BboxObjNum)
 {
-    (void)pstObjList; (void)astBbox; (void)u32BboxObjNum;
-    return HI_ERR_IVE_NOT_SUPPORT;
+    HI_U32 i;
+
+    IVE_CHECK_NULL("HI_MPI_IVE_KCF_ObjUpdate", pstObjList, "pstObjList");
+    if (u32BboxObjNum == 0)
+        return HI_SUCCESS;
+    IVE_CHECK_NULL("HI_MPI_IVE_KCF_ObjUpdate", astBbox, "astBbox");
+
+    for (i = 0; i < u32BboxObjNum; i++) {
+        IVE_KCF_OBJ_NODE_S *node = astBbox[i].pstNode;
+        if (!node) continue;
+
+        if (astBbox[i].bTrackOk) {
+            if (astBbox[i].bRoiRefresh) {
+                /* Caller asked for ROI override — copy new ROI into node. */
+                memcpy(&node->stKcfObj.stRoiInfo, &astBbox[i].stRoiInfo,
+                       sizeof(IVE_ROI_INFO_S));
+            }
+            /* else: GetObjBbox already updated stRoiInfo in place. */
+        } else {
+            /* Tracker lost — node has already been moved to track list by
+             * GetObjBbox; pull it out and put back on free list. */
+            ive_kcf_free_track_node(pstObjList, node);
+            ive_kcf_put_free(pstObjList, node);
+        }
+    }
+    return HI_SUCCESS;
 }
