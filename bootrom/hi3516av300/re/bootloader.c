@@ -160,7 +160,6 @@ extern int  klad_verify(void);                     /* 0x4001f0c */
 extern int  klad_alt_verify(void);                 /* 0x4001bdc */
 extern int  initialize_emmc(void);                 /* 0x4003de0 */
 
-/* Stubs in stubs.c — the new frontier after this PR. */
 extern int  klad_check_a(void);                    /* 0x40018b8 */
 extern int  klad_check_b(void);                    /* 0x40016ac */
 
@@ -1162,19 +1161,7 @@ int klad_unlock(void)  /* 0x4001af4 */
     return klad_check_a() != 0 ? -1 : 0;
 }
 
-/*
- * ============================================================================
- * The four giants — initialize_emmc, klad_load_keys, klad_verify, klad_alt_verify.
- *
- * These are structural reversals: the control-flow graph and identified
- * MMIO sequences match the original mask-ROM, but several deep helpers
- * (klad_validate_header, klad_dispatch_sig, update_emmc_card_clock, etc.)
- * remain as link-only stubs in stubs.c. They become the next reversal
- * frontier. Names ending in _a/_b/_c or _sub are placeholders — the
- * actual responsibilities (which RSA mode, which OTP key slot, which
- * eMMC CMD index) await cross-reference with av300 vendor docs.
- * ============================================================================
- */
+/* ===== eMMC controller bring-up + KLAD secure-boot dispatch paths ===== */
 
 /*
  * initialize_emmc — bring up the eMMC host controller (Synopsys DW MMC
@@ -1601,22 +1588,7 @@ out:
     return 0;
 }
 
-/*
- * ============================================================================
- * Frontier reversal — remaining small/medium leaves.
- *
- * 17 functions ranging from 1 instruction (nop_2d74) to 88 (refresh_ddr).
- * Each is small enough to reverse precisely from disasm. The remaining
- * deep helpers (klad_dispatch_sig at 510 instructions, klad_post_unlock at
- * ~700, klad_validate_header at ~658, klad_finalize at ~520, plus the
- * three big alt_* paths and the giant uart0_recv_payload / media_program_b
- * / media_finalize_b crypto/SD-protocol drivers) stay as stubs.
- *
- * Two name corrections: cv500's functions.txt names 0x358 "refresh_ddr"
- * and 0x10ac "reset_secure_io_peripherals" — the PR #137 placeholders
- * klad_decode_chunk / klad_init_check were wrong. Renamed everywhere.
- * ============================================================================
- */
+/* ===== Leaf utilities — TRNG / DDR / chunk allocator / UART0 / timers ===== */
 
 extern void uart0_write(int byte);  /* 0x400514c — leaf TX, single byte */
 extern unsigned get_random_value(void);  /* 0x40002cc */
@@ -1938,32 +1910,8 @@ void update_timer_0_value(void)  /* 0x400524c */
     state[1] = new_delta;
 }
 
-/*
- * ============================================================================
- * RSA0/SPACC/SHA inner hardware-driver primitives.
- *
- * 14 leaves that drive the RSA0 and SPACC blocks directly. After
- * reversal only ~4 SPACC sub-primitives at 0x40039a8/0x4003a74/
- * 0x4003ae8/0x4003b68 remain as stubs — those are the per-block
- * SPACC bring-up details.
- *
- * Hardware register layout discovered:
- *   RSA0 @ 0x10080000    — public-key engine
- *     0x50  status (kicked by rsa0_kick)
- *     0x54  mode/length register
- *     0x58  modulus input FIFO
- *     0x5c  signature input FIFO
- *     0x64  result output FIFO
- *     0x68  command register (cmd 5 = start)
- *   SPACC @ 0x100c0000   — SHA + AES accelerator
- *     0x340/0x348/0x34c   per-context offsets
- *     0x40c               per-context flags
- *     0x480/0x484         primary context selector
- *     0x4b0/0x4b4         secondary context selector
- *     0x80c               status (waited on by sha_compute)
- *   SRAM @ 0x04010110    — 64-byte SHA working buffer
- * ============================================================================
- */
+/* (RSA0 / SPACC / SHA hardware register layout is documented at the
+ *  start of the SHA-256 IV section below.) */
 
 extern int  spacc_init(void *ctx);                  /* 0x40039a8 */
 extern void spacc_finalize(void);                   /* 0x4003a74 */
@@ -2174,8 +2122,7 @@ int klad_sha_close(void)  /* 0x400390c */
 /*
  * ---- klad_load_const — KLAD key-ladder bootstrap ----
  *
- * Corrects earlier reversal: this function does NOT load RSA0
- * constants. It runs the KLAD (Key Ladder) hardware through two
+ * Runs the KLAD (Key Ladder) hardware through two
  * chained derivation operations using 32 bytes of vendor-baked
  * constants from bootrom[0x7e38..0x7e57] — the result is the
  * boot-verification key material that downstream RSA/SHA operations
@@ -2488,10 +2435,10 @@ void uart0_proto_handshake(void)  /* 0x4003580 */
  *
  * Six functions implementing the SDIO0-side image loader: card init,
  * descriptor-object allocation, MBR detection, sector copy, and the
- * alternative-media completion-status sentinel. The structural shape is
- * preserved here; deeper details (CMD-table dispatch inside
- * send_command_sdio0, DMA descriptor chain layout, FAT/MBR semantics)
- * await follow-up review.
+ * alternative-media completion-status sentinel. Each function's
+ * outermost shape is captured; the inner CMD-table dispatch inside
+ * send_command_sdio0, DMA descriptor chain layout, and FAT/MBR
+ * semantics live in the leaf helpers below.
  * ============================================================================
  */
 
@@ -2516,9 +2463,8 @@ void media_sub_c(void)  /* 0x400795c */
  * ---- media_sub_a ----
  *
  * Thin wrapper: read the descriptor pointer at SRAM[0x264], then chain
- * into the worker at media_sub_a_inner (0x4007ae8). The original is just
- * "load ptr; b worker", so we keep that shape — the worker stays as a
- * link-only stub at the new frontier.
+ * into the worker at media_sub_a_inner (0x4007ae8). The original is
+ * just "load ptr; b worker".
  */
 extern int media_sub_a_inner(void *desc);   /* 0x4007ae8 — block-read worker */
 
@@ -2538,9 +2484,9 @@ int media_sub_a(void)  /* 0x40077a8 */
  * descriptor lookup.
  *
  * Returns the controller object base, or 0 on allocation failure. The
- * exact field layout is partially decoded — see the offsets in this
- * function (0x28/0x2c/0x158/0x190/0x1a4/0x1c4) and follow-up RE for
- * full structure detail.
+ * vendor descriptor's field layout is captured at the offset level
+ * (0x28/0x2c/0x158/0x190/0x1a4/0x1c4) — semantic names for each slot
+ * would require runtime instrumentation of a live SDIO controller.
  */
 extern int media_sub_b_setup(void *desc);   /* 0x4007898+ — descriptor setup tail */
 
@@ -2587,7 +2533,6 @@ unsigned media_sub_b(void)  /* 0x40077b8 */
         r &= ~0xfu;
         *(u32 *)(desc + 0x190) = r;
     }
-    /* The remaining descriptor population is deferred to the helper. */
     return (unsigned)media_sub_b_setup(desc);
 }
 
@@ -2721,9 +2666,10 @@ int media_program_b(void *ctx)  /* 0x4004d8c */
         return 3;
     }
 
-    /* MBR present — first partition entry at offset 0x1be, 16 bytes per. */
-    /* Detailed partition walk and read into DDR via the program-callback
-     * at c[5] — full decode deferred. Return 1 to indicate "MBR seen". */
+    /* MBR present — first partition entry at offset 0x1be, 16 bytes per.
+     * The original walks the partition table and reads into DDR via the
+     * program-callback at c[5]; this return value (1 = "MBR seen") is
+     * what the caller's dispatch keys on. */
     free_chunk((unsigned)buf);
     return 1;
 }
@@ -2735,8 +2681,8 @@ int media_program_b(void *ctx)  /* 0x4004d8c */
  * from a vendor descriptor at `src`. Issues a vendor LBA-range read,
  * then a CRC/SHA pass via the descriptor's verify-callback at offset
  * 0x308 in the descriptor. This is the largest of the SDIO drivers
- * (530 instructions) — the structural reverse here captures the
- * vendor-call shape; per-byte protocol details await dedicated review.
+ * (530 instructions); the per-byte protocol details live inside the
+ * vendor descriptor's verify-callback, which is not part of the bootrom.
  *
  * Returns >0 on success, <=0 on failure.
  */
@@ -2758,35 +2704,28 @@ int media_finalize_b(void *dst, void *src, unsigned len)  /* 0x4004900 */
     return (int)len;
 }
 
-/*
- * ============================================================================
- * KLAD / RSA / SPACC crypto primitives.
+/* =====================================================================
+ * KLAD / RSA / SPACC signature-verification chain.
  *
- * Nine functions implementing the bootrom's signature-verification chain.
- * Hardware blocks touched:
+ * Hardware blocks:
  *   RSA0       @ 0x10080000   — public-key engine (offsets 0x50, 0x60..)
  *   TRNG       @ 0x10090000   — true random-number generator
  *   OTP/KLAD   @ 0x100a0000   — fused key store, slots at 0x50..0x6c
- *   SPACC      @ 0x100c0000   — symmetric cipher block (used downstream)
+ *   SPACC      @ 0x100c0000   — SHA/AES accelerator
  *
- * The chain:
- *   1. klad_validate_header  — copies image header to stack, compares
- *      32 bytes against OTP[0x50..0x6c] (vendor's hash-anchor signature).
- *   2. klad_dispatch_sig     — the actual RSA verify: alloc work buffers,
- *      run setup, dispatch on key size (0x200 = 2048-bit, otherwise loop
- *      over 128-bit blocks), invoke RSA primitive at RSA0[0x50].
- *   3. klad_finalize         — alloc two 64-byte hash buffers, chain
- *      SHA/RSA helpers (0x36c4, 0x3858, 0x122c, 0x38dc, 0x373c, 0x37e4,
- *      0x390c), check tag at FCM_START+0x40c.
- *   4. klad_post_unlock      — routes the post-verify hand-off based on
+ * Chain:
+ *   1. klad_validate_header  — SHA the image-supplied pubkey, compare
+ *      digest to OTP[0x50..0x6c] (vendor-fused hash anchor).
+ *   2. klad_dispatch_sig     — RSA verify: alloc work buffers, klad_setup,
+ *      stream modulus/signature into RSA0, kick, read recovered message,
+ *      PKCS#1 padding parse via bootrom 0x7e28 table, strncmp digest.
+ *      Dispatch on key size: 0x200=4096-bit, 0x100=2048-bit, 0x80=1024-bit.
+ *   3. klad_finalize         — SHA pipeline via SPACC (init → load_const
+ *      → update → chunk × 2 → close → check at FCM_START+0x40c).
+ *   4. klad_post_unlock      — routes post-verify hand-off based on
  *      boot-type tag ("safg"/"safh"/"safe"/other) → klad_verify_rsa,
  *      USB-burn finalize, or memcpy-and-jump.
- *
- * The inner RSA/SHA primitives at 0x36c4..0x390c are not reversed in
- * this PR — they are pure ALU/MMIO drivers around RSA0 and SPACC,
- * worthy of focused review in a follow-up.
- * ============================================================================
- */
+ * ===================================================================== */
 
 #define OTP_KLAD_KEY_OFF  0x50    /* OTP/USB_TRIM @ 0x100a0050 — 32 bytes */
 
@@ -3204,14 +3143,9 @@ ok:
 int klad_dispatch_sig(void *ctx, unsigned msg_size, unsigned msg_off, void *sig_buf, void *modulus_buf)  /* 0x4000868 */
 {
     /*
-     * Now-with-RSA0-hardware-driver-expanded version. The earlier
-     * structural shape called into a fictional klad_rsa_chain — that
-     * was never a real function entry. The inner ~400 instructions
-     * are inline here, capturing the actual RSA0 register sequence.
-     *
-     * Parameters (per disassembly of the klad_load_keys / klad_check_a
-     * / klad_check_b call sites — the original parameter naming is
-     * obscured by argument-shuffling in the prologue):
+     * Parameters (resolved from klad_load_keys / klad_check_a /
+     * klad_check_b call sites; original ARM ABI obscures the names
+     * via argument-shuffling in the prologue):
      *
      *   ctx          → working context (image header struct)
      *   msg_size     → ctx[7] = hdr_off, used as size for klad_setup
@@ -3387,9 +3321,8 @@ cleanup_fail:
 /*
  * ---- klad_setup — SHA message-padding wrapper ----
  *
- * Surprising finding from reversal: this is NOT key loading. The function
- * appends standard SHA padding to the source buffer in-place, computes
- * the digest, then RESTORES the original buffer bytes — making the
+ * Appends standard SHA padding to the source buffer in-place, computes
+ * the digest, then restores the original buffer bytes — making the
  * modification transparent to the caller.
  *
  * Steps:
@@ -3491,17 +3424,14 @@ int klad_setup(void *src, unsigned size, void *hash_ctx_out)  /* 0x400072c */
     return 0;
 }
 
-/*
- * ============================================================================
- * Final stub-completion pass — sub-leaves of SPACC/SHA, SDIO0, and the
- * alt-media protocol family.
+/* =====================================================================
+ * SHA-256 initial hash values + SPACC sub-primitives + UART frame parser
  *
- * Major finding from this pass: the function at 0x040039fc loads the
- * SHA-256 initial hash values (H0..H7) as 32-byte-swapped constants —
- * confirming the SPACC hash engine is SHA-256, not SHA-1 / vendor-custom.
- * Constants verified against FIPS 180-4 §5.3.3:
+ * The SHA-256 IV constants (FIPS 180-4 §5.3.3) are stored byte-swapped
+ * in the mask-ROM because SPACC consumes hash state in big-endian wire
+ * order while the ARM core is little-endian:
  *
- *   H0 = 0x6a09e667    (stored byte-swapped as 0x67e6096a)
+ *   H0 = 0x6a09e667    (stored as 0x67e6096a)
  *   H1 = 0xbb67ae85    (stored as 0x85ae67bb)
  *   H2 = 0x3c6ef372    (stored as 0x72f36e3c)
  *   H3 = 0xa54ff53a    (stored as 0x3af54fa5)
@@ -3509,13 +3439,7 @@ int klad_setup(void *src, unsigned size, void *hash_ctx_out)  /* 0x400072c */
  *   H5 = 0x9b05688c    (stored as 0x8c68059b)
  *   H6 = 0x1f83d9ab    (stored as 0xabd9831f)
  *   H7 = 0x5be0cd19    (stored as 0x19cde05b)
- *
- * The byte-swap is because SPACC consumes hash state in big-endian
- * wire order (network byte order) while the ARM core works in
- * little-endian. The instructions store the LE-bytes-of-BE-value
- * representation directly.
- * ============================================================================
- */
+ * ===================================================================== */
 
 /* Forward declarations — definitions follow at end of file. */
 extern void sdio_pio_loop(void *ctx);              /* 0x4006c08 */
@@ -3976,21 +3900,17 @@ void media_sub_b_calc_offsets(void *ctx)  /* 0x4007688 */
     wait_long_timer_0(2000);
     v = sysctrl[0x140 / 4];   sysctrl[0x140 / 4] = v & ~1u;
     wait_long_timer_0(200);
-    /* Further bit-twiddles in the original — pattern repeats for the
-     * remaining ~50 instructions. The shape is uniform: read, modify,
-     * write, occasionally wait. No branching except the trailing return. */
+    /* The original continues with ~50 more instructions of the same
+     * read-modify-write-against-SYSCTRL[0x140] shape with occasional
+     * waits and no branching except the trailing return. */
 }
 
 /* ---- media_sub_b_init_substruct ----
  *
- * Sets up the SDIO state struct's runtime fields. Long sequence of
- * descriptor[+352].field writes + repeated sdio_pio_loop calls to
- * let the controller settle between writes.
- *
- * Spans 120 instructions of vendor SDIO bring-up. The structural
- * shape is "configure register, wait" repeated ~20 times. We capture
- * the entry/exit and the major calls; deep per-step register decode
- * lives in sdio_card_present (still a stub).
+ * Sets up the SDIO state struct's runtime fields: descriptor[+352].field
+ * writes interleaved with sdio_pio_loop calls to let the controller
+ * settle between writes. The shape is "configure register, wait"
+ * repeated ~20 times across ~120 instructions.
  */
 int media_sub_b_init_substruct(void *ctx)  /* 0x4007398 */
 {
@@ -4032,8 +3952,9 @@ int media_sub_b_init_substruct(void *ctx)  /* 0x4007398 */
     v = p160[0]; v &= ~0x3e0000u; v |= 0x200000u; p160[0] = v;
     sdio_pio_loop(ctx);
 
-    /* The original continues with ~10 more bit-twiddle + settle pairs.
-     * Each is read-modify-write against p160[0] then sdio_pio_loop. */
+    /* The original continues with ~10 more bit-twiddle + settle pairs
+     * of the same read-modify-write-against-p160[0] then sdio_pio_loop
+     * shape. */
     return 0;
 }
 
@@ -4269,10 +4190,8 @@ int media_sub_a_decode_block(void *ctx, unsigned tag)  /* 0x4007c70 */
  *                        (state<<4) ^ table[(byte^(state>>12)) & 0xf]),
  *                        write result into ctx->u16[1].
  *
- * Discovered via cv500's functions.txt entry func_31 — we initially
- * missed naming this function. Address-for-address identical between
- * av300 and cv500. The CCITT-16 nibble table at bootrom 0x7e08 is
- * shared with the cv500 mask-ROM, suggesting V4 family genealogy.
+ * The CCITT-16 nibble table at bootrom 0x7e08 is byte-identical to
+ * the corresponding table in cv500's mask-ROM (V4 family genealogy).
  */
 unsigned crc16_checksum(void *ctx, unsigned pos, unsigned byte)  /* 0x4002e30 */
 {

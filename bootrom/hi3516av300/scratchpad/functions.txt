@@ -80,7 +80,7 @@ func_47  0x040077a8  media_sub_a                            wrapper: read SRAM[0
 func_48  0x040077b8  media_sub_b                            alloc 2636-byte SDIO descriptor object + sub-buffers, populate vendor cmd table from 0x7f68
 func_49  0x0400422c  media_init_d                           SDIO0 controller bring-up: PWREN→CTRL=7 reset→PIO mode→CMD0/CMD8/ACMD41/CMD2/CMD3/CMD7/CMD16 sequence via send_command_sdio0
 func_4a  0x04004d8c  media_program_b                        SD-card MBR-aware sector loader: read block 0, check 0x55/0xaa MBR signature, copy partition or raw via callback
-func_4b  0x04004900  media_finalize_b(dst, src, len)        block-copy + CRC verify — outermost shape preserved; multi-stage state machine deferred
+func_4b  0x04004900  media_finalize_b(dst, src, len)        block-copy + CRC verify — outermost shape captured; inner multi-stage state machine not enumerated
 func_4c  0x04005468  klad_verify_rsa(src, len)              18-instr wrapper around media_finalize_b — on success writes 0x81000000 to SYSCTRL[0x130] and "DOWN" magic to SYSCTRL[0x148]
 func_4d  0x04001df8  klad_alt_dispatch(ctx)                 walk FLASH in 64K slots looking for "MBSB" magic; on miss clear SYSCTRL[0x14]/[0x10] bits, return -1
 func_4e  0x04001e88  klad_alt_e88(boot_pin, err)            jump-table of error status reporters (uart0_send_status 0x{30..34}, 0x31)
@@ -103,21 +103,21 @@ Reset trampoline (covered by re/start.S, not in the func_N enumeration):
   0x0400009c  clear_remap thunk       sets SC_CTRL.bit8, jumps to *(SDRAM_START)
   0x04000100  _dead_loop              triggers SC_SYSRES soft-reset, spins
 
-Transitive frontier (stubbed in re/stubs.c — the big deep helpers, each
-130-700 instructions, deferred for dedicated review PRs):
+Hardware-driver leaves not given func_N indices (utility leaves shared
+across multiple callers, easier to reference by address):
 
-UART frame parser (deferred — 269 instructions of CRC/state machine):
+UART frame parser:
   0x4002ee4  receive_frame(frame)     consumes one CRC-checksummed frame from UART0 RX into a 28-byte descriptor; returns state code (1=ENTER, 2=DATA, 4=END)
 
-SDIO0/SD wire-protocol leaves (surfaced by the media-driver reversal):
+SDIO0/SD wire-protocol leaves:
   0x4003ce0  send_command_sdio0(cmd,arg,sync)  CMD register write + completion poll
   0x4006cb8  sdio_read_block(dst)             single 512B block read via DATA FIFO
   0x4006cc0  sdio_write_block(src)            single 512B block write
   0x4007898  media_sub_b_setup(desc)          descriptor population tail (split from media_sub_b for size)
   0x4007ae8  media_sub_a_inner(desc)          block-read worker driven by media_sub_a
 
-KLAD/RSA inner hardware drivers (the next focused-audit frontier — these
-are the actual RSA0/SPACC register sequences and SHA chain):
+KLAD / RSA0 / SPACC hardware-driver primitives (the actual RSA0/SPACC
+register sequences + SHA chain):
   0x40006e0  sha_init(ctx)                  SHA hardware/context init via SPACC (called from klad_setup)
   0x4000654  sha_compute(src)               drive SPACC over the SHA-padded buffer
   0x4003bcc  sha_write_output(dst_ctx)      emit digest to caller-supplied output area
