@@ -1904,6 +1904,8 @@ HI_S32 HI_MPI_IVE_KCF_Process(IVE_HANDLE *pIveHandle,
     arg.handle_out = 0;
     arg.tmpBuf_va  = (HI_U32)(uintptr_t) stage;
 
+    if (ive_open_fd() != HI_SUCCESS)
+        return HI_ERR_IVE_NOT_CONFIG;
     ret = ioctl(g_ive_fd, KCF_IOCTL_PROCESS, &arg);
     if (ret) {
         IVE_LOG("HI_MPI_IVE_KCF_Process", "ioctl errno=%d", errno);
