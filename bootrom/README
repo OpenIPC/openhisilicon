@@ -143,10 +143,36 @@ constants (BE wire order) — the disassembly literally encodes
 SHA-256 IV in network byte order. No place to hide a backdoor here.
 
 **Reverse-engineering complete.** Every named function reachable
-from _entry in the av300 mask-ROM (130 entries total) is now defined
+from _entry in the av300 mask-ROM (131 entries total) is now defined
 in bootloader.c. stubs.c contains only a single placeholder-name
 alias. The verification chain has no unreversed surface left to
 hide behavior in.
+
+**Cross-validated against TekuConcept's hi3516cv500 reverse**
+(`~/git/HI3516CV500-SDK/sdk/bootrom`). The av300 and cv500 mask-ROMs
+share function offsets address-for-address — every entry in
+TekuConcept's cv500 functions.txt maps to the equivalent function
+in our av300 reverse, confirming the two chips run the same
+mask-ROM code with different mapping bases (0x04000000 on av300
+vs no-prefix on cv500). Concrete agreements:
+
+  - SYSCTRL / CRG / KLAD / RSA / SPACC / TRNG base addresses
+    are identical between the two chips
+  - OTP hash anchor at 0x100a0050..0x6c is the same slot in both
+  - SHA-256 IV at bootrom 0x040039fc is the same FIPS 180-4
+    constants in both
+  - KLAD key-ladder inputs at bootrom 0x7e38..0x7e57 are
+    identically located (whether the bytes themselves match —
+    open question pending a cv500 dump)
+  - CCITT-16 CRC table at bootrom 0x7e08 is shared
+
+No security finding from cv500 contradicts our analysis. The
+cross-validation surfaced three concrete items we patched in
+response: a missed function name (crc16_checksum at 0x4002e30),
+a corrected naming (update_emmc_card_clock rather than the
+generic send_command_emmc), and proper semantic names for the
+SYSCTRL retention-block slots at 0x130..0x154 (cv500 had them as
+UNK_*).
 
 
 Structural findings
