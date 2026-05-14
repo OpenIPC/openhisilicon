@@ -170,7 +170,7 @@ extern int  uart0_read(void);                      /* 0x4005170 */
 extern int  uart0_has_rx_data(void);               /* 0x40051a0 */
 extern int  uart0_wait_start_frame(void);          /* 0x4003410 */
 extern int  uart0_recv_payload(void);              /* 0x4003354 */
-extern int  uart0_proto_handshake(void);           /* 0x4003580 */
+extern void uart0_proto_handshake(void);           /* 0x4003580 */
 extern int  uart0_recv_signed_image(void *dst, unsigned size);  /* 0x40034e0 */
 extern void uart0_send_status(int a, int b);      /* 0x4000320 */
 
@@ -1921,4 +1921,222 @@ void update_timer_0_value(void)  /* 0x400524c */
         new_delta -= 1;
     new_delta -= cur;
     state[1] = new_delta;
+}
+
+/*
+ * ============================================================================
+ * UART fastboot protocol drivers.
+ *
+ * The bootrom implements a CRC-checksummed frame protocol on UART0 for
+ * recovery / fastboot use. receive_frame() at 0x4002ee4 (left as a stub —
+ * 269 instructions of state machine) returns a per-frame state code that
+ * these five functions dispatch on:
+ *
+ *   state 1 ("ENTER")  — send 0xAA ack, wait for confirmation
+ *   state 2 ("DATA")   — send 0x55 ack, continue receiving
+ *   state 4 ("END")    — send 0xAA ack, frame complete
+ *
+ * The "EMMC" magic (0x454d4d43 little-endian = bytes 'C','M','M','E') is
+ * stored in SYSCTRL[0x150] by the payload itself to signal a clean
+ * handover from the loaded code back to the bootrom continuation point.
+ * The protocol also writes the boot status pair "ziju"/"DOWN" into
+ * SYSCTRL[0x140/0x13c] when the host has acknowledged the entry frame.
+ * ============================================================================
+ */
+
+extern int receive_frame(void *frame);  /* 0x4002ee4 — 269-instr CRC parser */
+
+/* ---- UART0 single-byte TX leaf (TX FIFO full check, then write) ---- */
+void uart0_write(int byte)  /* 0x400514c */
+{
+    volatile u32 *sram_base = (volatile u32 *)(SDRAM_START + SRAM_UART_BASE_OFF);
+    volatile u32 *uart = (volatile u32 *)sram_base[0];
+    while (uart[UART_FR / 4] & 0x20u)   /* TXFF — TX FIFO full */
+        ;
+    uart[UART_DR / 4] = (u32)byte;
+}
+
+/*
+ * ---- uart0_wait_start_frame ----
+ *
+ * Re-pinmuxes UART0, brings up the controller, then runs a 5-iteration
+ * probe loop: each iteration sends 5 space bytes (0x20) and waits up to
+ * (get_wait_ticks(1) * 10) timer ticks for an 0xAA reply from the host.
+ * On 0xAA received → return 1. After 5 failed probes → emit '\n', disable
+ * UART0, return 0. The host indication that fastboot mode is requested
+ * is exactly this 0xAA reply.
+ */
+int uart0_wait_start_frame(void)  /* 0x4003410 */
+{
+    volatile u32 *iocfg1 = (volatile u32 *)IO_CTRL1_START;
+    int outer;
+    unsigned wait_ticks;
+
+    iocfg1[0x10 / 4] = 0x531;
+    iocfg1[0x14 / 4] = 0x431;
+    initialize_uart0();
+    uart0_flush_rx_fifo();
+    wait_ticks = get_wait_ticks(1) * 10;
+
+    for (outer = 5; outer > 0; outer--) {
+        int i;
+        for (i = 0; i < 5; i++)
+            uart0_write(0x20);
+
+        timer_reset_counter();
+        for (;;) {
+            if (uart0_has_rx_data()) {
+                int b = uart0_read() & 0xff;
+                if (b == 0xaa)
+                    return 1;
+                /* anything else — keep waiting on the same probe */
+            }
+            if (timer_get_value() >= wait_ticks)
+                break;
+        }
+    }
+
+    uart0_write('\n');
+    disable_uart0();
+    return 0;
+}
+
+/*
+ * ---- uart0_recv_payload ----
+ *
+ * Frame-receive loop. Calls receive_frame on a 28-byte local frame
+ * descriptor and dispatches:
+ *   state 1 → send 0xAA, recv next frame (must be state 2)
+ *   state 2 → send 0x55, continue
+ *   state 4 → send 0xAA, invoke callback embedded in frame at sp+28,
+ *             flush RX, retry until SYSCTRL[0x150] matches "EMMC" magic,
+ *             then clear it and return.
+ *
+ * The "EMMC" magic 0x454d4d43 (bytes 'C','M','M','E' little-endian =
+ * "EMMC" big-endian read) is written into SYSCTRL[0x150] by the loaded
+ * payload itself to signal back into the bootrom.
+ */
+int uart0_recv_payload(void)  /* 0x4003354 */
+{
+    volatile u32 *sysctrl = (volatile u32 *)SYSCTRL_START;
+    u32 frame[7];                       /* 28-byte local frame descriptor */
+    int state;
+
+    for (;;) {
+        memset(frame, 0, sizeof(frame));
+        state = receive_frame(frame);
+
+        if (state == 4) {
+            typedef void (*foreign_fn)(void);
+            uart0_write(0xaa);
+            ((foreign_fn)frame[6])();    /* sp+28 — callback ptr */
+            uart0_flush_rx_fifo();
+            continue;
+        }
+        if (state == 2) {
+            uart0_write(0x55);
+            continue;
+        }
+        if (state == 1) {
+            uart0_write(0xaa);
+            /* Confirm follow-up frame is state 2 */
+            state = receive_frame(frame);
+            if (state == 2) {
+                uart0_write(0x55);
+                continue;
+            }
+            continue;
+        }
+
+        /* Check the EMMC magic — sentinel for "loaded code finished" */
+        if (sysctrl[0x150 / 4] == 0x454d4d43u) {
+            sysctrl[0x150 / 4] = 0;
+            return 0;
+        }
+    }
+}
+
+/*
+ * ---- uart0_recv_signed_image(dst, expected_size) ----
+ *
+ * Per-frame loop that stages the signed image into `dst`. Each frame's
+ * header at frame[3] holds the data length; frame[5] flagged as 1
+ * indicates the final frame, at which point the descriptor is captured
+ * (sp+8 = dst). Caps at 256 frames; returns 0 on END (state 4), -1 on
+ * timeout or size mismatch.
+ */
+int uart0_recv_signed_image(void *dst, unsigned expected_size)  /* 0x40034e0 */
+{
+    u32 frame[7];
+    int size_mismatch = 0;
+    int retries = 0;
+    int state;
+    /* Stored result captured on "final frame" indication. */
+    void *captured = (void *)0;
+    (void)captured;
+
+    for (;;) {
+        memset(frame, 0, sizeof(frame));
+        state = receive_frame(frame);
+
+        if (state == 2) {
+            uart0_write(0x55);
+        } else if (state == 4) {
+            uart0_write(0xaa);
+            return -size_mismatch;        /* 0 on success, -1 on mismatch */
+        } else if (state == 1) {
+            uart0_write(0xaa);
+            if (frame[2] != expected_size)
+                size_mismatch = 1;
+            if (frame[5] == 1)
+                captured = dst;            /* recorded but never used outside this fn */
+            continue;
+        }
+
+        if (++retries > 255)
+            return -1;
+    }
+}
+
+/*
+ * ---- uart0_proto_handshake ----
+ *
+ * Runs one frame exchange to confirm the host is ready, then writes the
+ * "ziju" / "DOWN" boot status pair into SYSCTRL[0x140/0x13c] and sets
+ * SYSCTRL[0x154] = 1 (the same recovery-mode latch that burn_bootloader
+ * sets). Flushes RX and re-zeros the frame buffer before returning.
+ */
+void uart0_proto_handshake(void)  /* 0x4003580 */
+{
+    volatile u32 *sysctrl = (volatile u32 *)SYSCTRL_START;
+    u32 frame[7];
+    int state;
+
+    memset(frame, 0, sizeof(frame));
+    for (;;) {
+        state = receive_frame(frame);
+        if (state == 2) {
+            uart0_write(0x55);
+            continue;
+        }
+        if (state == 4) {
+            uart0_write(0xaa);
+            break;
+        }
+        if (state == 1) {
+            uart0_write(0xaa);
+            state = receive_frame(frame);
+            if (state == 2) {
+                uart0_write(0x55);
+                continue;
+            }
+        }
+        /* state == 0 or unknown — keep polling */
+    }
+
+    sysctrl[0x140 / 4] = 0x7a696a75u;     /* "ziju" */
+    sysctrl[0x13c / 4] = 0x444f574eu;     /* "DOWN" */
+    sysctrl[0x154 / 4] = 1;
+    uart0_flush_rx_fifo();
+    memset(frame, 0, sizeof(frame));
 }

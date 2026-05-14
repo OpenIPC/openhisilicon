@@ -70,6 +70,11 @@ func_3d  0x040051a0  uart0_has_rx_data                      return (FR ^ 0x10) >
 func_3e  0x04005234  timer_get_value                        ~TIMER0.VALUE (since timer counts down)
 func_3f  0x04005244  get_wait_ticks(ms)                     vendor-fixed return 3000
 func_40  0x0400524c  update_timer_0_value                   refresh SRAM[0x180..0x184] timer delta from current TIMER0.VALUE
+func_41  0x0400514c  uart0_write(byte)                      poll UART_FR.TXFF clear, write byte to UART_DR
+func_42  0x04003410  uart0_wait_start_frame                 5-retry probe: send 5× ' ', wait for 0xAA reply; return 1 on hit, 0 after timeout (then '\n' + disable_uart0)
+func_43  0x04003354  uart0_recv_payload                     CRC-frame receive loop: state 1/2/4 → ack 0xAA/0x55/0xAA + callback; exits when SYSCTRL[0x150] == "EMMC" magic (0x454d4d43)
+func_44  0x040034e0  uart0_recv_signed_image(dst, size)     receive signed image frames; tracks size mismatch flag; returns 0 on END / -1 on mismatch or 256-retry timeout
+func_45  0x04003580  uart0_proto_handshake                  single-frame handshake; on END writes "ziju"/"DOWN" magics into SYSCTRL[0x140/0x13c], sets SYSCTRL[0x154]=1
 
 Reset trampoline (covered by re/start.S, not in the func_N enumeration):
 
@@ -85,13 +90,8 @@ Reset trampoline (covered by re/start.S, not in the func_N enumeration):
 Transitive frontier (stubbed in re/stubs.c — the big deep helpers, each
 130-700 instructions, deferred for dedicated review PRs):
 
-UART secure-load drivers (each 200-350 instructions of UART fastboot
-protocol + flow control):
-  0x4003410  uart0_wait_start_frame   start-of-frame detect (39 instr — small for the family)
-  0x4003354  uart0_recv_payload       payload reception state machine (353 instr)
-  0x4003580  uart0_proto_handshake    intermediate handshake step (214 instr)
-  0x40034e0  uart0_recv_signed_image  receive signed image into buffer (254 instr)
-  0x400514c  uart0_write              single-byte TX leaf — used by uart0_send_status
+UART frame parser (deferred — 269 instructions of CRC/state machine):
+  0x4002ee4  receive_frame(frame)     consumes one CRC-checksummed frame from UART0 RX into a 28-byte descriptor; returns state code (1=ENTER, 2=DATA, 4=END)
 
 eMMC/SDIO media drivers (200-500+ instructions each):
   0x400422c  media_init_d             called from media_program_a entry (294 instr)

@@ -1,30 +1,29 @@
 /*
  * Link-only stubs for transitive callees of the reverse-engineered
- * functions in bootloader.c. The frontier has now pushed down to the
- * deep crypto/protocol drivers — what remains here is the genuinely
- * big stuff that warrants dedicated review when reversed.
+ * functions in bootloader.c. The frontier is now down to two
+ * subsystems: the eMMC/SDIO media drivers and the KLAD crypto
+ * primitives, each warranting its own dedicated review PR.
  *
- * Each name reflects role-from-context. Signatures match the bootrom
- * call sites (return types and argument counts), not necessarily the
- * full semantic.
+ * Signatures match the bootrom call sites; semantic responsibility
+ * for the KLAD entry points awaits cross-reference with av300
+ * vendor crypto documentation.
  */
 
 typedef unsigned char  u8;
 typedef unsigned int   u32;
 typedef unsigned int   size_t;
 
-/* Single-byte UART0 TX leaf — used by uart0_send_status. */
-void uart0_write(int byte)                          { (void)byte; }        /* 0x400514c */
+/*
+ * Frame parser shared by the four UART fastboot drivers above. CRC
+ * checksumming + framing state machine — 269 instructions of its
+ * own, deferred for a focused review.
+ */
+int  receive_frame(void *frame)                     { (void)frame; return 0; }  /* 0x4002ee4 */
 
-/* UART secure-load helpers (each 200-350 instructions; bulk of the
- * fastboot serial protocol). */
-int  uart0_wait_start_frame(void)                   { return 0; }          /* 0x4003410 */
-int  uart0_recv_payload(void)                       { return 0; }          /* 0x4003354 */
-int  uart0_proto_handshake(void)                    { return 0; }          /* 0x4003580 */
-int  uart0_recv_signed_image(void *dst, unsigned size) { (void)dst; (void)size; return 0; }  /* 0x40034e0 */
-
-/* Media-path helpers — bulk SDIO / eMMC programmer state machines.
- * Each runs 200-500+ instructions and lives in its own subsystem. */
+/*
+ * Media-path drivers — bulk SDIO / eMMC programmer state machines.
+ * Each runs 200-500+ instructions and lives in its own subsystem.
+ */
 int  media_init_d(void)                             { return 0; }          /* 0x400422c */
 int  media_program_b(void *ctx)                     { (void)ctx; return 0; }  /* 0x4004d8c */
 int  media_finalize_b(void *dst, void *src, unsigned len)
@@ -34,10 +33,10 @@ unsigned media_sub_b(void)                          { return 0; }          /* 0x
 void media_sub_c(void)                              {}                     /* 0x400795c */
 
 /*
- * KLAD / RSA / SPACC / TRNG internal helpers — these are the actual
- * crypto drivers. Each is large (130-700 instructions) and merits its
- * own dedicated PR for proper auditing of the RSA signature check,
- * OTP key fetch, and hash-chain primitives.
+ * KLAD / RSA / SPACC / TRNG internal helpers — the actual crypto
+ * drivers. Each is large (130-700 instructions) and merits its own
+ * PR for proper auditing of the RSA signature check, OTP key fetch,
+ * and hash-chain primitives.
  */
 int  klad_validate_header(void *ctx)                { (void)ctx; return 0; }  /* 0x4001150 (658 instr) */
 int  klad_dispatch_sig(void *ctx, unsigned size, unsigned arg2, unsigned arg3, unsigned arg4)
