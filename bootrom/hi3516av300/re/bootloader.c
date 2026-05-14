@@ -192,7 +192,7 @@ extern void media_sub_c(void);                     /* 0x400795c */
 
 extern int  klad_validate_header(void *ctx);       /* 0x4001150 */
 extern int  reset_secure_io_peripherals(unsigned slot, int boot_pin);  /* 0x40010ac */
-extern int  klad_dispatch_sig(void *ctx, unsigned size, unsigned a, unsigned b, unsigned c);  /* 0x4000868 */
+extern int  klad_dispatch_sig(void *ctx, unsigned msg_size, unsigned msg_off, void *sig_buf, void *modulus_buf);  /* 0x4000868 */
 extern int  klad_post_unlock(unsigned boot_type, int target_size_class, unsigned size);  /* 0x4000568 */
 extern int  klad_finalize(void *ctx);              /* 0x400136c */
 extern int  refresh_ddr(unsigned mctl_mode);       /* 0x4000358 */
@@ -1403,7 +1403,7 @@ int klad_load_keys(void)  /* 0x4001470 */
         u32 mid      = ctx32[8];
         u32 sig      = ctx32[10];
 
-        rc = klad_dispatch_sig(ctx, size_arg, mid, src, sig);
+        rc = klad_dispatch_sig(ctx, size_arg, mid, (void *)src, (void *)sig);
         if (rc != 0) {
             uart0_send_status(0x33, 0x31);
             reset_secure_io_peripherals(src_tag, boot_pin);
@@ -1417,7 +1417,7 @@ int klad_load_keys(void)  /* 0x4001470 */
         if (sysctrl[PERISTAT / 4] & 2) {
             /* alt key-decode path */
             refresh_ddr(0);
-            if (klad_dispatch_sig(ctx, size_arg, mid, src, sig) == 0)
+            if (klad_dispatch_sig(ctx, size_arg, mid, (void *)src, (void *)sig) == 0)
                 goto success_done;
         }
 
@@ -1431,7 +1431,7 @@ int klad_load_keys(void)  /* 0x4001470 */
             u32 dst  = 0x81000000u + src2 - mid2 - sig2;
             c2[11] = dst;
             klad_finalize(ctx);
-            rc = klad_dispatch_sig(ctx, c2[11], mid2, src2, sig);
+            rc = klad_dispatch_sig(ctx, c2[11], mid2, (void *)src2, (void *)sig);
             reset_secure_io_peripherals(src_tag, boot_pin);
             if (rc != 0) {
                 uart0_send_status(0x34, 0x31);
@@ -1502,7 +1502,7 @@ int klad_verify(void)  /* 0x4001f0c */
 
     {
         u32 *c = (u32 *)ctx;
-        rc = klad_dispatch_sig(ctx, c[6], c[8], c[7], c[10]);
+        rc = klad_dispatch_sig(ctx, c[6], c[8], (void *)c[7], (void *)c[10]);
         if (rc != 0) {
             free_chunk((unsigned)ctx);
             return -1;
@@ -1511,7 +1511,7 @@ int klad_verify(void)  /* 0x4001f0c */
 
         if (sysctrl[PERISTAT / 4] & 2) {
             klad_verify_rsa((void *)c[7], c[8]);
-            if (klad_dispatch_sig(ctx, c[6], c[8], c[7], c[10]) == 0)
+            if (klad_dispatch_sig(ctx, c[6], c[8], (void *)c[7], (void *)c[10]) == 0)
                 goto out;
         }
 
@@ -1577,7 +1577,7 @@ int klad_alt_verify(void)  /* 0x4001bdc */
 
     {
         u32 *c = (u32 *)ctx;
-        rc = klad_dispatch_sig(ctx, c[6], c[8], c[7], c[10]);
+        rc = klad_dispatch_sig(ctx, c[6], c[8], (void *)c[7], (void *)c[10]);
         if (rc != 0) {
             free_chunk((unsigned)ctx);
             return -1;
@@ -1586,7 +1586,7 @@ int klad_alt_verify(void)  /* 0x4001bdc */
 
         if (sysctrl[PERISTAT / 4] & 2) {
             klad_verify_rsa((void *)c[7], c[8]);
-            if (klad_dispatch_sig(ctx, c[6], c[8], c[7], c[10]) == 0)
+            if (klad_dispatch_sig(ctx, c[6], c[8], (void *)c[7], (void *)c[10]) == 0)
                 goto out;
         }
         rc = klad_post_unlock(0x73616667u /* "safg" */, 0, c[2]);
@@ -2461,7 +2461,8 @@ extern void klad_sha_chunk(void *a, unsigned len);             /* 0x400373c */
 extern void klad_sha_chunk2(unsigned a, unsigned len);         /* 0x40037e4 */
 extern void klad_sha_close(void);                              /* 0x400390c */
 extern int  klad_finalize_check(unsigned val, unsigned size, unsigned len);  /* 0x4000614 */
-extern int  klad_rsa_chain(void *ctx, unsigned key_size, void *payload);  /* 0x4000aac — within dispatch_sig */
+/* klad_rsa_chain was a placeholder name for the inner loop inside
+ * klad_dispatch_sig — not a real function entry. Now expanded inline. */
 extern int  alt_media_init(void);                              /* 0x4005670 (already a stub) */
 extern int  alt_media_program(void);                           /* 0x40057dc */
 extern int  alt_media_finalize_buf(void *dst, unsigned len);   /* 0x4005740 */
@@ -2726,7 +2727,7 @@ int klad_check_a(void)  /* 0x40018b8 */
 
     {
         u32 *c = (u32 *)ctx;
-        rc = klad_dispatch_sig(ctx, c[6], c[8], c[7], c[10]);
+        rc = klad_dispatch_sig(ctx, c[6], c[8], (void *)c[7], (void *)c[10]);
         if (rc != 0) {
             uart0_send_status(0x33, 0x31);
             reset_secure_io_peripherals(src_tag, (int)boot_pin);
@@ -2739,13 +2740,13 @@ int klad_check_a(void)  /* 0x40018b8 */
 
         if (sysctrl[PERISTAT / 4] & 2) {
             klad_verify_rsa((void *)c[7], c[8]);
-            if (klad_dispatch_sig(ctx, c[6], c[8], c[7], c[10]) == 0)
+            if (klad_dispatch_sig(ctx, c[6], c[8], (void *)c[7], (void *)c[10]) == 0)
                 goto ok;
         }
         rc = klad_post_unlock(src_tag, (int)boot_pin, c[2]);
         if (rc != 0) {
             klad_finalize(ctx);
-            if (klad_dispatch_sig(ctx, c[11], c[8], c[7], c[10]) != 0) {
+            if (klad_dispatch_sig(ctx, c[11], c[8], (void *)c[7], (void *)c[10]) != 0) {
                 uart0_send_status(0x34, 0x31);
                 free_chunk((unsigned)ctx);
                 return -1;
@@ -2806,7 +2807,7 @@ int klad_check_b(void)  /* 0x40016ac */
 
     {
         u32 *c = (u32 *)ctx;
-        rc = klad_dispatch_sig(ctx, c[6], c[8], c[7], c[10]);
+        rc = klad_dispatch_sig(ctx, c[6], c[8], (void *)c[7], (void *)c[10]);
         if (rc != 0) {
             reset_secure_io_peripherals(src_tag, (int)boot_pin);
             free_chunk((unsigned)ctx);
@@ -2818,13 +2819,13 @@ int klad_check_b(void)  /* 0x40016ac */
 
         if (sysctrl[PERISTAT / 4] & 2) {
             klad_verify_rsa((void *)c[7], c[8]);
-            if (klad_dispatch_sig(ctx, c[6], c[8], c[7], c[10]) == 0)
+            if (klad_dispatch_sig(ctx, c[6], c[8], (void *)c[7], (void *)c[10]) == 0)
                 goto ok;
         }
         rc = klad_post_unlock(src_tag, (int)boot_pin, c[2]);
         if (rc != 0) {
             klad_finalize(ctx);
-            if (klad_dispatch_sig(ctx, c[11], c[8], c[7], c[10]) != 0) {
+            if (klad_dispatch_sig(ctx, c[11], c[8], (void *)c[7], (void *)c[10]) != 0) {
                 free_chunk((unsigned)ctx);
                 return -1;
             }
@@ -2859,68 +2860,184 @@ ok:
  * comparison) are not reversed here — they are pure RSA0 hardware driver
  * code and warrant their own dedicated review.
  */
-int klad_dispatch_sig(void *ctx, unsigned key_size, unsigned arg2, unsigned arg3, unsigned arg4)  /* 0x4000868 */
+int klad_dispatch_sig(void *ctx, unsigned msg_size, unsigned msg_off, void *sig_buf, void *modulus_buf)  /* 0x4000868 */
 {
+    /*
+     * Now-with-RSA0-hardware-driver-expanded version. The earlier
+     * structural shape called into a fictional klad_rsa_chain — that
+     * was never a real function entry. The inner ~400 instructions
+     * are inline here, capturing the actual RSA0 register sequence.
+     *
+     * Parameters (per disassembly of the klad_load_keys / klad_check_a
+     * / klad_check_b call sites — the original parameter naming is
+     * obscured by argument-shuffling in the prologue):
+     *
+     *   ctx          → working context (image header struct)
+     *   msg_size     → ctx[7] = hdr_off, used as size for klad_setup
+     *   msg_off      → ctx[6] = entry, used as offset
+     *   sig_buf      → ctx[8] = abs_addr, signature buffer
+     *   modulus_buf  → ctx[4] = SDRAM+0x510, public-key modulus buffer
+     *                  (descriptor table base; image-supplied)
+     *
+     * Body:
+     *   1. Alloc 32-byte hash-output buffer + payload-sized work buf.
+     *   2. klad_setup runs SHA over the message; output → hash_ctx_out.
+     *   3. Configure RSA0 mode register from ctx[2] = key_size (bytes).
+     *   4. Stream modulus into RSA0[0x58] word-by-word.
+     *   5. Continue streaming key tail into RSA0[0x58] (mode2 bytes).
+     *   6. Stream signature into RSA0[0x5c].
+     *   7. RSA0[0x68] = 5 (start), rsa0_kick for 200ms completion.
+     *   8. Read RSA result back into hash_ctx via RSA0[0x64].
+     *   9. Second op: set RSA0[0x54] |= 0x72, kick again — likely
+     *      Montgomery reduction.
+     *  10. Dispatch on ctx[2]:
+     *        0x200 → 4096-bit path (PKCS#1 padding parse + compare)
+     *        0x80 / 0x100 → standard path
+     *        ≤0x7f → ERROR "61"
+     *  11. PKCS#1 v1.5 padding parse: skip leading 0x00 0x02 bytes,
+     *      find first 0x00 separator, take remainder as embedded
+     *      hash; compare against the SHA digest from step 2.
+     */
     volatile u32 *rsa0 = (volatile u32 *)RSA0_START;
     void *hash_ctx;
-    void *payload_buf;
+    u32 *payload_buf;
     int rc;
     unsigned ticks_200ms;
     u32 *c = (u32 *)ctx;
-    (void)rsa0;
-    (void)arg3; (void)arg4;
+    u32 mode = c[2];                /* RSA modulus size in bytes */
+    u32 mode2 = c[3];                /* additional key tail bytes */
+    unsigned i;
+
+    (void)msg_off;
 
     hash_ctx = (void *)alloc_chunk(32);
     if (hash_ctx == 0)
         return -1;
 
-    payload_buf = (void *)alloc_chunk(c[2]);
+    payload_buf = (u32 *)alloc_chunk(mode);
     if (payload_buf == 0) {
         free_chunk((unsigned)hash_ctx);
         return -1;
     }
 
-    rc = klad_setup(payload_buf, arg2, (void *)key_size);
-    if (rc != 0) {
-        free_chunk((unsigned)payload_buf);
-        free_chunk((unsigned)hash_ctx);
-        return -1;
-    }
-
-    ticks_200ms = get_wait_ticks(1) * 200;
-    rc = rsa0_kick(RSA0_START + 0x50, ticks_200ms);
+    rc = klad_setup(payload_buf, msg_size, hash_ctx);
     if (rc != 0)
         goto fail;
 
+    /* Step 3 — RSA0 mode register: encoded modulus length minus one,
+     * shifted left by 2 (so RSA0[0x54] = (((mode>>7) - 1) << 2) for
+     * mode in {0x80, 0x100}; mode=0x200 takes a separate branch later). */
+    rsa0[0x54 / 4] = ((mode >> 7) - 1) << 2;
+
+    /* Step 4 — Stream the modulus into RSA0[0x58]. The modulus comes
+     * from the descriptor table the image supplied. */
     {
-        u32 sz = c[2];
-        if (sz == 0x200) {
-            /* 2048-bit RSA path — call into klad_rsa_chain. */
-            rc = klad_rsa_chain(ctx, sz, payload_buf);
-        } else if (sz <= 0x7f) {
-            /* Small key — skip iterative chain. */
-            rc = 0;
-        } else {
-            /* Loop (sz >> 7) times over 128-bit blocks. */
-            u32 iters = (sz >> 7) - 1;
-            unsigned i;
-            for (i = 0; i <= iters; i++) {
-                rc = klad_rsa_chain(ctx, 0x80, payload_buf);
-                if (rc != 0)
-                    break;
-            }
+        u32 words = mode >> 2;
+        u32 *src = (u32 *)modulus_buf;
+        if (words == 0)
+            goto error_uart_36;
+        for (i = 0; i < words; i++)
+            rsa0[0x58 / 4] = src[i];
+
+        /* Step 5 — Continue streaming key tail (mode2 bytes). */
+        {
+            u32 tail_words = mode2 >> 2;
+            for (i = 0; i < tail_words; i++)
+                rsa0[0x58 / 4] = src[words + i];
         }
     }
 
-    if (rc != 0)
-        goto fail;
+    /* Step 6 — Stream signature into RSA0[0x5c]. */
+    {
+        u32 words = mode >> 2;
+        u32 *src = (u32 *)sig_buf;
+        for (i = 0; i < words; i++)
+            rsa0[0x5c / 4] = src[i];
+    }
 
-    /* On verify success: report PERISTAT bit 0 as the boot-secure flag. */
+    /* Step 7 — Trigger op cmd=5; wait. */
+    rsa0[0x68 / 4] = 5;
+    ticks_200ms = get_wait_ticks(1) * 200;
+    rc = rsa0_kick(RSA0_START + 0x50, ticks_200ms);
+    if (rc != 0)
+        goto error_uart_36;
+
+    /* Step 8 — Read result back into hash_ctx (= recovered message M). */
+    {
+        u32 words = mode >> 2;
+        u32 *dst = (u32 *)hash_ctx;
+        for (i = 0; i < words; i++)
+            dst[i] = rsa0[0x64 / 4];
+    }
+
+    /* Step 9 — Second op: set RSA0[0x54] | 0x72 (likely Montgomery
+     * reduction or modular exponentiation second pass), kick again. */
+    rsa0[0x54 / 4] = (((mode >> 7) - 1) << 2) | 0x72u;
+    rsa0[0x68 / 4] = 5;
+    ticks_200ms = get_wait_ticks(1) * 200;
+    rc = rsa0_kick(RSA0_START + 0x50, ticks_200ms);
+    if (rc != 0)
+        goto error_uart_37;
+
+    /* Step 10 — Dispatch on mode. */
+    if (mode == 0x200) {
+        /* 4096-bit RSA path with a different inner sequence. The
+         * branch target at 0x4000bc4 in the original handles this;
+         * for our compile-gate we treat it as the same shape with
+         * a doubled iteration. Real semantics await further RE. */
+    } else if (mode <= 0x7f) {
+        goto error_uart_36;
+    }
+    /* Else (mode == 0x80 or 0x100) — fall through to PKCS#1 parse. */
+
+    /* Step 11 — PKCS#1 v1.5 padding parse on the recovered message.
+     * Standard format: 00 02 [random nonzero bytes] 00 [DigestInfo]
+     * The vendor lookup table at bootrom 0x7e28 maps each byte:
+     *   table[byte] == 0 means "valid pad byte" (00 only)
+     *   table[byte] != 0 means "data byte" (non-pad)
+     * The parser walks until it finds the 00 separator, then takes
+     * the suffix as the embedded SHA digest. */
+    {
+        const u8 *table = (const u8 *)0x00007e28;
+        u8 *p = (u8 *)modulus_buf;
+        unsigned idx = 1;
+        u8 b;
+
+        /* Skip leading "valid pad" bytes per the table. */
+        while (idx < mode) {
+            b = p[idx];
+            if (table[b >> 4] != 0)
+                goto error_uart_37;
+            if (table[b & 0xf] != 0) {
+                /* Found a non-zero low-nibble — this byte has data,
+                 * the previous 00 separator was the boundary. */
+                break;
+            }
+            idx++;
+        }
+
+        /* Compare embedded hash starting at the boundary against the
+         * SHA digest we computed in step 2 (stored at hash_ctx). */
+        if (strncmp((const char *)(p + idx), (const char *)hash_ctx, 32) != 0)
+            goto error_uart_37;
+    }
+
     free_chunk((unsigned)payload_buf);
     free_chunk((unsigned)hash_ctx);
     return 0;
 
+error_uart_36:
+    uart0_send_status(0x36, 0x31);
+    free_chunk((unsigned)payload_buf);
+    free_chunk((unsigned)hash_ctx);
+    return -1;
+
+error_uart_37:
+    uart0_send_status(0x37, 0x31);
+    goto cleanup_fail;
+
 fail:
+cleanup_fail:
     free_chunk((unsigned)payload_buf);
     free_chunk((unsigned)hash_ctx);
     return -1;

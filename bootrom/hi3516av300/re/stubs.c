@@ -4,7 +4,7 @@
  *
  *   1. The CRC-checksummed UART frame parser (receive_frame, 269 instr).
  *   2. Inner crypto/SD primitives — the actual hardware drivers behind
- *      RSA0 (klad_setup, rsa0_kick, klad_rsa_chain, klad_sha_*),
+ *      RSA0 (rsa0_kick, klad_sha_*, sha_init/compute/output),
  *      SDIO0 (send_command_sdio0, sdio_read_block/write_block,
  *      media_sub_a_inner, media_sub_b_setup), and a handful of
  *      smaller helpers.
@@ -39,8 +39,6 @@ int  sha_compute(void *src)                         { (void)src; return 0; }  /*
 void sha_write_output(void *dst_ctx)                { (void)dst_ctx; }     /* 0x4003bcc */
 int  rsa0_kick(unsigned mode, unsigned ticks)
     { (void)mode; (void)ticks; return 0; }                                /* 0x40006a4 */
-int  klad_rsa_chain(void *ctx, unsigned key_size, void *payload)
-    { (void)ctx; (void)key_size; (void)payload; return 0; }               /* 0x4000aac */
 int  klad_check_step(void)                          { return 0; }          /* 0x4001314 */
 int  klad_alt_step(unsigned arg)                    { (void)arg; return 0; }  /* 0x4001b40 */
 

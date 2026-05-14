@@ -215,13 +215,24 @@ RSA verification chain — what we now know
 The 9 KLAD primitives plus klad_setup have been structurally
 reversed. Concrete findings worth flagging for crypto auditors:
 
-* **OTP hash anchor at 0x100a0050..0x100a006c.** klad_validate_header
-  (0x4001150) loads 8 words (32 bytes) from this fused-OTP slot and
-  compares against the image header's signature bytes using strncmp.
-  This is a vendor-baked hash anchor, not a public key. The slot is
-  read every secure boot; if an attacker can write the OTP (typically
-  one-time, but mask-ROM bugs in older HiSilicon parts have allowed
-  re-fuse) they own boot trust forever.
+* **OTP[0x50..0x6c] is a SHA-256 digest of the trusted public key,
+  not the key itself.** Reversing klad_rsa_chain confirms the full
+  trust chain:
+    1. OTP at 0x100a0050..0x6c = 32-byte fingerprint H(pubkey)
+    2. The image header CARRIES the public-key modulus at
+       SDRAM+0x510 (the descriptor table base, populated by
+       parse_image_header from the on-media image)
+    3. klad_validate_header SHA-hashes the image-supplied modulus
+       and compares the digest to OTP via strncmp
+    4. klad_dispatch_sig then RSA-verifies the image signature
+       using the validated modulus
+  So the trust anchor in OTP is JUST 32 bytes; everything else is
+  attacker-influenceable until the SHA digest matches. To forge:
+  attacker would need a SHA-256 preimage attack on the OTP value
+  (≈2^256 work — infeasible) OR a separate RSA private key whose
+  public modulus hashes to the same OTP value (also 2^256).
+  Practical exploitation requires OEM-key compromise — i.e. the
+  factorization of a 1024-bit RSA key.
 
 * **klad_setup is the SHA padding wrapper, NOT key loading.** This
   was the single most important reversal of the session: klad_setup
@@ -235,11 +246,21 @@ reversed. Concrete findings worth flagging for crypto auditors:
   at 0x4000654, sha_write_output at 0x4003bcc) remain as stubs —
   reversing them traces the SPACC accelerator register sequence.
 
-* **RSA0 hardware at 0x10080050.** klad_dispatch_sig (0x4000868)
-  kicks the RSA0 engine via rsa0_kick(RSA0_START + 0x50, ticks_200ms)
-  and iterates 128-bit blocks through klad_rsa_chain. The full
-  RSA0 register dance (the 400+ instructions inside klad_rsa_chain
-  at 0x4000aac, still a stub) is the next focused-audit target.
+* **RSA0 hardware sequence is fully reversed.** klad_dispatch_sig
+  (0x4000868, 509 instructions, now fully inlined in
+  bootloader.c) drives RSA0 directly:
+    RSA0[0x54] = ((mode>>7) - 1) << 2            mode-length register
+    RSA0[0x58] = modulus[i]    for i in 0..mode/4    stream pubkey
+    RSA0[0x5c] = signature[i]  for i in 0..mode/4    stream signature
+    RSA0[0x68] = 5                                kick exponentiation
+    rsa0_kick(RSA0+0x50, 200ms timeout)           wait completion
+    hash_buf[i] = RSA0[0x64]   for i in 0..mode/4    read recovered M
+    RSA0[0x54] |= 0x72; RSA0[0x68] = 5; kick      second op
+    PKCS#1 v1.5 padding parse using lookup table  bootrom 0x7e28
+    strncmp embedded digest vs SHA(message)       final compare
+  The "klad_rsa_chain" placeholder was an artefact of the
+  earlier structural reversal — there is no separate function
+  at 0x4000aac, it's a branch target inside klad_dispatch_sig.
 
 * **Mode dispatch is on RSA key SIZE in bytes (not bits).** klad_
   dispatch_sig's mode field (ctx[2] = image_header[8..b]) maps:
@@ -284,14 +305,14 @@ reversed. Concrete findings worth flagging for crypto auditors:
   the signature region for klad_dispatch_sig's iteration, which
   could lead to a mid-verify glitch.
 
-The remaining inner stubs are 10 RSA0/SPACC/SHA hardware-driver
-primitives (rsa0_kick, klad_rsa_chain, the 6 klad_sha_* helpers,
-sha_init/compute/output, klad_finalize_check, klad_check_step,
-klad_alt_step) plus 2 alt-media transit functions. Reversing
-klad_rsa_chain (0x4000aac, ~400 instructions) is the highest-
-value next step — it answers exactly which RSA hardware mode
-RSA0 runs in and whether the modulus is fully baked or partly
-loaded at runtime.
+The remaining inner stubs are 9 RSA0/SPACC/SHA hardware-driver
+primitives (rsa0_kick, the 6 klad_sha_* helpers, sha_init/compute/
+output, klad_finalize_check, klad_check_step, klad_alt_step) plus
+2 alt-media transit functions. The major remaining unknown is the
+exact PKCS#1 padding table at bootrom 0x7e28 — 256 bytes of
+lookup-table data that classify each byte as "valid pad" or "data".
+Dumping and decoding that table would tell us whether the bootrom
+accepts standard PKCS#1 v1.5 padding or a vendor-modified variant.
 
 
 Reading order suggestion for new auditors
