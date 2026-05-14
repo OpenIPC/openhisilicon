@@ -1343,6 +1343,192 @@ static long ive_op_lbp(unsigned long arg)
 	return ive_submit_nonxnn(node, buf);
 }
 
+/* ---- CSC (op=2): arg = {handle(8), src(72), dst(72), ctrl(4), instant(4)} ---- *
+ * Color-Space Conversion. cv500-only HW op (vendor blob
+ * `ive_fill_csc_task` @0x78cc). 12 modes: BT601/BT709 × YUV2RGB /
+ * YUV2HSV / YUV2LAB / RGB2YUV.
+ *
+ * First cut covers 8 modes that need no on-chip table:
+ *   0..3 YUV2{RGB}, 8..11 RGB2{YUV}.
+ * HSV (modes 4..5) and LAB (modes 6..7) need rgb2hsv (0x800 B) /
+ * rgb2lab (0x1a00 B) tables copied into MMZ on first use (vendor does
+ * this in `ive_csc` before calling fill_task). Shipping table init is
+ * a follow-up — return -EOPNOTSUPP for those modes.
+ *
+ * Field map (decoded from `ive_fill_csc_task`):
+ *   node[10]=2 (op), node[11]=enMode
+ *   node[8]: src format byte — 1 YUV420SP, 2 YUV422SP, 3 U8C3_PKG, 4 U8C3_PLN
+ *   node[9]: dst format byte — 0 YUV420SP, 1 YUV422SP, 2 U8C3_PKG, 3 U8C3_PLN
+ *   node[40,42] = width, height
+ *   Plane phys / strides:
+ *     2-plane SP : node[16,44] = p0/s0, node[24,46] = p1/s1
+ *     1-plane PKG: node[16,44] = p0/s0
+ *     3-plane PLN: node[16,24,32] / [44,46,48]
+ *   Dst plane lanes shift +4: node[20,28,36] / [50,52,54].
+ */
+static long ive_op_csc_cv500(unsigned long arg)
+{
+	u8 *buf = (u8 *)arg;
+	u8 *src = buf + 8, *dst = buf + 80, *ctrl = buf + 152;
+	u32 mode = *(u32 *)(ctrl + 0);
+	u32 src_type = IMG_TYPE(src);
+	u32 dst_type = IMG_TYPE(dst);
+	u8  src_fmt, dst_fmt;
+	u8 node[208];
+
+	if (IVE_CHECK_IMG(src) || IVE_CHECK_IMG(dst))
+		return -EINVAL;
+
+	if (mode >= 12) {
+		pr_info("ive_neo: CSC bad enMode=%u (0..11)\n", mode);
+		return -EINVAL;
+	}
+	if (mode >= 4 && mode <= 7)
+		return -EOPNOTSUPP;          /* HSV/LAB — table init not yet implemented */
+
+	switch (src_type) {
+	case 2:  src_fmt = 1; break;          /* YUV420SP */
+	case 3:  src_fmt = 2; break;          /* YUV422SP */
+	case 10: src_fmt = 3; break;          /* U8C3_PACKAGE */
+	case 11: src_fmt = 4; break;          /* U8C3_PLANAR */
+	default:
+		pr_info("ive_neo: CSC bad src enType=%u\n", src_type);
+		return -EINVAL;
+	}
+	switch (dst_type) {
+	case 2:  dst_fmt = 0; break;
+	case 3:  dst_fmt = 1; break;
+	case 10: dst_fmt = 2; break;
+	case 11: dst_fmt = 3; break;
+	default:
+		pr_info("ive_neo: CSC bad dst enType=%u\n", dst_type);
+		return -EINVAL;
+	}
+
+	memset(node, 0, sizeof(node));
+	node[8]  = src_fmt;
+	node[9]  = dst_fmt;
+	node[10] = 2;                         /* op = CSC */
+	node[11] = (u8) mode;
+	*(u16 *)(node + 40) = (u16)IMG_WIDTH(src);
+	*(u16 *)(node + 42) = (u16)IMG_HEIGHT(src);
+
+	*(u32 *)(node + 16) = IMG_PHYS(src);
+	*(u16 *)(node + 44) = (u16)IMG_STRIDE(src);
+	if (src_type == 2 || src_type == 3 || src_type == 11) {
+		*(u32 *)(node + 24) = *(u32 *)(src + 8);
+		*(u16 *)(node + 46) = *(u16 *)(src + 52);
+	}
+	if (src_type == 11) {
+		*(u32 *)(node + 32) = *(u32 *)(src + 16);
+		*(u16 *)(node + 48) = *(u16 *)(src + 56);
+	}
+
+	*(u32 *)(node + 20) = IMG_PHYS(dst);
+	*(u16 *)(node + 50) = (u16)IMG_STRIDE(dst);
+	if (dst_type == 2 || dst_type == 3 || dst_type == 11) {
+		*(u32 *)(node + 28) = *(u32 *)(dst + 8);
+		*(u16 *)(node + 52) = *(u16 *)(dst + 52);
+	}
+	if (dst_type == 11) {
+		*(u32 *)(node + 36) = *(u32 *)(dst + 16);
+		*(u16 *)(node + 54) = *(u16 *)(dst + 56);
+	}
+
+	pr_info_once("ive_neo: CSC handler wired (HW op 2, modes 0..3 + 8..11)\n");
+	return ive_submit_nonxnn(node, buf);
+}
+
+/* ---- FilterAndCSC (op=3): arg = {handle(8), src(72), dst(72), ctrl(30+pad), instant(4)} ---- *
+ * 5x5 filter followed by YUV→RGB color-space conversion. cv500-only
+ * HW op (vendor blob `ive_fill_filter_and_csc_task` @0x7b54). Unlike
+ * standalone CSC this unit has no on-chip lookup tables — supports
+ * YUV2RGB modes only (0..3); HSV/LAB live on the separate CSC unit.
+ *
+ * Field map:
+ *   node[10]=3, node[11]=enMode
+ *   node[8]: src format byte (1 YUV420SP, 2 YUV422SP)
+ *   node[9]: dst format byte (2 U8C3_PKG, 3 U8C3_PLN)
+ *   node[40,42] = width, height
+ *   node[16,44] / [24,46] = src plane 0 / 1 phys + stride
+ *   node[20,50] (+ [28,52] / [36,54] for PLN) = dst planes
+ *   node[56..80] = memcpy(ctrl.as8Mask[25])
+ *   node[81] = ctrl.u8Norm
+ *
+ * Vendor validator rejects: enMode > 3, u8Norm > 13, src ∉ {2,3},
+ * dst ∉ {10,11}. We pre-check the format/mode bounds and let HW
+ * handle the rest.
+ */
+static long ive_op_flt_csc_cv500(unsigned long arg)
+{
+	u8 *buf = (u8 *)arg;
+	u8 *src = buf + 8, *dst = buf + 80, *ctrl = buf + 152;
+	u32 mode = *(u32 *)(ctrl + 0);
+	u8  norm = ctrl[29];
+	u32 src_type = IMG_TYPE(src);
+	u32 dst_type = IMG_TYPE(dst);
+	u8  src_fmt, dst_fmt;
+	u8 node[208];
+
+	if (IVE_CHECK_IMG(src) || IVE_CHECK_IMG(dst))
+		return -EINVAL;
+	if (mode > 3) {
+		pr_info("ive_neo: FilterAndCSC bad enMode=%u (need 0..3 YUV2RGB)\n", mode);
+		return -EINVAL;
+	}
+	if (norm > 13) {
+		pr_info("ive_neo: FilterAndCSC bad u8Norm=%u (need 0..13)\n", norm);
+		return -EINVAL;
+	}
+
+	switch (src_type) {
+	case 2:  src_fmt = 1; break;          /* YUV420SP */
+	case 3:  src_fmt = 2; break;          /* YUV422SP */
+	default:
+		pr_info("ive_neo: FilterAndCSC bad src enType=%u (need YUV420SP/YUV422SP)\n",
+			src_type);
+		return -EINVAL;
+	}
+	switch (dst_type) {
+	case 10: dst_fmt = 2; break;          /* U8C3_PACKAGE */
+	case 11: dst_fmt = 3; break;          /* U8C3_PLANAR */
+	default:
+		pr_info("ive_neo: FilterAndCSC bad dst enType=%u (need U8C3_PACKAGE/PLANAR)\n",
+			dst_type);
+		return -EINVAL;
+	}
+
+	memset(node, 0, sizeof(node));
+	node[8]  = src_fmt;
+	node[9]  = dst_fmt;
+	node[10] = 3;                         /* op = FilterAndCSC */
+	node[11] = (u8) mode;
+	*(u16 *)(node + 40) = (u16)IMG_WIDTH(src);
+	*(u16 *)(node + 42) = (u16)IMG_HEIGHT(src);
+
+	/* src — always 2 planes (YUV semiplanar). */
+	*(u32 *)(node + 16) = IMG_PHYS(src);
+	*(u16 *)(node + 44) = (u16)IMG_STRIDE(src);
+	*(u32 *)(node + 24) = *(u32 *)(src + 8);
+	*(u16 *)(node + 46) = *(u16 *)(src + 52);
+
+	/* dst — single plane (PACKAGE) or three planes (PLANAR). */
+	*(u32 *)(node + 20) = IMG_PHYS(dst);
+	*(u16 *)(node + 50) = (u16)IMG_STRIDE(dst);
+	if (dst_type == 11) {
+		*(u32 *)(node + 28) = *(u32 *)(dst + 8);
+		*(u32 *)(node + 36) = *(u32 *)(dst + 16);
+		*(u16 *)(node + 52) = *(u16 *)(dst + 52);
+		*(u16 *)(node + 54) = *(u16 *)(dst + 56);
+	}
+
+	memcpy(node + 56, ctrl + 4, 25);
+	node[81] = norm;
+
+	pr_info_once("ive_neo: FilterAndCSC handler wired (HW op 3)\n");
+	return ive_submit_nonxnn(node, buf);
+}
+
 /* ---- Dilate (op=6): arg = {handle(8), src(72), dst(72), ctrl(25 mask)} ---- */
 static long ive_op_dilate(unsigned long arg)
 {
@@ -2590,20 +2776,61 @@ static long ive_dispatch(unsigned int cmd, unsigned long arg)
 	case 0xc0c0462bu:      return ive_op_st_candi_corner(arg); /* STCandiCorner */
 	case 0xc0f04619u:      return ive_op_canny_hys(arg);  /* CannyHysEdge */
 	case 0xc1a8462du:      return ive_op_gmm2(arg);       /* GMM2 (best effort) */
-	/* Not supported on Hi3516EV200/EV300 — vendor kernel also rejects
-	 * these with "ive can't support the func". Return 0 to keep
-	 * libive.so's handle check happy; output will be empty. */
 	case 0xc0a8461au:      return ive_op_lbp(arg);   /* LBP — vendor op 26 */
 	case 0xc0b84616u:      return ive_op_ncc(arg);   /* NCC — vendor op 22 */
-	case 0xc0b8462au:      return 0;  /* EqualizeHist */
-	case 0xc0a04602u:      return 0;  /* CSC (VGS) */
-	case 0xc0c04603u:      return 0;  /* FilterAndCSC (VGS) */
-	case 0xc008462eu:      return 0;  /* Resize (VGS) */
-	case 0xc1184618u:      return 0;  /* GMM (single gaussian, unsupported) */
+
+	/* ---- Silent-stub ops ----
+	 *
+	 * Audited 2026-05-13 against obj/hi3516cv500/hi_ive.o symbol table
+	 * + ive_ioctl dispatcher. Each op is in one of three categories:
+	 *
+	 * (a) cv500 HW supports it, we just haven't wired it. Vendor blob
+	 *     has both ive_check_<op>_param AND ive_fill_<op>_task. Worth
+	 *     porting — follow-up issues opened. Stub returns 0 to keep
+	 *     libive's handle-check happy until impl lands.
+	 *
+	 * (b) cv500 reuses another op's HW path with a flag override
+	 *     (e.g., EqualizeHist calls ive_fill_hist_task with
+	 *     node[7]=0x61 + an extra LUT remap at node[200]).
+	 *
+	 * (c) cv500 has no symbols for it — vendor genuinely doesn't
+	 *     dispatch HW. Userspace either falls back to CPU compute
+	 *     or rejects. Silent stub is correct here.
+	 */
+
+	/* (b) reuses ive_fill_hist_task with node[7]=0x61 + LUT remap. */
+	case 0xc0b8462au:      return 0;  /* EqualizeHist — issue #112 follow-up */
+
+	case 0xc0a04602u:                /* CSC */
+#if defined(hi3516cv500)
+		/* HW dispatch — modes 0..3 (YUV2RGB) + 8..11 (RGB2YUV).
+		 * Modes 4..7 (YUV2HSV/LAB) return -EOPNOTSUPP. */
+		return ive_op_csc_cv500(arg);
+#else
+		return 0;
+#endif
+	case 0xc0c04603u:                /* FilterAndCSC */
+#if defined(hi3516cv500)
+		/* HW dispatch — 5x5 filter + YUV2RGB. Validator rejects
+		 * HSV/LAB modes (only 0..3 allowed). */
+		return ive_op_flt_csc_cv500(arg);
+#else
+		return 0;
+#endif
+	case 0xc008462eu:      return 0;  /* Resize — multi-N, issue #112 follow-up */
+	case 0xc2c0461cu:      return 0;  /* LKOpticalFlowPyr — has ive_lk_optical_flow_pyr + fill + check */
+
+	/* (b) GMM (single-Gaussian) is GMM2 with default params in
+	 * vendor. No separate fill_gmm_task — vendor only has fill_gmm2. */
+	case 0xc1184618u:      return 0;  /* GMM */
+
+	/* (c) cv500 vendor blob has no symbols at all for these — HW
+	 * unit either doesn't exist or vendor never wired userspace
+	 * to it. Silent stub is correct; libive presumably falls back
+	 * to CPU implementation or returns its own error. */
 	case 0xc138461du:      return 0;  /* GradFg */
 	case 0xc178461eu:      return 0;  /* MatchBgModel */
 	case 0xc1d8461fu:      return 0;  /* UpdateBgModel */
-	case 0xc2c0461cu:      return 0;  /* LKOpticalFlowPyr */
 	case 0xc0b04621u:      return 0;  /* ANN_MLP_Predict */
 	case 0xc0c04622u:      return 0;  /* SVM_Predict */
 #ifndef IVE_STANDALONE

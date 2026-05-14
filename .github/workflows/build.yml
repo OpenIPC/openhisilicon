@@ -246,13 +246,13 @@ jobs:
               # the silent-stub or diag path. Grep for the validation
               # / one-time log rather than the handler symbol name so
               # the assertion stays meaningful across renames.
-              for needle in "PerspTrans bad roi_num" "Hog bad roi_num" "NCC handler wired" "LBP handler wired"; do
+              for needle in "PerspTrans bad roi_num" "Hog bad roi_num" "NCC handler wired" "LBP handler wired" "CSC handler wired" "FilterAndCSC handler wired"; do
                   if ! strings "$KO" | grep -qF "$needle"; then
                       echo "FAIL: cv500 .ko missing '$needle' — handler regressed to stub?" >&2
                       exit 1
                   fi
               done
-              echo "ok: cv500 build has PerspTrans + Hog + NCC HW handlers wired"
+              echo "ok: cv500 build has PerspTrans + Hog + NCC + LBP + CSC + FilterAndCSC HW handlers wired"
 
               # The N-node chain submit helper is the shared HW kick
               # path for both new ops. Its timeout log is the only
