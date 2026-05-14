@@ -1167,20 +1167,108 @@ HI_S32 HI_MPI_IVE_KCF_GetMemSize(HI_U32 u32MaxObjNum, HI_U32 *pu32Size)
     return HI_SUCCESS;
 }
 
+/* Per-obj node bytes in the heap-malloc'd pstObjNodeBuf. Sizeof
+ * IVE_KCF_OBJ_NODE_S = 8 (stList) + 176 (stKcfObj, with internal
+ * u64-alignment padding) = 184 bytes. Vendor confirms via the
+ * `mov r6, #184` at libive.so 0x154ec. */
+#define KCF_NODE_BYTES 184u
+
+/* Vendor's pu8TmpBuf is always 22656 (0x5880) bytes regardless of
+ * u32MaxObjNum (libive.so 0x1555c). Holds the KCF_Process tmpBuf
+ * that the kernel copy_from_user's during ive_kcf_proc. */
+#define KCF_TMP_BUF_BYTES 22656u
+
+/* Mirrors cv500 vendor libive.so HI_MPI_IVE_KCF_CreateObjList @0xd588 +
+ * ive_create_obj_list @0x154e8. Initializes the obj list data structure:
+ *
+ *   - 3 list heads (free, train, track) become empty circular sentinels
+ *   - pstObjNodeBuf := malloc(184 * N), all N nodes pushed to free list
+ *   - pu8TmpBuf := malloc(22656), zeroed
+ *   - counters: u32FreeObjNum=N, train=track=0, u32MaxObjNum=N
+ *   - enListState := CREATE
+ *
+ * Critical runtime observation (verified via kcf_probe on av300 board):
+ * pstMem is NOT touched here. Vendor mallocs both pstObjNodeBuf and
+ * pu8TmpBuf from the C heap. pstMem usage is deferred to GetTrainObj
+ * (which slices it for stHogFeature/stAlpha/stDst per obj).
+ *
+ * Idempotent on the CREATE state — if pstObjList->enListState == CREATE
+ * already (e.g. caller did Create twice in a row), returns success
+ * without re-allocating (mirrors vendor at 0xd5b4-0xd5b8).
+ */
 HI_S32 HI_MPI_IVE_KCF_CreateObjList(IVE_MEM_INFO_S *pstMem, HI_U32 u32MaxObjNum,
                                     IVE_KCF_OBJ_LIST_S *pstObjList)
 {
-    (void)pstMem; (void)u32MaxObjNum;
-    if (pstObjList)
-        memset(pstObjList, 0, sizeof(*pstObjList));
-    return HI_ERR_IVE_NOT_SUPPORT;
+    HI_U32 i;
+    IVE_KCF_OBJ_NODE_S *nodes;
+    HI_U8 *tmp;
+
+    IVE_CHECK_NULL("HI_MPI_IVE_KCF_CreateObjList", pstMem,     "pstMem");
+    IVE_CHECK_NULL("HI_MPI_IVE_KCF_CreateObjList", pstObjList, "pstObjList");
+    if (!u32MaxObjNum || u32MaxObjNum > KCF_MAX_OBJ_NUM) {
+        IVE_LOG("HI_MPI_IVE_KCF_CreateObjList",
+                "u32MaxObjNum(%u) must be 1..%u",
+                u32MaxObjNum, KCF_MAX_OBJ_NUM);
+        return HI_ERR_IVE_ILLEGAL_PARAM;
+    }
+    if (pstMem->u32Size < u32MaxObjNum * KCF_PER_OBJ_BYTES) {
+        IVE_LOG("HI_MPI_IVE_KCF_CreateObjList",
+                "pstMem.u32Size(%u) < required(%u)",
+                pstMem->u32Size, u32MaxObjNum * KCF_PER_OBJ_BYTES);
+        return HI_ERR_IVE_ILLEGAL_PARAM;
+    }
+    if (pstObjList->enListState == IVE_KCF_LIST_STATE_CREATE)
+        return HI_SUCCESS;          /* already created — no-op */
+
+    nodes = (IVE_KCF_OBJ_NODE_S *) calloc(u32MaxObjNum, KCF_NODE_BYTES);
+    if (!nodes)
+        return HI_ERR_IVE_NOMEM;
+    tmp = (HI_U8 *) calloc(1, KCF_TMP_BUF_BYTES);
+    if (!tmp) {
+        free(nodes);
+        return HI_ERR_IVE_NOMEM;
+    }
+
+    /* Init train/track lists as empty (point to self). */
+    pstObjList->stTrainObjList.pstNext = &pstObjList->stTrainObjList;
+    pstObjList->stTrainObjList.pstPrev = &pstObjList->stTrainObjList;
+    pstObjList->stTrackObjList.pstNext = &pstObjList->stTrackObjList;
+    pstObjList->stTrackObjList.pstPrev = &pstObjList->stTrackObjList;
+
+    /* Push all N nodes onto free list as a circular doubly-linked list.
+     * Head sentinel is at &pstObjList->stFreeObjList. Each node's stList
+     * is at offset 0 of the 184-byte node — so we can treat the node
+     * pointer as IVE_LIST_HEAD_S* directly. */
+    {
+        IVE_LIST_HEAD_S *head = &pstObjList->stFreeObjList;
+        IVE_LIST_HEAD_S *prev = head;
+        for (i = 0; i < u32MaxObjNum; i++) {
+            IVE_LIST_HEAD_S *cur =
+                (IVE_LIST_HEAD_S *)((HI_U8 *)nodes + i * KCF_NODE_BYTES);
+            prev->pstNext = cur;
+            cur->pstPrev = prev;
+            prev = cur;
+        }
+        prev->pstNext = head;
+        head->pstPrev = prev;
+    }
+
+    pstObjList->pstObjNodeBuf  = nodes;
+    pstObjList->pu8TmpBuf      = tmp;
+    pstObjList->u32FreeObjNum  = u32MaxObjNum;
+    pstObjList->u32TrainObjNum = 0;
+    pstObjList->u32TrackObjNum = 0;
+    pstObjList->u32MaxObjNum   = u32MaxObjNum;
+    pstObjList->u32Width       = 0;
+    pstObjList->u32Height      = 0;
+    pstObjList->enListState    = IVE_KCF_LIST_STATE_CREATE;
+    return HI_SUCCESS;
 }
 
-/* Mirrors cv500 vendor libive.so HI_MPI_IVE_KCF_DestroyObjList @0xd668:
- * idempotent state-machine teardown — accepts a list in CREATE state,
- * leaves it in DESTORY (sic). No actual memory free because pstMem is
- * user-owned and pstObjNodeBuf / pu8TmpBuf are populated by CreateObjList
- * (not implemented yet — Stage 2 follow-up). */
+/* Mirrors cv500 vendor libive.so HI_MPI_IVE_KCF_DestroyObjList @0xd668
+ * + ive_destroy_obj_list @0x15850: re-inits all 3 list heads as empty
+ * sentinels, zeroes counters and (W,H), free()s pstObjNodeBuf and
+ * pu8TmpBuf, sets enListState=DESTORY. Idempotent on already-DESTORY. */
 HI_S32 HI_MPI_IVE_KCF_DestroyObjList(IVE_KCF_OBJ_LIST_S *pstObjList)
 {
     IVE_CHECK_NULL("HI_MPI_IVE_KCF_DestroyObjList", pstObjList, "pstObjList");
@@ -1191,6 +1279,29 @@ HI_S32 HI_MPI_IVE_KCF_DestroyObjList(IVE_KCF_OBJ_LIST_S *pstObjList)
                 "invalid enListState=%d", pstObjList->enListState);
         return HI_ERR_IVE_NOT_PERM;
     }
+
+    pstObjList->stFreeObjList.pstNext  = &pstObjList->stFreeObjList;
+    pstObjList->stFreeObjList.pstPrev  = &pstObjList->stFreeObjList;
+    pstObjList->stTrainObjList.pstNext = &pstObjList->stTrainObjList;
+    pstObjList->stTrainObjList.pstPrev = &pstObjList->stTrainObjList;
+    pstObjList->stTrackObjList.pstNext = &pstObjList->stTrackObjList;
+    pstObjList->stTrackObjList.pstPrev = &pstObjList->stTrackObjList;
+
+    pstObjList->u32FreeObjNum  = 0;
+    pstObjList->u32TrainObjNum = 0;
+    pstObjList->u32TrackObjNum = 0;
+    pstObjList->u32Width       = 0;
+    pstObjList->u32Height      = 0;
+
+    if (pstObjList->pu8TmpBuf) {
+        free(pstObjList->pu8TmpBuf);
+        pstObjList->pu8TmpBuf = NULL;
+    }
+    if (pstObjList->pstObjNodeBuf) {
+        free(pstObjList->pstObjNodeBuf);
+        pstObjList->pstObjNodeBuf = NULL;
+    }
+
     pstObjList->enListState = IVE_KCF_LIST_STATE_DESTORY;
     return HI_SUCCESS;
 }
