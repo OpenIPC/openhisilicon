@@ -55,12 +55,36 @@ void *g_gdc_regs;
 unsigned int g_nnie_irq;
 unsigned int g_gdc_irq;
 struct platform_device *g_nnie_pf_dev;
+static void __iomem *g_crg_regs;        /* CRG @ 0x12010000 (clock+reset) */
+static spinlock_t g_crg_lock;
 
 EXPORT_SYMBOL(g_nnie_regs);
 EXPORT_SYMBOL(g_gdc_regs);
 EXPORT_SYMBOL(g_nnie_irq);
 EXPORT_SYMBOL(g_gdc_irq);
 EXPORT_SYMBOL(g_nnie_pf_dev);
+
+static void __maybe_unused nnie_crg_set_bit(u32 reg_off, u32 bit)
+{
+	unsigned long flags;
+	u32 v;
+	if (!g_crg_regs) return;
+	spin_lock_irqsave(&g_crg_lock, flags);
+	v = readl(g_crg_regs + reg_off);
+	writel(v | bit, g_crg_regs + reg_off);
+	spin_unlock_irqrestore(&g_crg_lock, flags);
+}
+
+static void __maybe_unused nnie_crg_clear_bit(u32 reg_off, u32 bit)
+{
+	unsigned long flags;
+	u32 v;
+	if (!g_crg_regs) return;
+	spin_lock_irqsave(&g_crg_lock, flags);
+	v = readl(g_crg_regs + reg_off);
+	writel(v & ~bit, g_crg_regs + reg_off);
+	spin_unlock_irqrestore(&g_crg_lock, flags);
+}
 
 /* ── cv500 sys coordination registers ─────────────────────────────
  *
@@ -75,14 +99,23 @@ EXPORT_SYMBOL(g_nnie_pf_dev);
  */
 #define NNIE_SYS_BASE_PHYS         0x12020000UL
 #define NNIE_SYS_WINDOW_SIZE       0x1000UL
+/* cv500 sys-state window (status, mutex, RAM-using flags) */
 #define NNIE_SYS_REG_VGS_RAM       0x0000   /* bit 13 = vgs_bootroom uses RAM */
 #define NNIE_SYS_REG_MUTEX         0x0008   /* bits 0..2 = NNIE/GDC/VENC mutex */
 #define NNIE_SYS_REG_NNIE_RAM      0x0034   /* bit  0 = NNIE has RAM */
+
+/* cv500 CRG (Clock-Reset Generator) window — separate from sys.
+ * Phys base 0x12010000 per DT (clock@12010000). */
+#define NNIE_CRG_BASE_PHYS         0x12010000UL
+#define NNIE_CRG_WINDOW_SIZE       0x1000
+#define NNIE_CRG_REG_NNIE_CLK      0x00BC   /* bit 0=reset, bit 1=clk_en */
 
 #define NNIE_SYS_BIT_VGS_RAM       (1u << 13)
 #define NNIE_SYS_BIT_MUTEX_VENC    (1u <<  1)
 #define NNIE_SYS_BIT_MUTEX_GDC     (1u <<  2)
 #define NNIE_SYS_BIT_NNIE_RAM      (1u <<  0)
+#define NNIE_SYS_BIT_NNIE_RESET    (1u <<  0)   /* 0=running, 1=reset */
+#define NNIE_SYS_BIT_NNIE_CLK_EN   (1u <<  1)   /* 1=clock ungated     */
 
 static void __iomem *g_sys_regs;       /* Phase 3 — read-only verification */
 static spinlock_t    g_sys_lock;        /* Phase 4 — atomic R-M-W */
@@ -486,6 +519,14 @@ static long nnie_dispatch_forward(const struct nnie_hw_task *task)
 
 	memcpy(task_kvirt, task, NNIE_HW_TASK_SIZE);
 
+	/* Bring NNIE block out of reset + ungate its clock. CRG register
+	 * 0x120100bc holds bit 0 = reset (1=held), bit 1 = clk enable.
+	 * Without these, NNIE register writes silently drop. Vendor goes
+	 * through cmpi mod 2 (sys_config) fns 0xb3 (reset) and 0xb4
+	 * (clk_en); we drive the CRG register directly. */
+	nnie_crg_clear_bit(NNIE_CRG_REG_NNIE_CLK, NNIE_SYS_BIT_NNIE_RESET);
+	nnie_crg_set_bit  (NNIE_CRG_REG_NNIE_CLK, NNIE_SYS_BIT_NNIE_CLK_EN);
+
 	/* Coordinate with vendor open_sys.ko / open_gdc.ko via the cv500
 	 * sys-window RAM-using flag (bit 0 of 0x12020034). Vendor's
 	 * equivalent goes through cmpi mod 51 fn 0xd1 (Phase 3 decode). */
@@ -498,9 +539,21 @@ static long nnie_dispatch_forward(const struct nnie_hw_task *task)
 	 * are idempotent and survive across Forward calls — we re-issue
 	 * them every time so the block recovers if vendor open_gdc.ko (or
 	 * a stale boot state) left them in a weird state. */
+	/* Init-time register setup (vendor does this once in svp_nnie_init
+	 * @0x10f4; we redo each call for simplicity/idempotence). */
 	writel(NNIE_CLK_GATE_EN,         g_nnie_regs + NNIE_REG_CLK_GATE);
 	writel(NNIE_OUTSTANDING_DEFAULT, g_nnie_regs + NNIE_REG_OUTSTANDING);
 	writel(NNIE_IRQ_ALL,             g_nnie_regs + NNIE_REG_IRQ_CFG);
+	/* Vendor sets TIMEOUT to ~2 s at 500 MHz NNIE clock; without it
+	 * (TIMEOUT=0) HW seems to never IRQ — possibly stuck waiting on
+	 * a timeout counter that never advances. */
+	writel(0xFFFFFFFFu,              g_nnie_regs + NNIE_REG_TIMEOUT_LO);
+	writel(0x000000FFu,              g_nnie_regs + NNIE_REG_TIMEOUT_HI);
+	/* Vendor: disable_check_sum at init — clear bit 0 of +0x68. */
+	{
+		u32 v = readl(g_nnie_regs + NNIE_REG_CHECK_SUM);
+		writel(v & ~NNIE_CHECK_SUM_EN, g_nnie_regs + NNIE_REG_CHECK_SUM);
+	}
 	writel((u32)task_dma,            g_nnie_regs + NNIE_REG_TASK_ADDR_LO);
 	writel((u32)((u64)task_dma >> 32), g_nnie_regs + NNIE_REG_TASK_ADDR_HI);
 	wmb();
@@ -515,8 +568,15 @@ static long nnie_dispatch_forward(const struct nnie_hw_task *task)
 			  task_kvirt, task_dma);
 
 	if (!completed) {
-		pr_warn("nnie_neo: Forward timed out (5s, status snapshot=0x%x)\n",
-			cause);
+		u32 live_status, live_start, live_task_id, live_clk;
+
+		live_status  = readl(g_nnie_regs + NNIE_REG_IRQ_STATUS);
+		live_start   = readl(g_nnie_regs + NNIE_REG_START);
+		live_task_id = readl(g_nnie_regs + NNIE_REG_TASK_ID);
+		live_clk     = readl(g_nnie_regs + NNIE_REG_CLK_GATE);
+		pr_warn("nnie_neo: Forward timed out (5s)  cause_snap=0x%x  "
+			"STATUS=0x%x START=0x%x TASK_ID=0x%x CLK_GATE=0x%x\n",
+			cause, live_status, live_start, live_task_id, live_clk);
 		return -ETIMEDOUT;
 	}
 	if (cause & NNIE_IRQ_CFG_ERR) {
@@ -718,6 +778,20 @@ int nnie_std_mod_init(void)
 
 	init_completion(&g_nnie_done);
 	spin_lock_init(&g_sys_lock);
+	spin_lock_init(&g_crg_lock);
+
+	/* Map the cv500 CRG (clock-reset generator) window so we can ungate
+	 * the NNIE clock + release reset before HW dispatch. Vendor open_sys
+	 * also owns this window; ioremap shares it non-exclusively. */
+	g_crg_regs = ioremap(NNIE_CRG_BASE_PHYS, NNIE_CRG_WINDOW_SIZE);
+	if (g_crg_regs) {
+		u32 nclk = readl(g_crg_regs + NNIE_CRG_REG_NNIE_CLK);
+		pr_info("nnie_neo: crg @0x%lx mapped — NNIE_CLK[0xbc]=0x%08x\n",
+			NNIE_CRG_BASE_PHYS, nclk);
+	} else {
+		pr_warn("nnie_neo: failed to ioremap CRG @0x%lx\n",
+			NNIE_CRG_BASE_PHYS);
+	}
 
 	/* Map the cv500 sys window for NNIE coordination registers
 	 * (Phase 3 — read-only verification; Phase 4 will use the bit
@@ -778,6 +852,10 @@ void nnie_std_mod_exit(void)
 	if (g_sys_regs) {
 		iounmap(g_sys_regs);
 		g_sys_regs = NULL;
+	}
+	if (g_crg_regs) {
+		iounmap(g_crg_regs);
+		g_crg_regs = NULL;
 	}
 	if (g_nnie_dev) {
 		osal_deregisterdevice(g_nnie_dev);
