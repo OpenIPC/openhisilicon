@@ -37,6 +37,8 @@
 #include <linux/completion.h>
 #include <linux/list.h>
 #include <linux/mutex.h>
+#include <linux/dma-mapping.h>
+#include <linux/platform_device.h>
 
 #include "hi_osal.h"
 #include "hi_common.h"
@@ -50,11 +52,13 @@ void *g_nnie_regs;
 void *g_gdc_regs;
 unsigned int g_nnie_irq;
 unsigned int g_gdc_irq;
+struct platform_device *g_nnie_pf_dev;
 
 EXPORT_SYMBOL(g_nnie_regs);
 EXPORT_SYMBOL(g_gdc_regs);
 EXPORT_SYMBOL(g_nnie_irq);
 EXPORT_SYMBOL(g_gdc_irq);
+EXPORT_SYMBOL(g_nnie_pf_dev);
 
 /* ── cv500 sys coordination registers ─────────────────────────────
  *
@@ -346,10 +350,11 @@ static long nnie_dispatch(unsigned int cmd, unsigned long arg)
 #define NNIE_CTRL_OFF_TMP_PHYS       16   /* stTmpBuf.u64PhyAddr */
 #define NNIE_CTRL_OFF_TSK_PHYS       40   /* stTskBuf.u64PhyAddr */
 
-static void nnie_fill_task_header(struct nnie_hw_task *task,
-                                  u64 model_phys, u32 inst_off, u32 inst_len,
-                                  u64 tsk_phys, u64 tmp_phys, u32 batch_num,
-                                  bool instant)
+static void __maybe_unused
+nnie_fill_task_header(struct nnie_hw_task *task,
+                      u64 model_phys, u32 inst_off, u32 inst_len,
+                      u64 tsk_phys, u64 tmp_phys, u32 batch_num,
+                      bool instant)
 {
 	memset(task, 0, sizeof(*task));
 	task->trigger_mode    = cpu_to_le16(instant ? 1 : 0);
@@ -361,6 +366,85 @@ static void nnie_fill_task_header(struct nnie_hw_task *task,
 	task->src_batch_num   = cpu_to_le32(batch_num);
 }
 
+/* Variable-length descriptor tail builder. See nnie_hw_task.h "Variable-
+ * length descriptor tail" for the section layout. Handles non-LSTM
+ * (net_type != SVP_NNIE_NET_TYPE_RECURRENT) CNN inputs with enType==0;
+ * enType ∈ [1..5] paths are stubbed and return -EOPNOTSUPP. */
+static int nnie_build_task_tail(struct nnie_tskbuf *tb, const u8 *fwd_arg,
+                                u32 src_num, u32 dst_num)
+{
+	void __iomem *base = tb->kvirt;
+	u32 off = 0;
+	u32 i, j;
+
+	#define TIP_PUT_U32(v) do {                                          \
+		if (off + 4 > tb->size) return -ENOSPC;                      \
+		iowrite32((u32)(v), (u8 __iomem *)base + off); off += 4;     \
+	} while (0)
+	#define TIP_PUT_U64(v) do {                                          \
+		u64 _x = (u64)(v);                                           \
+		if (off + 8 > tb->size) return -ENOSPC;                      \
+		iowrite32((u32)_x,        (u8 __iomem *)base + off);         \
+		iowrite32((u32)(_x >>32), (u8 __iomem *)base + off + 4);     \
+		off += 8;                                                    \
+	} while (0)
+	#define TIP_ALIGN_16() while (off & 0xF) TIP_PUT_U32(0)
+
+	/* §1: per-input stride table */
+	for (i = 0; i < src_num; i++) {
+		u32 stride = *(u32 *)(fwd_arg + NNIE_FWD_OFF_ASTSRC +
+				      i * NNIE_BLOB_S_SIZE + NNIE_BLOB_OFF_STRIDE);
+		TIP_PUT_U32(stride);
+	}
+	TIP_ALIGN_16();
+
+	/* §2: 16 destination phys addresses, zero-padded past dst_num */
+	for (i = 0; i < 16; i++) {
+		u64 dst_phys = 0;
+		if (i < dst_num)
+			dst_phys = *(u64 *)(fwd_arg + NNIE_FWD_OFF_ASTDST +
+					    i * NNIE_BLOB_S_SIZE + NNIE_BLOB_OFF_PHYADDR);
+		TIP_PUT_U64(dst_phys);
+	}
+
+	/* §3: per-source DMA address vector */
+	for (i = 0; i < src_num; i++) {
+		const u8 *blob = fwd_arg + NNIE_FWD_OFF_ASTSRC + i * NNIE_BLOB_S_SIZE;
+		u32 en_type = *(u32 *)(blob + 0);
+		u64 phys    = *(u64 *)(blob + NNIE_BLOB_OFF_PHYADDR);
+		u32 stride  = *(u32 *)(blob + NNIE_BLOB_OFF_STRIDE);
+		u32 num     = *(u32 *)(blob + NNIE_BLOB_OFF_NUM);
+		u32 height  = *(u32 *)(blob + NNIE_BLOB_OFF_HEIGHT);
+		u32 chn     = *(u32 *)(blob + NNIE_BLOB_OFF_CHN);
+		u64 batch_size;
+
+		switch (en_type) {
+		case 0:
+			batch_size = (u64)stride * height * chn;
+			break;
+		case 4:
+			batch_size = (u64)stride * height;
+			break;
+		case 1: case 2: case 3:
+		case 5:
+			pr_info_once("nnie_neo: src[%u] enType=%u not yet supported (Phase 7)\n",
+				     i, en_type);
+			return -EOPNOTSUPP;
+		default:
+			return -EINVAL;
+		}
+
+		for (j = 0; j < num; j++)
+			TIP_PUT_U64(phys + j * batch_size);
+		TIP_ALIGN_16();
+	}
+
+	#undef TIP_PUT_U32
+	#undef TIP_PUT_U64
+	#undef TIP_ALIGN_16
+	return off;   /* bytes used */
+}
+
 static long nnie_op_forward(unsigned long arg, int with_bbox)
 {
 	const u32 arg_size = with_bbox ?
@@ -368,7 +452,6 @@ static long nnie_op_forward(unsigned long arg, int with_bbox)
 	u8 *buf = (u8 *)arg;
 	u32 src_num, dst_num, net_seg_id, instant, batch_num;
 	u64 tsk_phys, tmp_phys;
-	struct nnie_hw_task task;
 
 	if (!buf)
 		return -EINVAL;
@@ -384,58 +467,52 @@ static long nnie_op_forward(unsigned long arg, int with_bbox)
 	instant    = *(u32 *)(buf + NNIE_FWD_OFF_INSTANT);
 	batch_num  = *(u32 *)(buf + NNIE_FWD_OFF_ASTSRC + NNIE_BLOB_OFF_NUM);
 
-	/* Build the fixed-layout part of the 64-B HW task descriptor.
-	 * Note: model_phys (task[+16]) requires copying the user's
-	 * SVP_NNIE_MODEL_S to get model->stBase.u64PhyAddr — deferred to
-	 * Phase 5 along with the variable-length descriptor tail (per-input
-	 * stride table, per-node shape data, per-batch DMA addrs). For now
-	 * we build with model_phys=0/inst_off=0/inst_len=0 just to validate
-	 * the struct layout at compile time. */
-	nnie_fill_task_header(&task,
-	                      /*model_phys=*/0, /*inst_off=*/0, /*inst_len=*/0,
-	                      tsk_phys, tmp_phys, batch_num, !!instant);
-
 	pr_info_once("nnie_neo: Forward%s arg=%u B  SrcNum=%u DstNum=%u NetSegId=%u  Instant=%u  Batch=%u\n",
 		     with_bbox ? "WithBbox" : "",
 		     arg_size, src_num, dst_num, net_seg_id, instant, batch_num);
 	pr_info_once("nnie_neo:   ctrl.stTskBuf.phys=0x%llx  stTmpBuf.phys=0x%llx\n",
 		     tsk_phys, tmp_phys);
-	pr_info_once("nnie_neo:   task hdr: trigger=%u model=0x%llx inst_off=%u inst_len=%u\n",
-		     le16_to_cpu(task.trigger_mode),
-		     le64_to_cpu(task.model_file_phys),
-		     le32_to_cpu(task.seg_inst_offset),
-		     le32_to_cpu(task.seg_inst_len));
 
-	/* Phase 5 will:
-	 *   1. copy_from_user *pstModel (13992 B) to read stBase.u64PhyAddr
-	 *      + astSeg[NetSegId].u32InstOffset/InstLen — the fixed task[16],
-	 *      task[24], task[28] fields. (offsetof(MODEL_S, stBase)=0x3690,
-	 *      cross-checked against vendor literal in nnie_hw_task.h.)
-	 *   2. Append the variable-length descriptor tail: per-input stride
-	 *      table (u32 × SrcNum), per-node shape data (16 × u64), per-batch
-	 *      DMA addrs (u64 = PhyAddr + j*Stride*H*Chn). Decoded from
-	 *      vendor svp_nnie_fill_forward_task @0x91d4-0x94c0.
-	 *   3. Acquire sys-window mutex: nnie_sys_set_bit(NNIE_SYS_REG_NNIE_RAM,
-	 *      NNIE_SYS_BIT_NNIE_RAM). (cv500 sys @0x12020034 bit 0; vendor
-	 *      goes via cmpi mod 51 fn 0xd1 = sys_hal_gdc_nnie_set_ram_using.)
-	 *   4. Drive NNIE registers per nnie_hw_regs.h:
-	 *        writel(NNIE_CLK_GATE_EN,        regs + NNIE_REG_CLK_GATE);
-	 *        writel(NNIE_OUTSTANDING_DEFAULT,regs + NNIE_REG_OUTSTANDING);
-	 *        writel(NNIE_IRQ_ALL,            regs + NNIE_REG_IRQ_CFG);
-	 *        writel(task_dma_lo,             regs + NNIE_REG_TASK_ADDR_LO);
-	 *        writel(0,                       regs + NNIE_REG_TASK_ADDR_HI);
-	 *        wmb();
-	 *        writel(NNIE_START_GO,           regs + NNIE_REG_START);
-	 *   5. Wait on g_nnie_done completion. (Phase 0 request_irq currently
-	 *      fails -EBUSY because vendor open_gdc.ko shares SPI 53/54 with
-	 *      IRQF_SHARED — Phase 5 must request with matching flags or fall
-	 *      back to polling NNIE_REG_IRQ_STATUS.)
-	 *   6. Ack: writel(NNIE_IRQ_ALL, regs + NNIE_REG_IRQ_CLEAR);
-	 *      Release: nnie_sys_clear_bit(...). Write handle=0 to buf+0.
-	 *
-	 * For now we set handle = 0 (matches ive_submit_nonxnn pattern)
-	 * and return -EOPNOTSUPP so a userland test sees the right shape
-	 * of failure. */
+	/* Dry-run build the variable-length tail into the registered
+	 * stTskBuf (no HW dispatch yet). On enType==0 (basic CNN input)
+	 * this writes §1 strides + §2 dst-phys + §3 per-batch DMA addrs
+	 * into the user MMZ region via the ioremap'd kvirt. Phase 7 will
+	 * finalise the 64-B descriptor (needs copy_from_user pstModel for
+	 * stBase.u64PhyAddr + astSeg[NetSegId].InstOff/Len) and drive HW. */
+	if (tsk_phys && tsk_phys <= U32_MAX) {
+		struct nnie_tskbuf *tb;
+		int tail_bytes = -ENOENT;
+
+		mutex_lock(&g_nnie_tskbuf_lock);
+		tb = nnie_find_tskbuf_locked(tsk_phys);
+		if (tb)
+			tail_bytes = nnie_build_task_tail(tb, buf, src_num, dst_num);
+		mutex_unlock(&g_nnie_tskbuf_lock);
+
+		pr_info_once("nnie_neo:   tail builder -> %d bytes (tskbuf %s)\n",
+			     tail_bytes, tb ? "found" : "not registered");
+	}
+
+	/* Phase 7 (HW dispatch) needs:
+	 *   - copy_from_user(model_kbuf, fwd_arg[+776], sizeof(SVP_NNIE_MODEL_S))
+	 *   - validate net_seg_id < model->u32NetSegNum
+	 *   - finalise descriptor with model->stBase.u64PhyAddr +
+	 *     model->astSeg[net_seg_id].u32InstOffset/u32InstLen
+	 *   - dma_alloc_coherent(&g_nnie_pf_dev->dev, 64, &task_dma, GFP_KERNEL)
+	 *   - memcpy(task_vir, &task, 64)
+	 *   - nnie_sys_set_bit(NNIE_SYS_REG_NNIE_RAM, NNIE_SYS_BIT_NNIE_RAM)
+	 *   - writel(NNIE_CLK_GATE_EN,         regs + NNIE_REG_CLK_GATE)
+	 *   - writel(NNIE_OUTSTANDING_DEFAULT, regs + NNIE_REG_OUTSTANDING)
+	 *   - writel(NNIE_IRQ_ALL,             regs + NNIE_REG_IRQ_CFG)
+	 *   - writel((u32)task_dma,            regs + NNIE_REG_TASK_ADDR_LO)
+	 *   - writel(0,                        regs + NNIE_REG_TASK_ADDR_HI)
+	 *   - wmb(); writel(NNIE_START_GO,     regs + NNIE_REG_START)
+	 *   - wait_for_completion_timeout(&g_nnie_done, 5 * HZ)
+	 *   - read+ack NNIE_REG_IRQ_STATUS, check finish vs timeout vs cfg_err
+	 *   - nnie_sys_clear_bit(...)
+	 *   - dma_free_coherent(task_vir, task_dma)
+	 *   - write handle=0 to fwd_arg+0
+	 */
 	*(u32 *)(buf + NNIE_FWD_OFF_HANDLE) = 0;
 	return -EOPNOTSUPP;
 }

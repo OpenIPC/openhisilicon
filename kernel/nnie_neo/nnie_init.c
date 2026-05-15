@@ -30,6 +30,7 @@ extern void *g_nnie_regs;       /* nnie0 register window (0x11100000) */
 extern void *g_gdc_regs;        /* gdc  register window (0x11110000) */
 extern unsigned int g_nnie_irq; /* SPI 41 on cv500 per DT */
 extern unsigned int g_gdc_irq;  /* SPI 42 on cv500 per DT */
+extern struct platform_device *g_nnie_pf_dev; /* for dma_alloc_coherent */
 
 static int hi35xx_nnie_probe(struct platform_device *pf_dev)
 {
@@ -61,6 +62,7 @@ static int hi35xx_nnie_probe(struct platform_device *pf_dev)
 		g_gdc_irq = (unsigned int)irq;
 	}
 	g_gdc_regs = NULL;        /* gdc region owned by open_gdc.ko */
+	g_nnie_pf_dev = pf_dev;   /* needed by dma_alloc_coherent in Forward */
 
 	pr_info("nnie_neo: probed nnie0=%p irq=%u  gdc_irq=%u\n",
 		g_nnie_regs, g_nnie_irq, g_gdc_irq);
@@ -71,8 +73,9 @@ static int hi35xx_nnie_probe(struct platform_device *pf_dev)
 static compat_platform_remove_ret hi35xx_nnie_remove(struct platform_device *pf_dev)
 {
 	nnie_std_mod_exit();
-	g_nnie_regs = NULL;
-	g_gdc_regs  = NULL;
+	g_nnie_regs   = NULL;
+	g_gdc_regs    = NULL;
+	g_nnie_pf_dev = NULL;
 
 	compat_platform_remove_return;
 }
