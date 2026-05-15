@@ -196,12 +196,31 @@ static long nnie_op_forward(unsigned long arg, int with_bbox)
 	 *      Concrete starting point for Phase 4 path (a):
 	 *        cv500 DT node: sys@12010000 has 4 reg windows, one named
 	 *        "sys" at phys 0x12020000 size 0x8000. The sys_hal_*
-	 *        functions in hi_sys.o use that window: g_reg_sys_base_va
-	 *        is set from the ioremap. The RAM/mutex bits live at
-	 *        offset +0x34 within that window — phys 0x12020034.
-	 *        Verified live on av300: that register currently reads
-	 *        0x00000000 (NNIE idle, bit 0 clear), matching the
-	 *        expected idle state.
+	 *        functions in hi_sys.o all anchor on this window.
+	 *
+	 *      Complete cv500 NNIE/GDC/VENC sys-side coordination map
+	 *      (decoded by walking sys_hal_*nnie* + sys_hal_vgs_bootroom_*
+	 *      + sys_drv_get_cmp_3dnr_cfg+0x148 / +0x1c8 bit-write
+	 *      helpers in hi_sys.o, then verified live on av300):
+	 *
+	 *        Register 0x12020000:
+	 *          live = 0x00000102
+	 *          bit 13 = vgs_bootroom_set_ram_using   (R/W)
+	 *
+	 *        Register 0x12020008 (mutex/contention):
+	 *          live = 0x00000000  (no contention currently)
+	 *          bit 0..1 = NNIE/GDC mutex state    (R)
+	 *          bit 1   = venc<->nnie mutex_sel    (W)
+	 *          bit 2   = gdc<->nnie  mutex_sel    (W)
+	 *
+	 *        Register 0x12020034:
+	 *          live = 0x00000000
+	 *          bit 0   = gdc_nnie_set_ram_using   (R/W) — primary
+	 *                    "NNIE has RAM" flag; set before Forward
+	 *                    dispatch, clear afterward.
+	 *
+	 *      Phase 4 wiring: ioremap(0x12020000, 0x1000) once in probe,
+	 *      then atomic R-M-W of these bits around each Forward call.
 	 *   3. Submit task to NNIE block. svp_nnie_start_task @0x1934 also
 	 *      goes through cmpi (module ID 37) — uses function-pointer table
 	 *      slots [r5+120], [r5+124], [r5+128], [r5+132] to prepare/fire/
