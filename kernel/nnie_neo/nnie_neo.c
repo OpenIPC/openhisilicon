@@ -35,6 +35,8 @@
 #include <linux/uaccess.h>
 #include <linux/interrupt.h>
 #include <linux/completion.h>
+#include <linux/list.h>
+#include <linux/mutex.h>
 
 #include "hi_osal.h"
 #include "hi_common.h"
@@ -104,6 +106,110 @@ static void __maybe_unused nnie_sys_clear_bit(u32 reg_off, u32 bit)
 	v = readl(g_sys_regs + reg_off);
 	writel(v & ~bit, g_sys_regs + reg_off);
 	spin_unlock_irqrestore(&g_sys_lock, flags);
+}
+
+/* ── Task buffer registry ─────────────────────────────────────────
+ *
+ * Userspace MMZ-allocates the scratch buffers it wants the NNIE block
+ * to read/write (model file, tskbuf, tmpbuf), then registers them via
+ * NNIE_IOC_ADD_TSKBUF (vendor-equivalent: HI_MPI_SVP_NNIE_AddTskBuf).
+ * Kernel needs the (phys → kvirt) mapping to write the variable-length
+ * descriptor tail into stTskBuf during Forward dispatch.
+ *
+ * Vendor uses cmpi_remap_cached (cv500 vendor cmpi module 51 fn ?);
+ * for the clean-room driver we just ioremap() the region. ioremap is
+ * uncached on ARM, which means we avoid the cache-flush dance vendor
+ * has at fill_forward_task @0x94ac. The trade-off is slower kernel
+ * writes — acceptable because the tail is small (KB range, written
+ * once per Forward call). */
+struct nnie_tskbuf {
+	struct list_head list;
+	u64    phys;
+	u64    user_virt;          /* opaque to us — preserved for caller */
+	u32    size;
+	void __iomem *kvirt;       /* kernel mapping (ioremap'd) */
+};
+
+static LIST_HEAD(g_nnie_tskbuf_list);
+static DEFINE_MUTEX(g_nnie_tskbuf_lock);
+
+static struct nnie_tskbuf *nnie_find_tskbuf_locked(u64 phys)
+{
+	struct nnie_tskbuf *e;
+
+	list_for_each_entry(e, &g_nnie_tskbuf_list, list) {
+		if (e->phys == phys)
+			return e;
+	}
+	return NULL;
+}
+
+static int nnie_add_tskbuf(u64 phys, u64 user_virt, u32 size)
+{
+	struct nnie_tskbuf *e;
+
+	if (!phys || !size)
+		return -EINVAL;
+
+	mutex_lock(&g_nnie_tskbuf_lock);
+	if (nnie_find_tskbuf_locked(phys)) {
+		mutex_unlock(&g_nnie_tskbuf_lock);
+		return -EEXIST;
+	}
+
+	e = kzalloc(sizeof(*e), GFP_KERNEL);
+	if (!e) {
+		mutex_unlock(&g_nnie_tskbuf_lock);
+		return -ENOMEM;
+	}
+
+	e->phys      = phys;
+	e->user_virt = user_virt;
+	e->size      = size;
+	e->kvirt     = ioremap(phys, size);
+	if (!e->kvirt) {
+		kfree(e);
+		mutex_unlock(&g_nnie_tskbuf_lock);
+		return -ENOMEM;
+	}
+
+	list_add(&e->list, &g_nnie_tskbuf_list);
+	mutex_unlock(&g_nnie_tskbuf_lock);
+	return 0;
+}
+
+static int nnie_remove_tskbuf(u64 phys)
+{
+	struct nnie_tskbuf *e;
+
+	mutex_lock(&g_nnie_tskbuf_lock);
+	e = nnie_find_tskbuf_locked(phys);
+	if (!e) {
+		mutex_unlock(&g_nnie_tskbuf_lock);
+		return -ENOENT;
+	}
+
+	list_del(&e->list);
+	mutex_unlock(&g_nnie_tskbuf_lock);
+
+	if (e->kvirt)
+		iounmap(e->kvirt);
+	kfree(e);
+	return 0;
+}
+
+static void nnie_drain_tskbufs(void)
+{
+	struct nnie_tskbuf *e, *tmp;
+
+	mutex_lock(&g_nnie_tskbuf_lock);
+	list_for_each_entry_safe(e, tmp, &g_nnie_tskbuf_list, list) {
+		list_del(&e->list);
+		if (e->kvirt)
+			iounmap(e->kvirt);
+		kfree(e);
+	}
+	mutex_unlock(&g_nnie_tskbuf_lock);
 }
 
 /* ── /dev/nnie character device ─────────────────────────────────── */
@@ -345,31 +451,36 @@ static long nnie_op_query(unsigned long arg)
 
 /* AddTskBuf / RemoveTskBuf arg buffer (24 B), decoded from libnnie.so
  * 0x3134-0x3150: layout is plain SVP_MEM_INFO_S {u64 phys, u64 virt,
- * u32 size, u32 pad}. Kernel tracks the buffers in a per-instance list
- * so Forward dispatch knows which user-allocated regions are safe to
- * reference by phys. Phase 4 work. */
+ * u32 size, u32 pad}. Kernel tracks the buffers so Forward dispatch
+ * has a kvirt mapping to write the variable-length descriptor tail
+ * into stTskBuf (Phase 5). */
 static long nnie_op_add_tskbuf(unsigned long arg)
 {
 	u8 *buf = (u8 *)arg;
 	u64 phys, virt;
 	u32 size;
+	int ret;
 
 	if (!buf)
 		return -EINVAL;
 	phys = *(u64 *)(buf +  0);
 	virt = *(u64 *)(buf +  8);
 	size = *(u32 *)(buf + 16);
-	pr_info_once("nnie_neo: AddTskBuf phys=0x%llx virt=0x%llx size=%u — Phase 4 stub\n",
-		     phys, virt, size);
-	return -EOPNOTSUPP;
+
+	ret = nnie_add_tskbuf(phys, virt, size);
+	pr_info_once("nnie_neo: AddTskBuf phys=0x%llx virt=0x%llx size=%u -> %d\n",
+		     phys, virt, size, ret);
+	return ret;
 }
 
 static long nnie_op_remove_tskbuf(unsigned long arg)
 {
 	u8 *buf = (u8 *)arg;
 	u64 phys = buf ? *(u64 *)(buf + 0) : 0;
-	pr_info_once("nnie_neo: RemoveTskBuf phys=0x%llx — Phase 4 stub\n", phys);
-	return -EOPNOTSUPP;
+	int ret = nnie_remove_tskbuf(phys);
+
+	pr_info_once("nnie_neo: RemoveTskBuf phys=0x%llx -> %d\n", phys, ret);
+	return ret;
 }
 
 static long nnie_osal_ioctl(unsigned int cmd, unsigned long arg, void *priv)
@@ -454,6 +565,8 @@ int nnie_std_mod_init(void)
 
 void nnie_std_mod_exit(void)
 {
+	nnie_drain_tskbufs();
+
 	if (g_nnie_irq_requested) {
 		free_irq(g_nnie_irq, &g_nnie_dev);
 		g_nnie_irq_requested = 0;
