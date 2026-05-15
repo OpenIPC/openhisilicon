@@ -28,7 +28,6 @@ initialize_uart0_hdwr
 invalidate_instruction_pipeline
 invoke_foreign_code
 is_update_mode
-is_update_mode.part.0
 klad_alt_dispatch
 klad_alt_e88
 klad_alt_step
@@ -91,7 +90,6 @@ sdio_card_present
 sdio_cmd_setup_call
 sdio_descriptor_init
 sdio_pio_loop
-sdio_pio_loop.constprop.0
 sdio_query_block_class
 sdio_read_block
 sdio_write_block
@@ -114,7 +112,6 @@ timer_reset_counter
 timer_start
 timer_stop
 timer_wait_seconds
-timer_wait_seconds.part.0
 uart0_flush_rx_fifo
 uart0_has_rx_data
 uart0_proto_handshake

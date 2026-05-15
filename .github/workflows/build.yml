@@ -832,8 +832,15 @@ jobs:
           # Verify the linked symbol set matches the tracked manifest.
           # Drift in either direction (additions or removals) fails the
           # diff; updating the manifest is a deliberate, reviewable act.
+          # Drop compiler-generated clones (.part.N, .constprop.N, .isra.N,
+          # .cold) — those are gcc-version-dependent optimizer artefacts,
+          # not API contract.  Without this filter, ubuntu-24.04's
+          # gcc 13.2 emits klad_post_unlock.part.0 that arch's
+          # gcc 14.2 doesn't, and the manifest diff fails.
           arm-none-eabi-objdump -t bootrom/hi3516av300/re.elf \
-              | grep ' F ' | awk '{ print $NF }' | LC_ALL=C sort -u \
+              | grep ' F ' | awk '{ print $NF }' \
+              | grep -v '\.part\.\|\.constprop\.\|\.isra\.\|\.cold' \
+              | LC_ALL=C sort -u \
               > /tmp/actual-symbols
           diff -u bootrom/hi3516av300/.expected-symbols /tmp/actual-symbols
           echo "ok: re.elf symbol set matches manifest ($(wc -l < /tmp/actual-symbols) functions)"
