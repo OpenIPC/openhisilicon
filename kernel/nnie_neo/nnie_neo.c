@@ -40,6 +40,7 @@
 #include <linux/dma-mapping.h>
 #include <linux/platform_device.h>
 #include <linux/vmalloc.h>
+#include <linux/io.h>
 
 #include "hi_osal.h"
 #include "hi_common.h"
@@ -132,7 +133,7 @@ struct nnie_tskbuf {
 	u64    phys;
 	u64    user_virt;          /* opaque to us — preserved for caller */
 	u32    size;
-	void __iomem *kvirt;       /* kernel mapping (ioremap'd) */
+	void  *kvirt;              /* kernel mapping (memremap WB) */
 };
 
 static LIST_HEAD(g_nnie_tskbuf_list);
@@ -171,7 +172,10 @@ static int nnie_add_tskbuf(u64 phys, u64 user_virt, u32 size)
 	e->phys      = phys;
 	e->user_virt = user_virt;
 	e->size      = size;
-	e->kvirt     = ioremap(phys, size);
+	/* memremap WB: works for both CMA-backed kernel RAM (cv500 MMZ
+	 * uses this) and MMIO. ioremap would WARN+fail on RAM-backed
+	 * regions because the kernel direct map already covers them. */
+	e->kvirt     = memremap(phys, size, MEMREMAP_WB);
 	if (!e->kvirt) {
 		kfree(e);
 		mutex_unlock(&g_nnie_tskbuf_lock);
@@ -198,7 +202,7 @@ static int nnie_remove_tskbuf(u64 phys)
 	mutex_unlock(&g_nnie_tskbuf_lock);
 
 	if (e->kvirt)
-		iounmap(e->kvirt);
+		memunmap(e->kvirt);
 	kfree(e);
 	return 0;
 }
@@ -211,7 +215,7 @@ static void nnie_drain_tskbufs(void)
 	list_for_each_entry_safe(e, tmp, &g_nnie_tskbuf_list, list) {
 		list_del(&e->list);
 		if (e->kvirt)
-			iounmap(e->kvirt);
+			memunmap(e->kvirt);
 		kfree(e);
 	}
 	mutex_unlock(&g_nnie_tskbuf_lock);
@@ -374,20 +378,17 @@ nnie_fill_task_header(struct nnie_hw_task *task,
 static int nnie_build_task_tail(struct nnie_tskbuf *tb, const u8 *fwd_arg,
                                 u32 src_num, u32 dst_num)
 {
-	void __iomem *base = tb->kvirt;
+	u8 *base = tb->kvirt;
 	u32 off = 0;
 	u32 i, j;
 
 	#define TIP_PUT_U32(v) do {                                          \
 		if (off + 4 > tb->size) return -ENOSPC;                      \
-		iowrite32((u32)(v), (u8 __iomem *)base + off); off += 4;     \
+		*(u32 *)(base + off) = (u32)(v); off += 4;                   \
 	} while (0)
 	#define TIP_PUT_U64(v) do {                                          \
-		u64 _x = (u64)(v);                                           \
 		if (off + 8 > tb->size) return -ENOSPC;                      \
-		iowrite32((u32)_x,        (u8 __iomem *)base + off);         \
-		iowrite32((u32)(_x >>32), (u8 __iomem *)base + off + 4);     \
-		off += 8;                                                    \
+		*(u64 *)(base + off) = (u64)(v); off += 8;                   \
 	} while (0)
 	#define TIP_ALIGN_16() while (off & 0xF) TIP_PUT_U32(0)
 
@@ -420,15 +421,26 @@ static int nnie_build_task_tail(struct nnie_tskbuf *tb, const u8 *fwd_arg,
 		u64 batch_size;
 
 		switch (en_type) {
-		case 0:
+		case 0:                  /* SVP_BLOB_TYPE_S32 — generic CNN feature map */
 			batch_size = (u64)stride * height * chn;
 			break;
-		case 4:
+		case 1:                  /* SVP_BLOB_TYPE_U8 — image input */
+			if (chn != 1) {
+				/* Chn==3 packed-RGB needs 32 B/batch (3 plane
+				 * addrs + zero pad) per vendor svp_nnie_fill_
+				 * image_src_addr @0x7a8c. Phase 8 work. */
+				pr_info_once("nnie_neo: U8 Chn=%u not yet supported (mnist Chn=1 only)\n",
+					     chn);
+				return -EOPNOTSUPP;
+			}
 			batch_size = (u64)stride * height;
 			break;
-		case 1: case 2: case 3:
-		case 5:
-			pr_info_once("nnie_neo: src[%u] enType=%u not yet supported (Phase 7)\n",
+		case 4:                  /* SVP_BLOB_TYPE_VEC_S32 — FC layer vector */
+			batch_size = (u64)stride * height;
+			break;
+		case 2: case 3:          /* YVU420SP / YVU422SP */
+		case 5:                  /* SEQ_S32 (LSTM/RNN) */
+			pr_info_once("nnie_neo: src[%u] enType=%u not yet supported\n",
 				     i, en_type);
 			return -EOPNOTSUPP;
 		default:
