@@ -51,6 +51,58 @@ EXPORT_SYMBOL(g_gdc_regs);
 EXPORT_SYMBOL(g_nnie_irq);
 EXPORT_SYMBOL(g_gdc_irq);
 
+/* ── cv500 sys coordination registers ─────────────────────────────
+ *
+ * The NNIE/GDC/VENC RAM-sharing + mutex bits live in the cv500 sys
+ * MMIO window (phys 0x12020000, DT name "sys" inside the
+ * hisilicon,hisi-sys node). Phase 4 will drive them around each
+ * Forward dispatch.
+ *
+ * We share access with vendor's open_sys.ko (or our future clean-room
+ * sys module): use plain ioremap, not request_mem_region, to avoid
+ * EBUSY clash with the vendor driver's claim.
+ */
+#define NNIE_SYS_BASE_PHYS         0x12020000UL
+#define NNIE_SYS_WINDOW_SIZE       0x1000UL
+#define NNIE_SYS_REG_VGS_RAM       0x0000   /* bit 13 = vgs_bootroom uses RAM */
+#define NNIE_SYS_REG_MUTEX         0x0008   /* bits 0..2 = NNIE/GDC/VENC mutex */
+#define NNIE_SYS_REG_NNIE_RAM      0x0034   /* bit  0 = NNIE has RAM */
+
+#define NNIE_SYS_BIT_VGS_RAM       (1u << 13)
+#define NNIE_SYS_BIT_MUTEX_VENC    (1u <<  1)
+#define NNIE_SYS_BIT_MUTEX_GDC     (1u <<  2)
+#define NNIE_SYS_BIT_NNIE_RAM      (1u <<  0)
+
+static void __iomem *g_sys_regs;       /* Phase 3 — read-only verification */
+static spinlock_t    g_sys_lock;        /* Phase 4 — atomic R-M-W */
+
+/* Phase 4 helpers (defined but not yet called from Forward path). */
+static void __maybe_unused nnie_sys_set_bit(u32 reg_off, u32 bit)
+{
+	unsigned long flags;
+	u32 v;
+
+	if (!g_sys_regs)
+		return;
+	spin_lock_irqsave(&g_sys_lock, flags);
+	v = readl(g_sys_regs + reg_off);
+	writel(v | bit, g_sys_regs + reg_off);
+	spin_unlock_irqrestore(&g_sys_lock, flags);
+}
+
+static void __maybe_unused nnie_sys_clear_bit(u32 reg_off, u32 bit)
+{
+	unsigned long flags;
+	u32 v;
+
+	if (!g_sys_regs)
+		return;
+	spin_lock_irqsave(&g_sys_lock, flags);
+	v = readl(g_sys_regs + reg_off);
+	writel(v & ~bit, g_sys_regs + reg_off);
+	spin_unlock_irqrestore(&g_sys_lock, flags);
+}
+
 /* ── /dev/nnie character device ─────────────────────────────────── */
 
 static osal_dev_t *g_nnie_dev;
@@ -307,6 +359,23 @@ int nnie_std_mod_init(void)
 	int ret;
 
 	init_completion(&g_nnie_done);
+	spin_lock_init(&g_sys_lock);
+
+	/* Map the cv500 sys window for NNIE coordination registers
+	 * (Phase 3 — read-only verification; Phase 4 will use the bit
+	 * helpers above). Vendor open_sys.ko also owns this window;
+	 * plain ioremap shares the mapping non-exclusively. */
+	g_sys_regs = ioremap(NNIE_SYS_BASE_PHYS, NNIE_SYS_WINDOW_SIZE);
+	if (g_sys_regs) {
+		u32 vgs = readl(g_sys_regs + NNIE_SYS_REG_VGS_RAM);
+		u32 mtx = readl(g_sys_regs + NNIE_SYS_REG_MUTEX);
+		u32 nra = readl(g_sys_regs + NNIE_SYS_REG_NNIE_RAM);
+		pr_info("nnie_neo: sys @0x%lx mapped — VGS=0x%08x MUTEX=0x%08x NNIE_RAM=0x%08x\n",
+			NNIE_SYS_BASE_PHYS, vgs, mtx, nra);
+	} else {
+		pr_warn("nnie_neo: failed to ioremap sys window @0x%lx — Phase 4 coordination unavailable\n",
+			NNIE_SYS_BASE_PHYS);
+	}
 
 	g_nnie_dev = osal_createdev("nnie");
 	if (!g_nnie_dev)
@@ -340,6 +409,10 @@ void nnie_std_mod_exit(void)
 	if (g_nnie_irq_requested) {
 		free_irq(g_nnie_irq, &g_nnie_dev);
 		g_nnie_irq_requested = 0;
+	}
+	if (g_sys_regs) {
+		iounmap(g_sys_regs);
+		g_sys_regs = NULL;
 	}
 	if (g_nnie_dev) {
 		osal_deregisterdevice(g_nnie_dev);
