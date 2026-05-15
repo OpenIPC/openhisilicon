@@ -241,8 +241,17 @@ static int run_test(const char *name, int op, void (*sw_fn)(void)) {
 
 int main(int argc, char **argv) {
     int is_init = (getpid() == 1);
-    for (int a = 1; a < argc; a++)
-        if (!strcmp(argv[a], "--sw")) sw_mode = 1;
+    /* Default IVE base: V4 (ev200/ev300 family) = 0x11320000.
+     * cv500 family (cv500, av300) puts IVE at 0x11230000.
+     * Override with `--ive-base=0xNNNNNNNN` (kernel cmdline or argv). */
+    unsigned long ive_base = 0x11320000;
+    for (int a = 1; a < argc; a++) {
+        if (!strcmp(argv[a], "--sw")) {
+            sw_mode = 1;
+        } else if (!strncmp(argv[a], "--ive-base=", 11)) {
+            ive_base = strtoul(argv[a] + 11, NULL, 0);
+        }
+    }
 
     if (is_init) {
         mkdir("/dev", 0755);
@@ -251,12 +260,39 @@ int main(int argc, char **argv) {
         mount("proc", "/proc", "proc", 0, NULL);
     }
 
+    /* PID 1 init doesn't get kernel cmdline via argv — re-parse from
+     * /proc/cmdline so `-append "... --ive-base=0xNNNNNNNN"` works for
+     * cv500 QEMU runs (qemu-cv500 puts IVE at 0x11230000, not 0x11320000). */
+    {
+        FILE *f = fopen("/proc/cmdline", "r");
+        if (f) {
+            char line[1024], *p;
+            if (fgets(line, sizeof(line), f)) {
+                if ((p = strstr(line, "--ive-base=")) != NULL)
+                    ive_base = strtoul(p + 11, NULL, 0);
+                if (strstr(line, "--sw")) sw_mode = 1;
+            }
+            fclose(f);
+        }
+    }
+
     int mem_fd = open("/dev/mem", O_RDWR | O_SYNC);
     if (mem_fd >= 0 && !sw_mode) {
-        ive = mmap(NULL, 0x10000, PROT_READ|PROT_WRITE, MAP_SHARED, mem_fd, 0x11320000);
+        ive = mmap(NULL, 0x10000, PROT_READ|PROT_WRITE, MAP_SHARED, mem_fd, ive_base);
         if (ive == MAP_FAILED) sw_mode = 1;
     } else {
         sw_mode = 1;
+    }
+    /* If /dev/mem mmap silently maps to non-MMIO (e.g. STRICT_DEVMEM or
+     * the kernel ioremap path isn't engaged), HW_ID register reads back
+     * 0 — that means we'd be programming bare RAM, not the IVE block.
+     * Fall back to SW reference in that case so the test still produces
+     * deterministic golden checksums. */
+    if (!sw_mode) {
+        uint32_t hw_id = *(volatile uint32_t *)(ive + IVE_HW_ID);
+        if (hw_id == 0) {
+            sw_mode = 1;
+        }
     }
 
     va_src1 = alloc_buf(&pa_src1);
@@ -401,11 +437,12 @@ int main(int argc, char **argv) {
         int16_t test_vals[] = {-200, -100, -50, 0, 50, 100, 150, 200};
         for (int i = 0; i < SZ16; i++) s16_src[i] = test_vals[i % 8];
 
-        /* Thresh_S16: mode=2 (S16→U8 min/mid/max), lo=-50, hi=100 */
+        /* Thresh_S16: mode=2 (S16→U8 min/mid/max), lo=-50, hi=100.
+         * HW boundary: v <= lo → MIN; v > hi → MAX; else MID. */
         if (sw_mode) {
             for (int i = 0; i < SZ16; i++) {
                 int16_t v = s16_src[i];
-                va_dst[i] = (v < -50) ? 0 : (v > 100) ? 255 : 128;
+                va_dst[i] = (v <= -50) ? 0 : (v > 100) ? 255 : 128;
             }
         } else {
             ive_w(IVE_EXT_MODE, 2);

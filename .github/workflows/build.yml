@@ -435,12 +435,26 @@ jobs:
   # that drifts away from the QEMU machine model will fail this job.
   #
   qemu-ive-ops:
-    name: QEMU IVE ops regression
+    name: QEMU IVE ops regression (${{ matrix.platform.machine }})
     runs-on: ubuntu-latest
     needs: libraries-cross-compile
+    strategy:
+      fail-fast: false
+      matrix:
+        platform:
+          - machine: hi3516ev300
+            firmware: hi3516ev300
+            ive_base: '0x11320000'
+            # V4 family (ev200/ev300/gk7205v300): IVE @ 0x11320000.
+          - machine: hi3516cv500
+            firmware: hi3516cv500
+            ive_base: '0x11230000'
+            # CV500 family (cv500/av300): IVE @ 0x11230000.
     env:
       # Pinned SHA of widgetii/qemu-hisilicon. Bump this when upstream
-      # changes machine-model register semantics.
+      # changes machine-model register semantics. The cv500 machine
+      # gained hisi-ive at 0x11230000 in widgetii/qemu-hisilicon#99 —
+      # cv500 regression coverage requires that SHA or later.
       QEMU_HISILICON_SHA: master
     steps:
       - uses: actions/checkout@v4
@@ -478,7 +492,7 @@ jobs:
           QEMU=/tmp/qemu-hisilicon/qemu-src/build/qemu-system-arm
           chmod +x $QEMU
           $QEMU -machine help | grep -E 'hi35|gk7' | head
-          $QEMU -machine hi3516ev300 -m 128M -nographic -serial null -monitor none \
+          $QEMU -machine ${{ matrix.platform.machine }} -m 128M -nographic -serial null -monitor none \
               -kernel /dev/null 2>&1 | head -3 || true
 
       - name: Build test-ive-ops.cpio
@@ -486,25 +500,25 @@ jobs:
           make -C kernel/ive_neo/test/qemu CC=arm-linux-gnueabi-gcc
           ls -la kernel/ive_neo/test/qemu/test-ive-ops kernel/ive_neo/test/qemu/test-ive-ops.cpio
 
-      - name: Download OpenIPC EV300 kernel
+      - name: Download OpenIPC kernel
         run: |
           mkdir -p /tmp/openipc
           cd /tmp/openipc
           curl -sSLf -o fw.tgz \
-            https://github.com/OpenIPC/firmware/releases/download/latest/openipc.hi3516ev300-nor-lite.tgz
+            https://github.com/OpenIPC/firmware/releases/download/latest/openipc.${{ matrix.platform.firmware }}-nor-lite.tgz
           tar xzf fw.tgz
-          ls uImage.hi3516ev300
+          ls uImage.${{ matrix.platform.firmware }}
 
       - name: Run IVE register regression under QEMU
         timeout-minutes: 3
         run: |
           QEMU=/tmp/qemu-hisilicon/qemu-src/build/qemu-system-arm
           timeout 60 $QEMU \
-              -M hi3516ev300 -m 128M \
-              -kernel /tmp/openipc/uImage.hi3516ev300 \
+              -M ${{ matrix.platform.machine }} -m 128M \
+              -kernel /tmp/openipc/uImage.${{ matrix.platform.firmware }} \
               -initrd kernel/ive_neo/test/qemu/test-ive-ops.cpio \
               -nographic -serial mon:stdio \
-              -append "console=ttyAMA0,115200 mem=96M mmz_allocator=hisi mmz=anonymous,0,0x46000000,32M" \
+              -append "console=ttyAMA0,115200 mem=96M mmz_allocator=hisi mmz=anonymous,0,0x46000000,32M --ive-base=${{ matrix.platform.ive_base }}" \
               2>&1 | tee ive-output.txt || true
 
           echo
@@ -520,7 +534,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: qemu-ive-ops-log
+          name: qemu-ive-ops-log-${{ matrix.platform.machine }}
           path: ive-output.txt
           retention-days: 7
 
