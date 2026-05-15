@@ -39,6 +39,8 @@
 #include "hi_osal.h"
 #include "hi_common.h"
 
+#include "nnie_hw_task.h"
+
 /* ── Platform state exported to nnie_init.c ───────────────────────── */
 
 void *g_nnie_regs;
@@ -222,9 +224,19 @@ static long nnie_op_forward(unsigned long arg, int with_bbox)
 
 	/* Phase 4 will:
 	 *   1. Walk astSrc / astDst blobs (phys addresses) to set up the
-	 *      HW task-node descriptor (vendor uses svp_nnie_fill_forward_task
-	 *      @0x90d8 — large, 2134 lines of disasm; 64-byte HW task node
-	 *      with fields at offsets 0,2,4,8..40 etc.).
+	 *      HW task-node descriptor — see nnie_hw_task.h for the full
+	 *      64-byte layout decoded from vendor svp_nnie_fill_forward_task
+	 *      @0x90d8. Field sources (from prologue 90d8..91a8):
+	 *        task[ 0] u16 = bInstant ? 1 : 0
+	 *        task[16] u64 = pstModel->stBase.u64PhyAddr  (the .wk MMZ)
+	 *        task[24] u32 = pstModel->astSeg[NetSegId].u32InstOffset
+	 *        task[28] u32 = pstModel->astSeg[NetSegId].u32InstLen
+	 *        task[32] u64 = ctrl.stTskBuf.u64PhyAddr
+	 *        task[48] u64 = ctrl.stTmpBuf.u64PhyAddr
+	 *        task[56] u32 = astSrc[0].u32Num
+	 *      After the 64-B header: per-input stride table (u32 × SrcNum),
+	 *      then per-node shape data (16 × u64, ldrd from astSrc/DstNode),
+	 *      then per-batch DMA addrs (u64 = PhyAddr + j*Stride*H*Chn).
 	 *   2. Apply the [0x90] memory-priority knob. *Phase 3 finding*:
 	 *      it's not a single "[0x90]" register write at all. Vendor
 	 *      goes hal_svp_nnie_enable_ram -> cmpi_get_module_func_by_id
