@@ -205,7 +205,13 @@ HI_S32 HI_MPI_SVP_NNIE_LoadModel(const SVP_SRC_MEM_INFO_S *pstModelBuf,
 	pstModel->stBase    = *pstModelBuf;
 	pstModel->enRunMode = (SVP_NNIE_RUN_MODE_E)file[48];
 	pstModel->u32NetSegNum  = seg_num;
-	pstModel->u32TmpBufSize = *(const uint32_t *)(file + 60);
+	/* Vendor reports u32TmpBufSize = 1989888 (~1.9 MB) for mnist; the
+	 * .wk file has no static field that big. Vendor computes it by
+	 * walking the per-segment instruction stream — Phase 9 work.
+	 *
+	 * Heuristic for now: 8 MB. Covers small classification models;
+	 * larger detection models (yolov*, ssd, etc.) may need more. */
+	pstModel->u32TmpBufSize = 8 * 1024 * 1024;
 
 	/* Segment table is at file[192]; each on-disk record is 16 B and
 	 * decodes to the SVP_NNIE_SEG_S layout (see nnie_wk_format.h).
