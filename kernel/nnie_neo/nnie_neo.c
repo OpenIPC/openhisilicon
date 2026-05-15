@@ -170,10 +170,23 @@ static long nnie_op_forward(unsigned long arg, int with_bbox)
 
 	/* Phase 4 will:
 	 *   1. Walk astSrc / astDst blobs (phys addresses) to set up the
-	 *      HW task-node descriptor.
-	 *   2. Apply the [0x90] memory-priority knob (skipped for IVE,
-	 *      required for NNIE per kaeru:ive-neo-cv500-hw-init-reg-window-mismatch).
-	 *   3. Submit task to NNIE block at g_nnie_regs.
+	 *      HW task-node descriptor (vendor uses svp_nnie_fill_forward_task
+	 *      @0x90d8 — large, 2134 lines of disasm; 64-byte HW task node
+	 *      with fields at offsets 0,2,4,8..40 etc.).
+	 *   2. Apply the [0x90] memory-priority knob. *Important finding*:
+	 *      vendor doesn't write [0x90] directly. It calls into the SYS
+	 *      module (cmpi_get_module_func_by_id with module ID 51, function
+	 *      0xd1) via hal_svp_nnie_enable_ram. So the register write
+	 *      lives in open_sys.ko, not open_nnie.ko. Our clean-room needs
+	 *      to either (a) replicate the cmpi cross-module function-pointer
+	 *      contract, or (b) write directly to the underlying register
+	 *      (which would need a separate RE pass on open_sys.ko to find
+	 *      what 'config_ram + module 51, fn 0xd1' translates to).
+	 *   3. Submit task to NNIE block. svp_nnie_start_task @0x1934 also
+	 *      goes through cmpi (module ID 37) — uses function-pointer table
+	 *      slots [r5+120], [r5+124], [r5+128], [r5+132] to prepare/fire/
+	 *      wait/finalise. Same architectural choice as IVE's chain submit
+	 *      but mediated by cmpi.
 	 *   4. Wait for IRQ on g_nnie_irq (Phase 0 currently fails its
 	 *      request_irq with -EBUSY because vendor's open_gdc holds the
 	 *      same SPI line with IRQF_SHARED — Phase 4 must request with
