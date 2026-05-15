@@ -173,15 +173,25 @@ static long nnie_op_forward(unsigned long arg, int with_bbox)
 	 *      HW task-node descriptor (vendor uses svp_nnie_fill_forward_task
 	 *      @0x90d8 — large, 2134 lines of disasm; 64-byte HW task node
 	 *      with fields at offsets 0,2,4,8..40 etc.).
-	 *   2. Apply the [0x90] memory-priority knob. *Important finding*:
-	 *      vendor doesn't write [0x90] directly. It calls into the SYS
-	 *      module (cmpi_get_module_func_by_id with module ID 51, function
-	 *      0xd1) via hal_svp_nnie_enable_ram. So the register write
-	 *      lives in open_sys.ko, not open_nnie.ko. Our clean-room needs
-	 *      to either (a) replicate the cmpi cross-module function-pointer
-	 *      contract, or (b) write directly to the underlying register
-	 *      (which would need a separate RE pass on open_sys.ko to find
-	 *      what 'config_ram + module 51, fn 0xd1' translates to).
+	 *   2. Apply the [0x90] memory-priority knob. *Phase 3 finding*:
+	 *      it's not a single "[0x90]" register write at all. Vendor
+	 *      goes hal_svp_nnie_enable_ram -> cmpi_get_module_func_by_id
+	 *      (module ID 51 = SYS, fn 0xd1) -> sys_hal_gdc_nnie_set_ram_using
+	 *      in hi_sys.o (cv500 vendor blob). That function does an
+	 *      atomic bit-set on bit 0 of register offset +0x34 of the
+	 *      sys-module's MMIO window (g_sys_state[16] base). It's NNIE/
+	 *      GDC RAM-sharing coordination, not an IVE-style mem-priority
+	 *      knob. Companion funcs in hi_sys.o:
+	 *        sys_hal_gdc_nnie_mutex_sel
+	 *        sys_hal_venc_nnie_mutex_sel
+	 *        sys_hal_nnie_get_mutex_state
+	 *        sys_hal_nnie_gdc_get_mutex_state
+	 *        sys_hal_vgs_bootroom_set_ram_using
+	 *      Phase 4 will need a sweep of these to enumerate the full
+	 *      set of bits, and either (a) drive them directly from
+	 *      open_nnie_neo.ko by ioremap()'ing the sys register window,
+	 *      or (b) export a small helper API from open_sys.ko (the
+	 *      clean-room sys module — not yet implemented).
 	 *   3. Submit task to NNIE block. svp_nnie_start_task @0x1934 also
 	 *      goes through cmpi (module ID 37) — uses function-pointer table
 	 *      slots [r5+120], [r5+124], [r5+128], [r5+132] to prepare/fire/
