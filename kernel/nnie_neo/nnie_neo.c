@@ -279,7 +279,7 @@ int nnie_std_mod_init(void)
 			g_nnie_irq_requested = 1;
 	}
 
-	pr_info("nnie_neo: /dev/nnie ready (Phase 0 stub — all ioctls return -EOPNOTSUPP)\n");
+	pr_info("nnie_neo: /dev/nnie ready (Phase 3 — ioctl ABI wired, HW dispatch TBD)\n");
 	return 0;
 }
 
