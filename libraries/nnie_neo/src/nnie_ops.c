@@ -53,7 +53,8 @@ static uint32_t nnie_wk_crc32_step(uint32_t crc, uint8_t b)
 int nnie_wk_verify_crc(const void *file_buf, uint32_t file_size)
 {
 	const uint8_t *p = (const uint8_t *)file_buf;
-	uint32_t stored, computed = 0xFFFFFFFFu;
+	uint32_t stored, computed = 0;    /* vendor init = 0, not ~0 */
+	uint32_t inst_off, inst_len, crc_end;
 	uint32_t i;
 
 	if (file_size < NNIE_WK_MIN_FILE_SIZE)
@@ -62,7 +63,25 @@ int nnie_wk_verify_crc(const void *file_buf, uint32_t file_size)
 	stored = (uint32_t)p[0] | ((uint32_t)p[1] << 8) |
 	         ((uint32_t)p[2] << 16) | ((uint32_t)p[3] << 24);
 
-	for (i = 4; i < file_size; i++)
+	/* Vendor LoadModel covers bytes [4..file[52]+file[56]) — the header
+	 * and the instruction-stream region pointed to by header fields
+	 * inst_offset_extra (off 52) + inst_len (off 56). Anything after
+	 * that (weights / quant tables) is *not* CRC-protected; vendor relies
+	 * on the instruction stream itself to address those by file offset.
+	 *
+	 * Polynomial = standard IEEE 802.3 reflected (0xEDB88320), but the
+	 * initial accumulator is 0, not 0xFFFFFFFF. Final XOR is 0xFFFFFFFF
+	 * (the `mvn r0, r0` at libnnie.so 0x1d0c). Verified byte-equivalent
+	 * against vendor mnist.wk: stored 0xa4a25b1a == computed. */
+	inst_off = (uint32_t)p[52] | ((uint32_t)p[53] << 8) |
+	           ((uint32_t)p[54] << 16) | ((uint32_t)p[55] << 24);
+	inst_len = (uint32_t)p[56] | ((uint32_t)p[57] << 8) |
+	           ((uint32_t)p[58] << 16) | ((uint32_t)p[59] << 24);
+	crc_end = inst_off + inst_len;
+	if (crc_end > file_size || crc_end < 4)
+		return -1;
+
+	for (i = 4; i < crc_end; i++)
 		computed = nnie_wk_crc32_step(computed, p[i]);
 	computed = ~computed;
 
