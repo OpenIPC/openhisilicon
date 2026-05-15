@@ -41,6 +41,7 @@
 #include <linux/platform_device.h>
 #include <linux/vmalloc.h>
 #include <linux/io.h>
+#include <linux/delay.h>
 
 #include "hi_osal.h"
 #include "hi_common.h"
@@ -55,8 +56,10 @@ void *g_gdc_regs;
 unsigned int g_nnie_irq;
 unsigned int g_gdc_irq;
 struct platform_device *g_nnie_pf_dev;
-static void __iomem *g_crg_regs;        /* CRG @ 0x12010000 (clock+reset) */
+static void __iomem *g_crg_regs;        /* CRG  @ 0x12010000 (clock+reset) */
+static void __iomem *g_sys2_regs;       /* sys2 @ 0x12030000 (NNIE_RAM flag) */
 static spinlock_t g_crg_lock;
+static spinlock_t g_sys2_lock;
 
 EXPORT_SYMBOL(g_nnie_regs);
 EXPORT_SYMBOL(g_gdc_regs);
@@ -86,6 +89,28 @@ static void __maybe_unused nnie_crg_clear_bit(u32 reg_off, u32 bit)
 	spin_unlock_irqrestore(&g_crg_lock, flags);
 }
 
+static void __maybe_unused nnie_sys2_set_bit(u32 reg_off, u32 bit)
+{
+	unsigned long flags;
+	u32 v;
+	if (!g_sys2_regs) return;
+	spin_lock_irqsave(&g_sys2_lock, flags);
+	v = readl(g_sys2_regs + reg_off);
+	writel(v | bit, g_sys2_regs + reg_off);
+	spin_unlock_irqrestore(&g_sys2_lock, flags);
+}
+
+static void __maybe_unused nnie_sys2_clear_bit(u32 reg_off, u32 bit)
+{
+	unsigned long flags;
+	u32 v;
+	if (!g_sys2_regs) return;
+	spin_lock_irqsave(&g_sys2_lock, flags);
+	v = readl(g_sys2_regs + reg_off);
+	writel(v & ~bit, g_sys2_regs + reg_off);
+	spin_unlock_irqrestore(&g_sys2_lock, flags);
+}
+
 /* ── cv500 sys coordination registers ─────────────────────────────
  *
  * The NNIE/GDC/VENC RAM-sharing + mutex bits live in the cv500 sys
@@ -99,10 +124,18 @@ static void __maybe_unused nnie_crg_clear_bit(u32 reg_off, u32 bit)
  */
 #define NNIE_SYS_BASE_PHYS         0x12020000UL
 #define NNIE_SYS_WINDOW_SIZE       0x1000UL
-/* cv500 sys-state window (status, mutex, RAM-using flags) */
+/* cv500 sys-state window — status / mutex only. Note: NNIE RAM-using
+ * flag is NOT here; it's in the separate sys2 window at 0x12030000
+ * (vendor hi_sys.o sys_hal_init ioremaps four sys-state windows
+ * separately; sys_hal_gdc_nnie_set_ram_using uses LANCHOR0+16 which
+ * is the 0x12030000 mapping). */
 #define NNIE_SYS_REG_VGS_RAM       0x0000   /* bit 13 = vgs_bootroom uses RAM */
 #define NNIE_SYS_REG_MUTEX         0x0008   /* bits 0..2 = NNIE/GDC/VENC mutex */
-#define NNIE_SYS_REG_NNIE_RAM      0x0034   /* bit  0 = NNIE has RAM */
+
+/* cv500 sys2 window — NNIE/GDC RAM-using flag */
+#define NNIE_SYS2_BASE_PHYS        0x12030000UL
+#define NNIE_SYS2_WINDOW_SIZE      0x1000
+#define NNIE_SYS2_REG_NNIE_RAM     0x0034   /* bit 0 = NNIE has RAM */
 
 /* cv500 CRG (Clock-Reset Generator) window — separate from sys.
  * Phys base 0x12010000 per DT (clock@12010000). */
@@ -523,14 +556,19 @@ static long nnie_dispatch_forward(const struct nnie_hw_task *task)
 	 * 0x120100bc holds bit 0 = reset (1=held), bit 1 = clk enable.
 	 * Without these, NNIE register writes silently drop. Vendor goes
 	 * through cmpi mod 2 (sys_config) fns 0xb3 (reset) and 0xb4
-	 * (clk_en); we drive the CRG register directly. */
+	 * (clk_en); we drive the CRG register directly. Pulse reset to
+	 * force a clean state (a previous failed task may have left HW
+	 * in a stuck state with reset = 0). */
+	nnie_crg_set_bit  (NNIE_CRG_REG_NNIE_CLK, NNIE_SYS_BIT_NNIE_RESET);
+	udelay(1);
 	nnie_crg_clear_bit(NNIE_CRG_REG_NNIE_CLK, NNIE_SYS_BIT_NNIE_RESET);
 	nnie_crg_set_bit  (NNIE_CRG_REG_NNIE_CLK, NNIE_SYS_BIT_NNIE_CLK_EN);
 
 	/* Coordinate with vendor open_sys.ko / open_gdc.ko via the cv500
-	 * sys-window RAM-using flag (bit 0 of 0x12020034). Vendor's
-	 * equivalent goes through cmpi mod 51 fn 0xd1 (Phase 3 decode). */
-	nnie_sys_set_bit(NNIE_SYS_REG_NNIE_RAM, NNIE_SYS_BIT_NNIE_RAM);
+	 * sys2-window RAM-using flag (bit 0 of 0x12030034). Vendor's
+	 * sys_hal_gdc_nnie_set_ram_using @0x897c uses LANCHOR0+16 =
+	 * sys-init's ioremap of 0x12030000, NOT 0x12020000. */
+	nnie_sys2_set_bit(NNIE_SYS2_REG_NNIE_RAM, NNIE_SYS_BIT_NNIE_RAM);
 
 	atomic_set(&g_nnie_last_status, 0);
 	reinit_completion(&g_nnie_done);
@@ -557,12 +595,52 @@ static long nnie_dispatch_forward(const struct nnie_hw_task *task)
 	writel((u32)task_dma,            g_nnie_regs + NNIE_REG_TASK_ADDR_LO);
 	writel((u32)((u64)task_dma >> 32), g_nnie_regs + NNIE_REG_TASK_ADDR_HI);
 	wmb();
+
+	/* Diagnostic: dump key NNIE registers + first bytes of the
+	 * descriptor right before START. If HW reads bogus data this
+	 * confirms what we passed it. */
+	{
+		const u32 *d = (const u32 *)task_kvirt;
+
+		pr_info("nnie_neo: pre-START regs: CLK=0x%x OUT=0x%x IRQ_CFG=0x%x "
+			"TO_LO=0x%x TO_HI=0x%x ADDR_LO=0x%x ADDR_HI=0x%x CHKSUM=0x%x\n",
+			readl(g_nnie_regs + NNIE_REG_CLK_GATE),
+			readl(g_nnie_regs + NNIE_REG_OUTSTANDING),
+			readl(g_nnie_regs + NNIE_REG_IRQ_CFG),
+			readl(g_nnie_regs + NNIE_REG_TIMEOUT_LO),
+			readl(g_nnie_regs + NNIE_REG_TIMEOUT_HI),
+			readl(g_nnie_regs + NNIE_REG_TASK_ADDR_LO),
+			readl(g_nnie_regs + NNIE_REG_TASK_ADDR_HI),
+			readl(g_nnie_regs + NNIE_REG_CHECK_SUM));
+		pr_info("nnie_neo: 64-B task desc: %08x %08x %08x %08x  %08x %08x %08x %08x\n",
+			d[0], d[1], d[2], d[3], d[4], d[5], d[6], d[7]);
+		pr_info("nnie_neo:                  %08x %08x %08x %08x  %08x %08x %08x %08x\n",
+			d[8], d[9], d[10], d[11], d[12], d[13], d[14], d[15]);
+	}
+
 	writel(NNIE_START_GO,            g_nnie_regs + NNIE_REG_START);
+
+	/* Brief polling diagnostic — if HW fires IRQ in <100 ms we'll
+	 * catch the STATUS transitions; if HW is wedged we'll see
+	 * START stay stuck. */
+	{
+		int p;
+		for (p = 0; p < 20; p++) {
+			u32 s = readl(g_nnie_regs + NNIE_REG_IRQ_STATUS);
+			u32 st = readl(g_nnie_regs + NNIE_REG_START);
+			u32 tid = readl(g_nnie_regs + NNIE_REG_TASK_ID);
+
+			if (s != 0 || tid != 0)
+				pr_info("nnie_neo: poll[%d]: STATUS=0x%x START=0x%x TASK_ID=0x%x\n",
+					p, s, st, tid);
+			udelay(50);
+		}
+	}
 
 	completed = wait_for_completion_timeout(&g_nnie_done, 5 * HZ);
 	cause = atomic_xchg(&g_nnie_last_status, 0);
 
-	nnie_sys_clear_bit(NNIE_SYS_REG_NNIE_RAM, NNIE_SYS_BIT_NNIE_RAM);
+	nnie_sys2_clear_bit(NNIE_SYS2_REG_NNIE_RAM, NNIE_SYS_BIT_NNIE_RAM);
 
 	dma_free_coherent(&g_nnie_pf_dev->dev, NNIE_HW_TASK_SIZE,
 			  task_kvirt, task_dma);
@@ -779,6 +857,18 @@ int nnie_std_mod_init(void)
 	init_completion(&g_nnie_done);
 	spin_lock_init(&g_sys_lock);
 	spin_lock_init(&g_crg_lock);
+	spin_lock_init(&g_sys2_lock);
+
+	/* sys2 window — holds the NNIE/GDC RAM-using flag (0x12030034). */
+	g_sys2_regs = ioremap(NNIE_SYS2_BASE_PHYS, NNIE_SYS2_WINDOW_SIZE);
+	if (g_sys2_regs) {
+		u32 nram = readl(g_sys2_regs + NNIE_SYS2_REG_NNIE_RAM);
+		pr_info("nnie_neo: sys2 @0x%lx mapped — NNIE_RAM[0x34]=0x%08x\n",
+			NNIE_SYS2_BASE_PHYS, nram);
+	} else {
+		pr_warn("nnie_neo: failed to ioremap sys2 @0x%lx\n",
+			NNIE_SYS2_BASE_PHYS);
+	}
 
 	/* Map the cv500 CRG (clock-reset generator) window so we can ungate
 	 * the NNIE clock + release reset before HW dispatch. Vendor open_sys
@@ -801,9 +891,8 @@ int nnie_std_mod_init(void)
 	if (g_sys_regs) {
 		u32 vgs = readl(g_sys_regs + NNIE_SYS_REG_VGS_RAM);
 		u32 mtx = readl(g_sys_regs + NNIE_SYS_REG_MUTEX);
-		u32 nra = readl(g_sys_regs + NNIE_SYS_REG_NNIE_RAM);
-		pr_info("nnie_neo: sys @0x%lx mapped — VGS=0x%08x MUTEX=0x%08x NNIE_RAM=0x%08x\n",
-			NNIE_SYS_BASE_PHYS, vgs, mtx, nra);
+		pr_info("nnie_neo: sys @0x%lx mapped — VGS=0x%08x MUTEX=0x%08x\n",
+			NNIE_SYS_BASE_PHYS, vgs, mtx);
 	} else {
 		pr_warn("nnie_neo: failed to ioremap sys window @0x%lx — Phase 4 coordination unavailable\n",
 			NNIE_SYS_BASE_PHYS);
@@ -856,6 +945,10 @@ void nnie_std_mod_exit(void)
 	if (g_crg_regs) {
 		iounmap(g_crg_regs);
 		g_crg_regs = NULL;
+	}
+	if (g_sys2_regs) {
+		iounmap(g_sys2_regs);
+		g_sys2_regs = NULL;
 	}
 	if (g_nnie_dev) {
 		osal_deregisterdevice(g_nnie_dev);
