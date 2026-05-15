@@ -112,35 +112,116 @@ static long nnie_dispatch(unsigned int cmd, unsigned long arg)
 	}
 }
 
-/* ── Phase 0/1 stubs (all reject with -EOPNOTSUPP for now) ─────── */
+/* ── Phase 3 stubs — arg ABIs decoded, HW dispatch TBD ────────────
+ *
+ * Forward arg buffer (1624 B), decoded from vendor libnnie.so Forward
+ * worker @0x104c-0x117c:
+ *
+ *   off   | size | content
+ *   ------+------+----------------------------------------------------
+ *      0  |   4  | HI_HANDLE (out — kernel writes assigned handle)
+ *      4  |   4  | pad
+ *      8  | 768  | astSrc[16]  — 16 SVP_BLOB_S, 48 B each
+ *    776  |   8  | pad
+ *    784  | 768  | astDst[16]
+ *   1552  |  64  | SVP_NNIE_FORWARD_CTRL_S {u32SrcNum, u32DstNum,
+ *               |    u32NetSegId, enNnieId, stTmpBuf(24), stTskBuf(24)}
+ *   1616  |   4  | bInstant
+ *   1620  |   4  | pad
+ *
+ * ForwardWithBbox arg buffer (1728 B), 104 B larger — the extra block
+ * holds the proposal-bbox MEM_INFO and u32ProposalNum. Layout same as
+ * Forward up to the ctrl struct, then ctrl is 72 B (an extra u32 +
+ * MEM_INFO_S vs 64 B Forward ctrl). TBD precise offset map; Phase 3
+ * decode after Forward path works.
+ */
+
+#define NNIE_FORWARD_ARG_SIZE     1624u
+#define NNIE_FORWARD_BBOX_ARG_SIZE 1728u
+#define NNIE_BLOB_S_SIZE             48u
+#define NNIE_FWD_CTRL_S_SIZE         64u
+
+#define NNIE_FWD_OFF_HANDLE           0
+#define NNIE_FWD_OFF_ASTSRC           8
+#define NNIE_FWD_OFF_ASTDST         784
+#define NNIE_FWD_OFF_CTRL          1552
+#define NNIE_FWD_OFF_INSTANT       1616
 
 static long nnie_op_forward(unsigned long arg, int with_bbox)
 {
-	pr_info_once("nnie_neo: Forward%s arg=%lx (Phase 1 stub — needs HW dispatch)\n",
-		     with_bbox ? "WithBbox" : "", arg);
+	const u32 arg_size = with_bbox ?
+		NNIE_FORWARD_BBOX_ARG_SIZE : NNIE_FORWARD_ARG_SIZE;
+	u8 *buf = (u8 *)arg;
+	u32 src_num, dst_num, net_seg_id;
+
+	if (!buf)
+		return -EINVAL;
+
+	/* Sanity: OSAL framework already did copy_from_user for ioctl
+	 * size NNIE_FORWARD_*_ARG_SIZE, so buf is a kernel kbuf. */
+
+	src_num    = *(u32 *)(buf + NNIE_FWD_OFF_CTRL + 0);
+	dst_num    = *(u32 *)(buf + NNIE_FWD_OFF_CTRL + 4);
+	net_seg_id = *(u32 *)(buf + NNIE_FWD_OFF_CTRL + 8);
+
+	pr_info_once("nnie_neo: Forward%s arg=%u B  SrcNum=%u DstNum=%u NetSegId=%u — Phase 3 stub (no HW yet)\n",
+		     with_bbox ? "WithBbox" : "",
+		     arg_size, src_num, dst_num, net_seg_id);
+
+	/* Phase 4 will:
+	 *   1. Walk astSrc / astDst blobs (phys addresses) to set up the
+	 *      HW task-node descriptor.
+	 *   2. Apply the [0x90] memory-priority knob (skipped for IVE,
+	 *      required for NNIE per kaeru:ive-neo-cv500-hw-init-reg-window-mismatch).
+	 *   3. Submit task to NNIE block at g_nnie_regs.
+	 *   4. Wait for IRQ on g_nnie_irq (Phase 0 currently fails its
+	 *      request_irq with -EBUSY because vendor's open_gdc holds the
+	 *      same SPI line with IRQF_SHARED — Phase 4 must request with
+	 *      matching flags or use polling).
+	 *   5. Write handle to buf+0; return 0.
+	 *
+	 * For now we set handle = 0 (matches ive_submit_nonxnn pattern)
+	 * and return -EOPNOTSUPP so a userland test sees the right shape
+	 * of failure. */
+	*(u32 *)(buf + NNIE_FWD_OFF_HANDLE) = 0;
 	return -EOPNOTSUPP;
 }
 
 static long nnie_op_query(unsigned long arg)
 {
-	/* arg = { u32 handle (in), u32 bBlock (in), u32 done_out } —
-	 * mirrors ive Query layout (kernel/ive_neo/ive_neo.c) until we
-	 * can verify the actual NNIE Query struct. For Phase 1 just say
-	 * "always done" since we never dispatch HW work yet. */
+	/* arg = 24 B. Layout matches the IVE Query pattern enough that
+	 * arg[2] = done_out is a safe stub. Vendor structure decode TBD. */
 	if (arg)
 		((u32 *)arg)[2] = 1;
 	return 0;
 }
 
+/* AddTskBuf / RemoveTskBuf arg buffer (24 B), decoded from libnnie.so
+ * 0x3134-0x3150: layout is plain SVP_MEM_INFO_S {u64 phys, u64 virt,
+ * u32 size, u32 pad}. Kernel tracks the buffers in a per-instance list
+ * so Forward dispatch knows which user-allocated regions are safe to
+ * reference by phys. Phase 4 work. */
 static long nnie_op_add_tskbuf(unsigned long arg)
 {
-	pr_info_once("nnie_neo: AddTskBuf (Phase 1 stub)\n");
+	u8 *buf = (u8 *)arg;
+	u64 phys, virt;
+	u32 size;
+
+	if (!buf)
+		return -EINVAL;
+	phys = *(u64 *)(buf +  0);
+	virt = *(u64 *)(buf +  8);
+	size = *(u32 *)(buf + 16);
+	pr_info_once("nnie_neo: AddTskBuf phys=0x%llx virt=0x%llx size=%u — Phase 4 stub\n",
+		     phys, virt, size);
 	return -EOPNOTSUPP;
 }
 
 static long nnie_op_remove_tskbuf(unsigned long arg)
 {
-	pr_info_once("nnie_neo: RemoveTskBuf (Phase 1 stub)\n");
+	u8 *buf = (u8 *)arg;
+	u64 phys = buf ? *(u64 *)(buf + 0) : 0;
+	pr_info_once("nnie_neo: RemoveTskBuf phys=0x%llx — Phase 4 stub\n", phys);
 	return -EOPNOTSUPP;
 }
 
