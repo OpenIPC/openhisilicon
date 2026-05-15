@@ -40,6 +40,7 @@
 #include "hi_common.h"
 
 #include "nnie_hw_task.h"
+#include "nnie_hw_regs.h"
 
 /* ── Platform state exported to nnie_init.c ───────────────────────── */
 
@@ -198,15 +199,50 @@ static long nnie_dispatch(unsigned int cmd, unsigned long arg)
 #define NNIE_FWD_OFF_HANDLE           0
 #define NNIE_FWD_OFF_ASTSRC           8
 #define NNIE_FWD_OFF_ASTDST         784
+#define NNIE_FWD_OFF_PSTMODEL_UVA   776
 #define NNIE_FWD_OFF_CTRL          1552
 #define NNIE_FWD_OFF_INSTANT       1616
+
+/* SVP_BLOB_S internal offsets (size 48 B) */
+#define NNIE_BLOB_OFF_STRIDE          4
+#define NNIE_BLOB_OFF_VIRADDR         8
+#define NNIE_BLOB_OFF_PHYADDR        16
+#define NNIE_BLOB_OFF_NUM            24
+#define NNIE_BLOB_OFF_WIDTH          28
+#define NNIE_BLOB_OFF_HEIGHT         32
+#define NNIE_BLOB_OFF_CHN            36
+
+/* SVP_NNIE_FORWARD_CTRL_S internal offsets (size 64 B) */
+#define NNIE_CTRL_OFF_SRCNUM          0
+#define NNIE_CTRL_OFF_DSTNUM          4
+#define NNIE_CTRL_OFF_NETSEGID        8
+#define NNIE_CTRL_OFF_NNIEID         12
+#define NNIE_CTRL_OFF_TMP_PHYS       16   /* stTmpBuf.u64PhyAddr */
+#define NNIE_CTRL_OFF_TSK_PHYS       40   /* stTskBuf.u64PhyAddr */
+
+static void nnie_fill_task_header(struct nnie_hw_task *task,
+                                  u64 model_phys, u32 inst_off, u32 inst_len,
+                                  u64 tsk_phys, u64 tmp_phys, u32 batch_num,
+                                  bool instant)
+{
+	memset(task, 0, sizeof(*task));
+	task->trigger_mode    = cpu_to_le16(instant ? 1 : 0);
+	task->model_file_phys = cpu_to_le64(model_phys);
+	task->seg_inst_offset = cpu_to_le32(inst_off);
+	task->seg_inst_len    = cpu_to_le32(inst_len);
+	task->tsk_buf_phys    = cpu_to_le64(tsk_phys);
+	task->tmp_buf_phys    = cpu_to_le64(tmp_phys);
+	task->src_batch_num   = cpu_to_le32(batch_num);
+}
 
 static long nnie_op_forward(unsigned long arg, int with_bbox)
 {
 	const u32 arg_size = with_bbox ?
 		NNIE_FORWARD_BBOX_ARG_SIZE : NNIE_FORWARD_ARG_SIZE;
 	u8 *buf = (u8 *)arg;
-	u32 src_num, dst_num, net_seg_id;
+	u32 src_num, dst_num, net_seg_id, instant, batch_num;
+	u64 tsk_phys, tmp_phys;
+	struct nnie_hw_task task;
 
 	if (!buf)
 		return -EINVAL;
@@ -214,87 +250,62 @@ static long nnie_op_forward(unsigned long arg, int with_bbox)
 	/* Sanity: OSAL framework already did copy_from_user for ioctl
 	 * size NNIE_FORWARD_*_ARG_SIZE, so buf is a kernel kbuf. */
 
-	src_num    = *(u32 *)(buf + NNIE_FWD_OFF_CTRL + 0);
-	dst_num    = *(u32 *)(buf + NNIE_FWD_OFF_CTRL + 4);
-	net_seg_id = *(u32 *)(buf + NNIE_FWD_OFF_CTRL + 8);
+	src_num    = *(u32 *)(buf + NNIE_FWD_OFF_CTRL + NNIE_CTRL_OFF_SRCNUM);
+	dst_num    = *(u32 *)(buf + NNIE_FWD_OFF_CTRL + NNIE_CTRL_OFF_DSTNUM);
+	net_seg_id = *(u32 *)(buf + NNIE_FWD_OFF_CTRL + NNIE_CTRL_OFF_NETSEGID);
+	tmp_phys   = *(u64 *)(buf + NNIE_FWD_OFF_CTRL + NNIE_CTRL_OFF_TMP_PHYS);
+	tsk_phys   = *(u64 *)(buf + NNIE_FWD_OFF_CTRL + NNIE_CTRL_OFF_TSK_PHYS);
+	instant    = *(u32 *)(buf + NNIE_FWD_OFF_INSTANT);
+	batch_num  = *(u32 *)(buf + NNIE_FWD_OFF_ASTSRC + NNIE_BLOB_OFF_NUM);
 
-	pr_info_once("nnie_neo: Forward%s arg=%u B  SrcNum=%u DstNum=%u NetSegId=%u — Phase 3 stub (no HW yet)\n",
+	/* Build the fixed-layout part of the 64-B HW task descriptor.
+	 * Note: model_phys (task[+16]) requires copying the user's
+	 * SVP_NNIE_MODEL_S to get model->stBase.u64PhyAddr — deferred to
+	 * Phase 5 along with the variable-length descriptor tail (per-input
+	 * stride table, per-node shape data, per-batch DMA addrs). For now
+	 * we build with model_phys=0/inst_off=0/inst_len=0 just to validate
+	 * the struct layout at compile time. */
+	nnie_fill_task_header(&task,
+	                      /*model_phys=*/0, /*inst_off=*/0, /*inst_len=*/0,
+	                      tsk_phys, tmp_phys, batch_num, !!instant);
+
+	pr_info_once("nnie_neo: Forward%s arg=%u B  SrcNum=%u DstNum=%u NetSegId=%u  Instant=%u  Batch=%u\n",
 		     with_bbox ? "WithBbox" : "",
-		     arg_size, src_num, dst_num, net_seg_id);
+		     arg_size, src_num, dst_num, net_seg_id, instant, batch_num);
+	pr_info_once("nnie_neo:   ctrl.stTskBuf.phys=0x%llx  stTmpBuf.phys=0x%llx\n",
+		     tsk_phys, tmp_phys);
+	pr_info_once("nnie_neo:   task hdr: trigger=%u model=0x%llx inst_off=%u inst_len=%u\n",
+		     le16_to_cpu(task.trigger_mode),
+		     le64_to_cpu(task.model_file_phys),
+		     le32_to_cpu(task.seg_inst_offset),
+		     le32_to_cpu(task.seg_inst_len));
 
-	/* Phase 4 will:
-	 *   1. Walk astSrc / astDst blobs (phys addresses) to set up the
-	 *      HW task-node descriptor — see nnie_hw_task.h for the full
-	 *      64-byte layout decoded from vendor svp_nnie_fill_forward_task
-	 *      @0x90d8. Field sources (from prologue 90d8..91a8):
-	 *        task[ 0] u16 = bInstant ? 1 : 0
-	 *        task[16] u64 = pstModel->stBase.u64PhyAddr  (the .wk MMZ)
-	 *        task[24] u32 = pstModel->astSeg[NetSegId].u32InstOffset
-	 *        task[28] u32 = pstModel->astSeg[NetSegId].u32InstLen
-	 *        task[32] u64 = ctrl.stTskBuf.u64PhyAddr
-	 *        task[48] u64 = ctrl.stTmpBuf.u64PhyAddr
-	 *        task[56] u32 = astSrc[0].u32Num
-	 *      After the 64-B header: per-input stride table (u32 × SrcNum),
-	 *      then per-node shape data (16 × u64, ldrd from astSrc/DstNode),
-	 *      then per-batch DMA addrs (u64 = PhyAddr + j*Stride*H*Chn).
-	 *   2. Apply the [0x90] memory-priority knob. *Phase 3 finding*:
-	 *      it's not a single "[0x90]" register write at all. Vendor
-	 *      goes hal_svp_nnie_enable_ram -> cmpi_get_module_func_by_id
-	 *      (module ID 51 = SYS, fn 0xd1) -> sys_hal_gdc_nnie_set_ram_using
-	 *      in hi_sys.o (cv500 vendor blob). That function does an
-	 *      atomic bit-set on bit 0 of register offset +0x34 of the
-	 *      sys-module's MMIO window (g_sys_state[16] base). It's NNIE/
-	 *      GDC RAM-sharing coordination, not an IVE-style mem-priority
-	 *      knob. Companion funcs in hi_sys.o:
-	 *        sys_hal_gdc_nnie_mutex_sel
-	 *        sys_hal_venc_nnie_mutex_sel
-	 *        sys_hal_nnie_get_mutex_state
-	 *        sys_hal_nnie_gdc_get_mutex_state
-	 *        sys_hal_vgs_bootroom_set_ram_using
-	 *      Phase 4 will need a sweep of these to enumerate the full
-	 *      set of bits, and either (a) drive them directly from
-	 *      open_nnie_neo.ko by ioremap()'ing the sys register window,
-	 *      or (b) export a small helper API from open_sys.ko (the
-	 *      clean-room sys module — not yet implemented).
-	 *
-	 *      Concrete starting point for Phase 4 path (a):
-	 *        cv500 DT node: sys@12010000 has 4 reg windows, one named
-	 *        "sys" at phys 0x12020000 size 0x8000. The sys_hal_*
-	 *        functions in hi_sys.o all anchor on this window.
-	 *
-	 *      Complete cv500 NNIE/GDC/VENC sys-side coordination map
-	 *      (decoded by walking sys_hal_*nnie* + sys_hal_vgs_bootroom_*
-	 *      + sys_drv_get_cmp_3dnr_cfg+0x148 / +0x1c8 bit-write
-	 *      helpers in hi_sys.o, then verified live on av300):
-	 *
-	 *        Register 0x12020000:
-	 *          live = 0x00000102
-	 *          bit 13 = vgs_bootroom_set_ram_using   (R/W)
-	 *
-	 *        Register 0x12020008 (mutex/contention):
-	 *          live = 0x00000000  (no contention currently)
-	 *          bit 0..1 = NNIE/GDC mutex state    (R)
-	 *          bit 1   = venc<->nnie mutex_sel    (W)
-	 *          bit 2   = gdc<->nnie  mutex_sel    (W)
-	 *
-	 *        Register 0x12020034:
-	 *          live = 0x00000000
-	 *          bit 0   = gdc_nnie_set_ram_using   (R/W) — primary
-	 *                    "NNIE has RAM" flag; set before Forward
-	 *                    dispatch, clear afterward.
-	 *
-	 *      Phase 4 wiring: ioremap(0x12020000, 0x1000) once in probe,
-	 *      then atomic R-M-W of these bits around each Forward call.
-	 *   3. Submit task to NNIE block. svp_nnie_start_task @0x1934 also
-	 *      goes through cmpi (module ID 37) — uses function-pointer table
-	 *      slots [r5+120], [r5+124], [r5+128], [r5+132] to prepare/fire/
-	 *      wait/finalise. Same architectural choice as IVE's chain submit
-	 *      but mediated by cmpi.
-	 *   4. Wait for IRQ on g_nnie_irq (Phase 0 currently fails its
-	 *      request_irq with -EBUSY because vendor's open_gdc holds the
-	 *      same SPI line with IRQF_SHARED — Phase 4 must request with
-	 *      matching flags or use polling).
-	 *   5. Write handle to buf+0; return 0.
+	/* Phase 5 will:
+	 *   1. copy_from_user *pstModel (13992 B) to read stBase.u64PhyAddr
+	 *      + astSeg[NetSegId].u32InstOffset/InstLen — the fixed task[16],
+	 *      task[24], task[28] fields. (offsetof(MODEL_S, stBase)=0x3690,
+	 *      cross-checked against vendor literal in nnie_hw_task.h.)
+	 *   2. Append the variable-length descriptor tail: per-input stride
+	 *      table (u32 × SrcNum), per-node shape data (16 × u64), per-batch
+	 *      DMA addrs (u64 = PhyAddr + j*Stride*H*Chn). Decoded from
+	 *      vendor svp_nnie_fill_forward_task @0x91d4-0x94c0.
+	 *   3. Acquire sys-window mutex: nnie_sys_set_bit(NNIE_SYS_REG_NNIE_RAM,
+	 *      NNIE_SYS_BIT_NNIE_RAM). (cv500 sys @0x12020034 bit 0; vendor
+	 *      goes via cmpi mod 51 fn 0xd1 = sys_hal_gdc_nnie_set_ram_using.)
+	 *   4. Drive NNIE registers per nnie_hw_regs.h:
+	 *        writel(NNIE_CLK_GATE_EN,        regs + NNIE_REG_CLK_GATE);
+	 *        writel(NNIE_OUTSTANDING_DEFAULT,regs + NNIE_REG_OUTSTANDING);
+	 *        writel(NNIE_IRQ_ALL,            regs + NNIE_REG_IRQ_CFG);
+	 *        writel(task_dma_lo,             regs + NNIE_REG_TASK_ADDR_LO);
+	 *        writel(0,                       regs + NNIE_REG_TASK_ADDR_HI);
+	 *        wmb();
+	 *        writel(NNIE_START_GO,           regs + NNIE_REG_START);
+	 *   5. Wait on g_nnie_done completion. (Phase 0 request_irq currently
+	 *      fails -EBUSY because vendor open_gdc.ko shares SPI 53/54 with
+	 *      IRQF_SHARED — Phase 5 must request with matching flags or fall
+	 *      back to polling NNIE_REG_IRQ_STATUS.)
+	 *   6. Ack: writel(NNIE_IRQ_ALL, regs + NNIE_REG_IRQ_CLEAR);
+	 *      Release: nnie_sys_clear_bit(...). Write handle=0 to buf+0.
 	 *
 	 * For now we set handle = 0 (matches ive_submit_nonxnn pattern)
 	 * and return -EOPNOTSUPP so a userland test sees the right shape
