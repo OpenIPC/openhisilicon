@@ -36,6 +36,73 @@
 #include <stdint.h>
 #include <stddef.h>
 #include <string.h>
+#include <stdio.h>
+#include <fcntl.h>
+#include <unistd.h>
+#include <errno.h>
+#include <sys/ioctl.h>
+#include <pthread.h>
+
+/* /dev/nnie ioctl numbers — see kernel/nnie_neo/nnie_neo.c. Layouts:
+ *
+ *   FORWARD              (1624 B I/O):
+ *     +0   u32 handle (out)
+ *     +8   SVP_BLOB_S astSrc[16]    (48 B each)
+ *     +776 u64 pstModel user VA
+ *     +784 SVP_BLOB_S astDst[16]
+ *     +1552 SVP_NNIE_FORWARD_CTRL_S (64 B)
+ *     +1616 u32 bInstant
+ *
+ *   ADD_TSKBUF / REMOVE_TSKBUF (24 B I/O): SVP_MEM_INFO_S
+ */
+#define NNIE_IOC_FORWARD              0xc6584d00u
+#define NNIE_IOC_FORWARD_WITH_BBOX    0xc6c04d01u
+#define NNIE_IOC_QUERY                0xc0184d02u
+#define NNIE_IOC_ADD_TSKBUF           0xc0184d03u
+#define NNIE_IOC_REMOVE_TSKBUF        0xc0184d04u
+
+#define NNIE_FWD_ARG_SIZE       1624u
+#define NNIE_FWD_BBOX_ARG_SIZE  1728u
+#define NNIE_BLOB_SIZE            48u
+
+static int      g_nnie_fd = -1;
+static pthread_mutex_t g_nnie_fd_lock = PTHREAD_MUTEX_INITIALIZER;
+
+static int nnie_open_dev(void)
+{
+	int fd;
+
+	pthread_mutex_lock(&g_nnie_fd_lock);
+	if (g_nnie_fd < 0) {
+		fd = open("/dev/nnie", O_RDWR | O_CLOEXEC);
+		if (fd < 0) {
+			pthread_mutex_unlock(&g_nnie_fd_lock);
+			return -errno;
+		}
+		g_nnie_fd = fd;
+	}
+	pthread_mutex_unlock(&g_nnie_fd_lock);
+	return g_nnie_fd;
+}
+
+/* Translate Linux errno to vendor HI_ERR codes for upstream callers. */
+static HI_S32 nnie_err_to_hi(int err)
+{
+	if (err >= 0) return HI_SUCCESS;
+	switch (-err) {
+	case EFAULT:    return HI_ERR_SVP_NNIE_BADADDR;
+	case ENOMEM:    return HI_ERR_SVP_NNIE_NOMEM;
+	case ENOSPC:    return HI_ERR_SVP_NNIE_NOBUF;
+	case EINVAL:    return HI_ERR_SVP_NNIE_ILLEGAL_PARAM;
+	case ENODEV:    return HI_ERR_SVP_NNIE_NOTREADY;
+	case ETIMEDOUT: return HI_ERR_SVP_NNIE_BUSY;
+	case EOPNOTSUPP: return HI_ERR_SVP_NNIE_NOT_SURPPORT;
+#if defined(ENOTSUP) && ENOTSUP != EOPNOTSUPP
+	case ENOTSUP:   return HI_ERR_SVP_NNIE_NOT_SURPPORT;
+#endif
+	default:        return HI_ERR_SVP_NNIE_NOT_SURPPORT;
+	}
+}
 
 /* IEEE 802.3 CRC-32 polynomial 0xEDB88320 (reflected), the canonical
  * zlib CRC32. Loader uses a 256-entry table-driven implementation
@@ -88,14 +155,20 @@ int nnie_wk_verify_crc(const void *file_buf, uint32_t file_size)
 	return (stored == computed) ? 0 : -1;
 }
 
-/* Phase 2 stub — full parser deferred. Returns NOT_SUPPORT but
- * exercises the CRC + version checks so callers see the right errno
- * for malformed files. */
+/* Parse just enough of the .wk file to satisfy the kernel Forward
+ * ioctl: stBase (so kernel can DMA the instruction stream from MMZ),
+ * u32NetSegNum, and astSeg[i].{enNetType, u16SrcNum, u16DstNum,
+ * u16MaxStep, u32InstOffset, u32InstLen}. Node/ROI tables are left
+ * zero-initialised; they're only needed by the userspace post-process
+ * paths (vendor's softmax / detect / cluster helpers — not yet
+ * implemented here). */
 HI_S32 HI_MPI_SVP_NNIE_LoadModel(const SVP_SRC_MEM_INFO_S *pstModelBuf,
                                  SVP_NNIE_MODEL_S *pstModel)
 {
 	const uint8_t *file;
-	uint32_t file_size;
+	uint32_t file_size, inst_off_extra, inst_total_len;
+	uint32_t i;
+	uint8_t  seg_num;
 
 	if (!pstModelBuf || !pstModel)
 		return HI_ERR_SVP_NNIE_NULL_PTR;
@@ -113,15 +186,49 @@ HI_S32 HI_MPI_SVP_NNIE_LoadModel(const SVP_SRC_MEM_INFO_S *pstModelBuf,
 	    file[18] != NNIE_WK_VER_3   || file[19] != NNIE_WK_VER_4)
 		return HI_ERR_SVP_NNIE_ILLEGAL_PARAM;
 
-	/* Phase 2 stops here. Phase 3 will:
-	 *   - memset(pstModel, 0, sizeof(*pstModel))
-	 *   - parse header offsets [52..55] (inst_offset_extra),
-	 *     [56..59] (inst_len), [132] (enRunMode), [133] (NetSegNum)
-	 *   - iterate astSeg[u32NetSegNum] from the segment table
-	 *   - iterate astRoiInfo[] from the ROI pool table
-	 *   - fill pstModel->stBase = *pstSrc
-	 */
-	return HI_ERR_SVP_NNIE_NOT_SURPPORT;
+	seg_num = file[49];
+	if (seg_num < 1 || seg_num > NNIE_WK_MAX_NET_SEG_NUM)
+		return HI_ERR_SVP_NNIE_ILLEGAL_PARAM;
+
+	inst_off_extra = *(const uint32_t *)(file + 52);
+	inst_total_len = *(const uint32_t *)(file + 56);
+	if ((uint64_t)inst_off_extra + inst_total_len > file_size)
+		return HI_ERR_SVP_NNIE_ILLEGAL_PARAM;
+
+	memset(pstModel, 0, sizeof(*pstModel));
+
+	/* The kernel Forward ioctl DMAs the instruction stream from
+	 * stBase.u64PhyAddr at the offset/length stored in
+	 * astSeg[i].u32InstOffset/u32InstLen. So stBase points at the
+	 * whole .wk file in MMZ — the per-segment offsets are file-
+	 * relative. */
+	pstModel->stBase    = *pstModelBuf;
+	pstModel->enRunMode = (SVP_NNIE_RUN_MODE_E)file[48];
+	pstModel->u32NetSegNum  = seg_num;
+	pstModel->u32TmpBufSize = *(const uint32_t *)(file + 60);
+
+	/* Segment table is at file[192]; each on-disk record is 16 B and
+	 * decodes to the SVP_NNIE_SEG_S layout (see nnie_wk_format.h).
+	 * Node + ROI tables follow but aren't decoded here — leaving
+	 * astSrcNode/astDstNode/au32RoiIdx zeroed is safe because the
+	 * kernel Forward path only touches u32InstOffset / u32InstLen. */
+	for (i = 0; i < seg_num; i++) {
+		const uint8_t *r = file + 192 + i * sizeof(nnie_wk_seg_record_t);
+
+		pstModel->astSeg[i].enNetType     = (SVP_NNIE_NET_TYPE_E)r[0];
+		pstModel->astSeg[i].u16SrcNum     = r[1];
+		pstModel->astSeg[i].u16DstNum     = r[2];
+		pstModel->astSeg[i].u16RoiPoolNum = r[3];
+		pstModel->astSeg[i].u16MaxStep    = *(const uint16_t *)(r + 4);
+		pstModel->astSeg[i].u32InstOffset = *(const uint32_t *)(r + 8);
+		pstModel->astSeg[i].u32InstLen    = *(const uint32_t *)(r + 12);
+
+		if (pstModel->astSeg[i].u32InstOffset + pstModel->astSeg[i].u32InstLen
+		    > file_size)
+			return HI_ERR_SVP_NNIE_ILLEGAL_PARAM;
+	}
+
+	return HI_SUCCESS;
 }
 
 HI_S32 HI_MPI_SVP_NNIE_UnloadModel(SVP_NNIE_MODEL_S *pstModel)
@@ -152,9 +259,36 @@ HI_S32 HI_MPI_SVP_NNIE_Forward(SVP_NNIE_HANDLE *phSvpNnieHandle,
                                const SVP_NNIE_FORWARD_CTRL_S *pstForwardCtrl,
                                HI_BOOL bInstant)
 {
-	(void)phSvpNnieHandle; (void)astSrc; (void)pstModel;
-	(void)astDst; (void)pstForwardCtrl; (void)bInstant;
-	return HI_ERR_SVP_NNIE_NOT_SURPPORT;
+	uint8_t buf[NNIE_FWD_ARG_SIZE];
+	uint64_t model_uva;
+	int fd, src_n, dst_n;
+
+	if (!phSvpNnieHandle || !astSrc || !pstModel ||
+	    !astDst || !pstForwardCtrl)
+		return HI_ERR_SVP_NNIE_NULL_PTR;
+
+	fd = nnie_open_dev();
+	if (fd < 0)
+		return nnie_err_to_hi(fd);
+
+	memset(buf, 0, sizeof(buf));
+	src_n = (int)pstForwardCtrl->u32SrcNum;
+	dst_n = (int)pstForwardCtrl->u32DstNum;
+	if (src_n < 1 || src_n > 16 || dst_n < 1 || dst_n > 16)
+		return HI_ERR_SVP_NNIE_ILLEGAL_PARAM;
+
+	memcpy(buf +    8, astSrc, NNIE_BLOB_SIZE * src_n);
+	model_uva = (uint64_t)(uintptr_t)pstModel;
+	memcpy(buf +  776, &model_uva, 8);
+	memcpy(buf +  784, astDst, NNIE_BLOB_SIZE * dst_n);
+	memcpy(buf + 1552, pstForwardCtrl, sizeof(*pstForwardCtrl));
+	*(uint32_t *)(buf + 1616) = bInstant ? 1 : 0;
+
+	if (ioctl(fd, NNIE_IOC_FORWARD, buf) < 0)
+		return nnie_err_to_hi(-errno);
+
+	*phSvpNnieHandle = *(uint32_t *)(buf + 0);
+	return HI_SUCCESS;
 }
 
 HI_S32 HI_MPI_SVP_NNIE_ForwardWithBbox(SVP_NNIE_HANDLE *phSvpNnieHandle,
@@ -182,12 +316,38 @@ HI_S32 HI_MPI_SVP_NNIE_Query(SVP_NNIE_ID_E enNnieId,
 
 HI_S32 HI_MPI_SVP_NNIE_AddTskBuf(const SVP_MEM_INFO_S *pstTskBuf)
 {
-	(void)pstTskBuf;
-	return HI_ERR_SVP_NNIE_NOT_SURPPORT;
+	uint8_t arg[24];
+	int fd;
+
+	if (!pstTskBuf)
+		return HI_ERR_SVP_NNIE_NULL_PTR;
+
+	fd = nnie_open_dev();
+	if (fd < 0)
+		return nnie_err_to_hi(fd);
+
+	memset(arg, 0, sizeof(arg));
+	memcpy(arg, pstTskBuf, sizeof(*pstTskBuf));
+	if (ioctl(fd, NNIE_IOC_ADD_TSKBUF, arg) < 0)
+		return nnie_err_to_hi(-errno);
+	return HI_SUCCESS;
 }
 
 HI_S32 HI_MPI_SVP_NNIE_RemoveTskBuf(const SVP_MEM_INFO_S *pstTskBuf)
 {
-	(void)pstTskBuf;
-	return HI_ERR_SVP_NNIE_NOT_SURPPORT;
+	uint8_t arg[24];
+	int fd;
+
+	if (!pstTskBuf)
+		return HI_ERR_SVP_NNIE_NULL_PTR;
+
+	fd = nnie_open_dev();
+	if (fd < 0)
+		return nnie_err_to_hi(fd);
+
+	memset(arg, 0, sizeof(arg));
+	memcpy(arg, pstTskBuf, sizeof(*pstTskBuf));
+	if (ioctl(fd, NNIE_IOC_REMOVE_TSKBUF, arg) < 0)
+		return nnie_err_to_hi(-errno);
+	return HI_SUCCESS;
 }
