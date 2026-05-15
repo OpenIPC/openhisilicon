@@ -203,14 +203,19 @@ static long nnie_dispatch(unsigned int cmd, unsigned long arg)
 #define NNIE_FWD_OFF_CTRL          1552
 #define NNIE_FWD_OFF_INSTANT       1616
 
-/* SVP_BLOB_S internal offsets (size 48 B) */
+/* SVP_BLOB_S internal offsets (size 48 B; cross-checked with cv500 ARM
+ * toolchain — the union starts at +32 because u64VirAddrStep in stSeq
+ * forces 8-byte alignment, leaving a 4-byte hole at +28). */
 #define NNIE_BLOB_OFF_STRIDE          4
 #define NNIE_BLOB_OFF_VIRADDR         8
 #define NNIE_BLOB_OFF_PHYADDR        16
 #define NNIE_BLOB_OFF_NUM            24
-#define NNIE_BLOB_OFF_WIDTH          28
-#define NNIE_BLOB_OFF_HEIGHT         32
-#define NNIE_BLOB_OFF_CHN            36
+/* +28..+31: 4 B padding for union alignment */
+#define NNIE_BLOB_OFF_WIDTH          32   /* stWhc.u32Width  / stSeq.u32Dim */
+#define NNIE_BLOB_OFF_HEIGHT         36   /* stWhc.u32Height               */
+#define NNIE_BLOB_OFF_CHN            40   /* stWhc.u32Chn   / stSeq.u64VAStep lo */
+#define NNIE_BLOB_OFF_DIM            32   /* alias for stSeq */
+#define NNIE_BLOB_OFF_VASTEP         40   /* alias for stSeq */
 
 /* SVP_NNIE_FORWARD_CTRL_S internal offsets (size 64 B) */
 #define NNIE_CTRL_OFF_SRCNUM          0

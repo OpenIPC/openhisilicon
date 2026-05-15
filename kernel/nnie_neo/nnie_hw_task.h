@@ -51,33 +51,77 @@
  *                                            +PhyAddr(8)+u32Num(4)+... = 48
  *   +60  u32  reserved          = 0
  *
- * After the 64-B header, fill_forward_task continues with a variable-
- * length section starting at task_node+64 (16-byte aligned, zero-padded
- * gap). The trailing region contains:
+ * Variable-length descriptor tail (written into ctrl.stTskBuf, whose
+ * phys ends up at task[+32]; the HW reads it by following that pointer):
  *
- *   1. A per-input-blob stride table: one u32 per astSrc[i], packed,
- *      i ∈ [0..SrcNum-1]. Source: each entry = astSrc[i].u32Stride from
- *      fwd_arg+8+48*i+4. Loop @91d4-91f4.
+ * Allocation model: vendor calls svp_nnie_get_tsk_vir_addr.constprop.7
+ * @0x91a8 which returns the kernel-vir of the user-supplied
+ * ctrl.stTskBuf region (found by phys-addr match against the registered
+ * tskbuf list — see svp_nnie_add_tskbuf @0x4c4). All subsequent writes
+ * are to that vir; HW addresses by phys.
  *
- *   2. For non-LSTM segments (net_type != 2), a copy of the per-input
- *      and per-output node shape data from pstModel->astSeg[NetSegId].
- *      astSrcNode[i]/astDstNode[i] (Loop @9260-93e8 unrolled for
- *      DstNum ∈ [1..16]). Each entry is 8 B (two u64s, ldrd/strd).
+ * Sequence (decoded from fill_forward_task body 0x91d4-0x9498):
  *
- *   3. For CNN/ROI nets, a per-source DMA address vector: for each of
- *      astSrc[i].u32Num batches, computes
- *      astSrc[i].u64PhyAddr + j * (astSrc[i].u32Stride *
- *         astSrc[i].u32Height * astSrc[i].u32Chn)
- *      and writes the resulting 64-bit phys address. Loop @9428-9494
- *      uses umlal to do 32×32→64-bit multiply-accumulate.
+ *   §1 (always) per-input stride table — `SrcNum × u32`
+ *       For i ∈ [0..SrcNum-1]:  *tip++ = astSrc[i].u32Stride
+ *       Loop @91e4-91f4. tip starts at tskbuf virt + 0.
+ *       After §1, align tip to 16 B (memset zero-fill) @9224-9248.
  *
- *   4. Image source helper for LSTM (net_type==2, src_type ∈ [1..3]):
- *      calls svp_nnie_fill_image_src_addr (@0x78ac) instead of the
- *      simple DMA-stride generator. Path @9580-95e8.
+ *   §2 (non-LSTM: model->astSeg[NetSegId].enNetType != SVP_NNIE_NET_TYPE_RECURRENT)
+ *       16 × u64 destination-blob PhyAddr table:
+ *         For i ∈ [0..15]:
+ *           *(u64*)tip = (i < DstNum) ? astDst[i].u64PhyAddr : 0
+ *       Always advances tip by exactly 128 B regardless of DstNum
+ *       (slots past DstNum are zeroed by the earlier memset).
+ *       Loop @9260-93e4 unrolled 16-way.
  *
- *   5. Optional cache flush (94a0-94ac): if ctrl + 32 is set, calls
- *      hil_mmb_flush_dcache_byaddr with parameters from fwd_arg+1592
- *      and fwd_arg+1608.
+ *   §3 (non-LSTM) per-source DMA address vector — variable size
+ *       For each i ∈ [0..SrcNum-1] (loop @93f4-9490):
+ *         t = astSrc[i].enType
+ *         if t == SVP_BLOB_TYPE_U8/S8C1 (== 0):
+ *             batch_size = astSrc[i].u32Stride
+ *                        * astSrc[i].unShape.stWhc.u32Height
+ *                        * astSrc[i].unShape.stWhc.u32Chn
+ *             for j ∈ [0..Num-1]:  *(u64*)tip = PhyAddr + j*batch_size
+ *         elif t ∈ [1..3] (image YUV variants):
+ *             svp_nnie_fill_image_src_addr(&astSrc[i], &tip, dst, ...);
+ *             (helper @0x78ac handles UV-plane offsets internally)
+ *         elif t == 4 (packaged single-plane):
+ *             batch_size = astSrc[i].u32Stride
+ *                        * astSrc[i].unShape.stWhc.u32Height
+ *             for j ∈ [0..Num-1]:  *(u64*)tip = PhyAddr + j*batch_size
+ *         elif t == 5 (sequence/RNN input):
+ *             use per-step strides from a user-supplied step array;
+ *             read PhyAddr+offset per step
+ *         else: error log, abort with HI_ERR_SVP_NNIE_ILLEGAL_PARAM
+ *         After each i: align tip to 16 B.
+ *
+ *   §4 (LSTM-only: enNetType == SVP_NNIE_NET_TYPE_RECURRENT)
+ *       Different layout entirely (path @0x96dc): uses
+ *       ctrl.stTskBuf.u64PhyAddr + offset for per-timestep slots,
+ *       indexed by Num+15 rounded down to 16. Not yet fully decoded
+ *       — Phase 6 work.
+ *
+ *   §5 Optional dcache flush: if [sp, #40] (orig tskbuf vir) is set,
+ *       call hil_mmb_flush_dcache_byaddr with size = fwd_arg[1608]
+ *       (= ctrl + 56 = stTskBuf.u32Size?) and start = fwd_arg[1592]
+ *       (= ctrl + 40 = stTskBuf.u64PhyAddr lo). @94a4-94ac.
+ *
+ * SVP_BLOB_S layout (cross-checked with cv500 ARM toolchain, 48 B
+ * total; *the union starts at +32, not +28* — there's a 4-byte hole
+ * after u32Num for u64VirAddrStep alignment of the stSeq variant):
+ *
+ *   +0   u32 enType                (SVP_BLOB_TYPE_E)
+ *   +4   u32 u32Stride
+ *   +8   u64 u64VirAddr
+ *   +16  u64 u64PhyAddr
+ *   +24  u32 u32Num
+ *   +28  u32 _pad
+ *   +32  union {
+ *          stWhc { +32 Width, +36 Height, +40 Chn };
+ *          stSeq { +32 Dim,   +40 u64VirAddrStep  };
+ *        }
+ *   +48  (end)
  *
  * Phase 4 wiring:
  *   - Allocate a 64-B descriptor on stack (or DMA-coherent region),
