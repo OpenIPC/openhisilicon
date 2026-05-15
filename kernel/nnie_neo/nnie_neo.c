@@ -39,6 +39,7 @@
 #include <linux/mutex.h>
 #include <linux/dma-mapping.h>
 #include <linux/platform_device.h>
+#include <linux/vmalloc.h>
 
 #include "hi_osal.h"
 #include "hi_common.h"
@@ -445,19 +446,27 @@ static int nnie_build_task_tail(struct nnie_tskbuf *tb, const u8 *fwd_arg,
 	return off;   /* bytes used */
 }
 
+/* sizeof(SVP_NNIE_MODEL_S) on cv500 ARM — cross-checked in
+ * nnie_hw_task.h. Used for the per-call copy_from_user(pstModel). */
+#define NNIE_MODEL_SIZE  13992u
+
 static long nnie_op_forward(unsigned long arg, int with_bbox)
 {
 	const u32 arg_size = with_bbox ?
 		NNIE_FORWARD_BBOX_ARG_SIZE : NNIE_FORWARD_ARG_SIZE;
 	u8 *buf = (u8 *)arg;
 	u32 src_num, dst_num, net_seg_id, instant, batch_num;
-	u64 tsk_phys, tmp_phys;
+	u64 tsk_phys, tmp_phys, model_uva;
+	u64 model_phys = 0;
+	u32 inst_off = 0, inst_len = 0;
+	u32 net_seg_num;
+	u8 *model_kbuf;
+	struct nnie_tskbuf *tb;
+	int tail_bytes = -ENOENT;
+	struct nnie_hw_task task;
 
 	if (!buf)
 		return -EINVAL;
-
-	/* Sanity: OSAL framework already did copy_from_user for ioctl
-	 * size NNIE_FORWARD_*_ARG_SIZE, so buf is a kernel kbuf. */
 
 	src_num    = *(u32 *)(buf + NNIE_FWD_OFF_CTRL + NNIE_CTRL_OFF_SRCNUM);
 	dst_num    = *(u32 *)(buf + NNIE_FWD_OFF_CTRL + NNIE_CTRL_OFF_DSTNUM);
@@ -466,52 +475,85 @@ static long nnie_op_forward(unsigned long arg, int with_bbox)
 	tsk_phys   = *(u64 *)(buf + NNIE_FWD_OFF_CTRL + NNIE_CTRL_OFF_TSK_PHYS);
 	instant    = *(u32 *)(buf + NNIE_FWD_OFF_INSTANT);
 	batch_num  = *(u32 *)(buf + NNIE_FWD_OFF_ASTSRC + NNIE_BLOB_OFF_NUM);
+	model_uva  = *(u64 *)(buf + NNIE_FWD_OFF_PSTMODEL_UVA);
 
 	pr_info_once("nnie_neo: Forward%s arg=%u B  SrcNum=%u DstNum=%u NetSegId=%u  Instant=%u  Batch=%u\n",
 		     with_bbox ? "WithBbox" : "",
 		     arg_size, src_num, dst_num, net_seg_id, instant, batch_num);
-	pr_info_once("nnie_neo:   ctrl.stTskBuf.phys=0x%llx  stTmpBuf.phys=0x%llx\n",
-		     tsk_phys, tmp_phys);
+	pr_info_once("nnie_neo:   ctrl.stTskBuf.phys=0x%llx  stTmpBuf.phys=0x%llx  pstModel.uva=0x%llx\n",
+		     tsk_phys, tmp_phys, model_uva);
 
-	/* Dry-run build the variable-length tail into the registered
-	 * stTskBuf (no HW dispatch yet). On enType==0 (basic CNN input)
-	 * this writes §1 strides + §2 dst-phys + §3 per-batch DMA addrs
-	 * into the user MMZ region via the ioremap'd kvirt. Phase 7 will
-	 * finalise the 64-B descriptor (needs copy_from_user pstModel for
-	 * stBase.u64PhyAddr + astSeg[NetSegId].InstOff/Len) and drive HW. */
-	if (tsk_phys && tsk_phys <= U32_MAX) {
-		struct nnie_tskbuf *tb;
-		int tail_bytes = -ENOENT;
+	if (!model_uva || src_num == 0 || dst_num == 0 || src_num > 16 || dst_num > 16)
+		return -EINVAL;
+	if (net_seg_id >= 8)
+		return -EINVAL;
 
-		mutex_lock(&g_nnie_tskbuf_lock);
-		tb = nnie_find_tskbuf_locked(tsk_phys);
-		if (tb)
-			tail_bytes = nnie_build_task_tail(tb, buf, src_num, dst_num);
-		mutex_unlock(&g_nnie_tskbuf_lock);
+	/* copy_from_user the full SVP_NNIE_MODEL_S so we can read
+	 *   - stBase.u64PhyAddr     (file[+0x3690])  → task[+16]
+	 *   - astSeg[net_seg_id].u32InstOffset (file[+12 + seg*1692 + 12])
+	 *   - astSeg[net_seg_id].u32InstLen    (file[+12 + seg*1692 + 16])
+	 * vmalloc because 13992 B is close to kmalloc's default-slab cliff. */
+	model_kbuf = vmalloc(NNIE_MODEL_SIZE);
+	if (!model_kbuf)
+		return -ENOMEM;
 
-		pr_info_once("nnie_neo:   tail builder -> %d bytes (tskbuf %s)\n",
-			     tail_bytes, tb ? "found" : "not registered");
+	if (copy_from_user(model_kbuf, (void __user *)(uintptr_t)model_uva,
+			   NNIE_MODEL_SIZE)) {
+		vfree(model_kbuf);
+		return -EFAULT;
 	}
 
-	/* Phase 7 (HW dispatch) needs:
-	 *   - copy_from_user(model_kbuf, fwd_arg[+776], sizeof(SVP_NNIE_MODEL_S))
-	 *   - validate net_seg_id < model->u32NetSegNum
-	 *   - finalise descriptor with model->stBase.u64PhyAddr +
-	 *     model->astSeg[net_seg_id].u32InstOffset/u32InstLen
+	net_seg_num = *(u32 *)(model_kbuf + 8);   /* MODEL_S.u32NetSegNum */
+	if (net_seg_id >= net_seg_num) {
+		pr_warn("nnie_neo: net_seg_id=%u >= u32NetSegNum=%u\n",
+			net_seg_id, net_seg_num);
+		vfree(model_kbuf);
+		return -EINVAL;
+	}
+
+	model_phys = *(u64 *)(model_kbuf + NNIE_MODEL_STBASE_OFFSET);
+	inst_off   = *(u32 *)(model_kbuf + 12 + net_seg_id * NNIE_SEG_S_STRIDE + 12);
+	inst_len   = *(u32 *)(model_kbuf + 12 + net_seg_id * NNIE_SEG_S_STRIDE + 16);
+	vfree(model_kbuf);
+
+	/* Build the variable-length tail into the registered stTskBuf.
+	 * (Failure here is fatal — HW reads §3 to know input/output phys
+	 * addresses, so without the tail the inference can't run.) */
+	mutex_lock(&g_nnie_tskbuf_lock);
+	tb = nnie_find_tskbuf_locked(tsk_phys);
+	if (tb)
+		tail_bytes = nnie_build_task_tail(tb, buf, src_num, dst_num);
+	mutex_unlock(&g_nnie_tskbuf_lock);
+
+	if (!tb) {
+		pr_warn("nnie_neo: stTskBuf 0x%llx not registered via AddTskBuf\n",
+			tsk_phys);
+		return -ENOENT;
+	}
+	if (tail_bytes < 0) {
+		pr_warn("nnie_neo: tail builder failed: %d\n", tail_bytes);
+		return tail_bytes;
+	}
+
+	/* Fill the 64-byte HW task descriptor (still on stack; Phase 7
+	 * will copy this into a dma_alloc_coherent buffer and pass that
+	 * phys to the NNIE START register). */
+	nnie_fill_task_header(&task, model_phys, inst_off, inst_len,
+			      tsk_phys, tmp_phys, batch_num, !!instant);
+
+	pr_info_once("nnie_neo:   task hdr: model_phys=0x%llx inst_off=%u inst_len=%u tail=%d B\n",
+		     model_phys, inst_off, inst_len, tail_bytes);
+
+	/* Phase 7 (HW dispatch — the only step left for end-to-end):
 	 *   - dma_alloc_coherent(&g_nnie_pf_dev->dev, 64, &task_dma, GFP_KERNEL)
-	 *   - memcpy(task_vir, &task, 64)
+	 *   - memcpy(task_kvirt, &task, 64)
 	 *   - nnie_sys_set_bit(NNIE_SYS_REG_NNIE_RAM, NNIE_SYS_BIT_NNIE_RAM)
-	 *   - writel(NNIE_CLK_GATE_EN,         regs + NNIE_REG_CLK_GATE)
-	 *   - writel(NNIE_OUTSTANDING_DEFAULT, regs + NNIE_REG_OUTSTANDING)
-	 *   - writel(NNIE_IRQ_ALL,             regs + NNIE_REG_IRQ_CFG)
-	 *   - writel((u32)task_dma,            regs + NNIE_REG_TASK_ADDR_LO)
-	 *   - writel(0,                        regs + NNIE_REG_TASK_ADDR_HI)
-	 *   - wmb(); writel(NNIE_START_GO,     regs + NNIE_REG_START)
+	 *   - writel CLK_GATE_EN / OUTSTANDING_DEFAULT / IRQ_ALL / TASK_ADDR
+	 *   - wmb(); writel(NNIE_START_GO, regs + NNIE_REG_START)
 	 *   - wait_for_completion_timeout(&g_nnie_done, 5 * HZ)
-	 *   - read+ack NNIE_REG_IRQ_STATUS, check finish vs timeout vs cfg_err
-	 *   - nnie_sys_clear_bit(...)
-	 *   - dma_free_coherent(task_vir, task_dma)
-	 *   - write handle=0 to fwd_arg+0
+	 *   - check IRQ_STATUS (finish / timeout / cfg_err)
+	 *   - nnie_sys_clear_bit(...), dma_free_coherent(...)
+	 *   - write handle=0 to buf+0
 	 */
 	*(u32 *)(buf + NNIE_FWD_OFF_HANDLE) = 0;
 	return -EOPNOTSUPP;
