@@ -222,6 +222,7 @@ static void nnie_drain_tskbufs(void)
 static osal_dev_t *g_nnie_dev;
 static int g_nnie_irq_requested;
 static struct completion g_nnie_done;
+static atomic_t g_nnie_last_status;  /* read & cleared by handler, consumed by Forward */
 
 static irqreturn_t nnie_irq_handler(int irq, void *dev)
 {
@@ -237,9 +238,8 @@ static irqreturn_t nnie_irq_handler(int irq, void *dev)
 	if (!(status & NNIE_IRQ_ALL))
 		return IRQ_NONE;
 
-	/* Ack: write-1-to-clear all 3 status bits. Drv layer will inspect
-	 * the cause later via the completion mechanism (Phase 6 — for now
-	 * just signal completion). */
+	/* Save the cause for the dispatcher to inspect, then ack. */
+	atomic_set(&g_nnie_last_status, status & NNIE_IRQ_ALL);
 	writel(status & NNIE_IRQ_ALL, g_nnie_regs + NNIE_REG_IRQ_CLEAR);
 	complete(&g_nnie_done);
 	return IRQ_HANDLED;
@@ -450,6 +450,80 @@ static int nnie_build_task_tail(struct nnie_tskbuf *tb, const u8 *fwd_arg,
  * nnie_hw_task.h. Used for the per-call copy_from_user(pstModel). */
 #define NNIE_MODEL_SIZE  13992u
 
+/* Forward dispatch: blocks until the NNIE HW signals completion (or
+ * 5 s timeout). Caller must have populated the 64-byte descriptor and
+ * already written the variable-length tail into the registered
+ * stTskBuf. Returns 0 on success, negative errno on HW error /
+ * timeout. */
+static long nnie_dispatch_forward(const struct nnie_hw_task *task)
+{
+	void *task_kvirt;
+	dma_addr_t task_dma;
+	unsigned long completed;
+	u32 cause;
+	long ret = 0;
+
+	if (!g_nnie_regs || !g_nnie_pf_dev)
+		return -ENODEV;
+
+	task_kvirt = dma_alloc_coherent(&g_nnie_pf_dev->dev,
+					NNIE_HW_TASK_SIZE,
+					&task_dma, GFP_KERNEL);
+	if (!task_kvirt)
+		return -ENOMEM;
+
+	memcpy(task_kvirt, task, NNIE_HW_TASK_SIZE);
+
+	/* Coordinate with vendor open_sys.ko / open_gdc.ko via the cv500
+	 * sys-window RAM-using flag (bit 0 of 0x12020034). Vendor's
+	 * equivalent goes through cmpi mod 51 fn 0xd1 (Phase 3 decode). */
+	nnie_sys_set_bit(NNIE_SYS_REG_NNIE_RAM, NNIE_SYS_BIT_NNIE_RAM);
+
+	atomic_set(&g_nnie_last_status, 0);
+	reinit_completion(&g_nnie_done);
+
+	/* Boot the NNIE block. The CLK_GATE/OUTSTANDING/IRQ_CFG writes
+	 * are idempotent and survive across Forward calls — we re-issue
+	 * them every time so the block recovers if vendor open_gdc.ko (or
+	 * a stale boot state) left them in a weird state. */
+	writel(NNIE_CLK_GATE_EN,         g_nnie_regs + NNIE_REG_CLK_GATE);
+	writel(NNIE_OUTSTANDING_DEFAULT, g_nnie_regs + NNIE_REG_OUTSTANDING);
+	writel(NNIE_IRQ_ALL,             g_nnie_regs + NNIE_REG_IRQ_CFG);
+	writel((u32)task_dma,            g_nnie_regs + NNIE_REG_TASK_ADDR_LO);
+	writel((u32)((u64)task_dma >> 32), g_nnie_regs + NNIE_REG_TASK_ADDR_HI);
+	wmb();
+	writel(NNIE_START_GO,            g_nnie_regs + NNIE_REG_START);
+
+	completed = wait_for_completion_timeout(&g_nnie_done, 5 * HZ);
+	cause = atomic_xchg(&g_nnie_last_status, 0);
+
+	nnie_sys_clear_bit(NNIE_SYS_REG_NNIE_RAM, NNIE_SYS_BIT_NNIE_RAM);
+
+	dma_free_coherent(&g_nnie_pf_dev->dev, NNIE_HW_TASK_SIZE,
+			  task_kvirt, task_dma);
+
+	if (!completed) {
+		pr_warn("nnie_neo: Forward timed out (5s, status snapshot=0x%x)\n",
+			cause);
+		return -ETIMEDOUT;
+	}
+	if (cause & NNIE_IRQ_CFG_ERR) {
+		u32 info = readl(g_nnie_regs + NNIE_REG_CFG_ERR_INFO);
+
+		pr_warn("nnie_neo: Forward cfg_err (cause=0x%x info=0x%x)\n",
+			cause, info);
+		ret = -EIO;
+	} else if (cause & NNIE_IRQ_TIMEOUT) {
+		pr_warn("nnie_neo: Forward HW timeout (cause=0x%x)\n", cause);
+		ret = -ETIMEDOUT;
+	} else if (!(cause & NNIE_IRQ_FINISH)) {
+		pr_warn("nnie_neo: Forward woke without finish bit (cause=0x%x)\n",
+			cause);
+		ret = -EIO;
+	}
+	return ret;
+}
+
 static long nnie_op_forward(unsigned long arg, int with_bbox)
 {
 	const u32 arg_size = with_bbox ?
@@ -544,19 +618,18 @@ static long nnie_op_forward(unsigned long arg, int with_bbox)
 	pr_info_once("nnie_neo:   task hdr: model_phys=0x%llx inst_off=%u inst_len=%u tail=%d B\n",
 		     model_phys, inst_off, inst_len, tail_bytes);
 
-	/* Phase 7 (HW dispatch — the only step left for end-to-end):
-	 *   - dma_alloc_coherent(&g_nnie_pf_dev->dev, 64, &task_dma, GFP_KERNEL)
-	 *   - memcpy(task_kvirt, &task, 64)
-	 *   - nnie_sys_set_bit(NNIE_SYS_REG_NNIE_RAM, NNIE_SYS_BIT_NNIE_RAM)
-	 *   - writel CLK_GATE_EN / OUTSTANDING_DEFAULT / IRQ_ALL / TASK_ADDR
-	 *   - wmb(); writel(NNIE_START_GO, regs + NNIE_REG_START)
-	 *   - wait_for_completion_timeout(&g_nnie_done, 5 * HZ)
-	 *   - check IRQ_STATUS (finish / timeout / cfg_err)
-	 *   - nnie_sys_clear_bit(...), dma_free_coherent(...)
-	 *   - write handle=0 to buf+0
-	 */
+	{
+		long disp_ret = nnie_dispatch_forward(&task);
+
+		if (disp_ret) {
+			pr_warn_ratelimited("nnie_neo: HW dispatch failed: %ld\n",
+					    disp_ret);
+			return disp_ret;
+		}
+	}
+
 	*(u32 *)(buf + NNIE_FWD_OFF_HANDLE) = 0;
-	return -EOPNOTSUPP;
+	return 0;
 }
 
 static long nnie_op_query(unsigned long arg)
