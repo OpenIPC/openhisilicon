@@ -108,6 +108,12 @@ $(PREFIX)acodec-objs := $(CV500_BLOB_DIR)/hi_acodec.o  $(CV500_INIT_DIR)/acodec_
 $(PREFIX)gdc-objs    := $(CV500_BLOB_DIR)/hi_gdc.o     $(CV500_INIT_DIR)/gdc_init.o
 $(PREFIX)dis-objs    := $(CV500_BLOB_DIR)/hi_dis.o     $(CV500_INIT_DIR)/dis_init.o
 $(PREFIX)nnie-objs   := $(CV500_BLOB_DIR)/hi_nnie.o    $(CV500_INIT_DIR)/nnie_init.o
+
+# Clean-room NNIE driver — ships alongside the vendor $(PREFIX)nnie.o
+# above. Init scripts pick which one to insmod at runtime; both bind
+# to the "hisilicon,hisi-nnie" device tree node but only one can probe
+# at a time. Phase 0 scaffold (issue #111) — all ioctls -EOPNOTSUPP.
+include $(src)/nnie_neo/Kbuild
 $(PREFIX)vo-objs     := $(CV500_BLOB_DIR)/hi_vo.o      $(CV500_INIT_DIR)/vo_init.o
 $(PREFIX)hdmi-objs   := $(CV500_BLOB_DIR)/hi_hdmi.o    $(CV500_INIT_DIR)/hdmi_init.o
 $(PREFIX)vdec-objs   := $(CV500_BLOB_DIR)/hi_vdec.o    $(CV500_INIT_DIR)/vdec_init.o
