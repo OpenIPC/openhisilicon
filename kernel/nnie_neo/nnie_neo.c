@@ -64,12 +64,83 @@ static irqreturn_t nnie_irq_handler(int irq, void *dev)
 	return IRQ_HANDLED;
 }
 
+/* ── ioctl numbers ───────────────────────────────────────────────
+ *
+ * Decoded from cv500 vendor libnnie.so (42 KB, kaeru:
+ * nnie-neo-cv500-ioctl-abi). Type byte = 'M' (0x4d). Five entries
+ * are reached from libnnie.so; vendor kernel svp_nnie_ioctl also
+ * recognises four more (0x05/0x06/0x07/0x08/0x09) used when the
+ * per-call context state equals 0xc — those are bbox-mode dispatch
+ * variants we'll wire in Phase 3 after seeing them used on-target.
+ *
+ *   nr | size | full ioctl   | userspace entry
+ *   ---+------+--------------+--------------------------
+ *  0x00| 1624 | 0xc6584d00   | HI_MPI_SVP_NNIE_Forward
+ *  0x01| 1728 | 0xc6c04d01   | HI_MPI_SVP_NNIE_ForwardWithBbox
+ *  0x02|   24 | 0xc0184d02   | HI_MPI_SVP_NNIE_Query
+ *  0x03|   24 | 0xc0184d03   | HI_MPI_SVP_NNIE_AddTskBuf
+ *  0x04|   24 | 0xc0184d04   | HI_MPI_SVP_NNIE_RemoveTskBuf
+ */
+#define NNIE_IOC_FORWARD              0xc6584d00u
+#define NNIE_IOC_FORWARD_WITH_BBOX    0xc6c04d01u
+#define NNIE_IOC_QUERY                0xc0184d02u
+#define NNIE_IOC_ADD_TSKBUF           0xc0184d03u
+#define NNIE_IOC_REMOVE_TSKBUF        0xc0184d04u
+
+static long nnie_op_forward(unsigned long arg, int with_bbox);
+static long nnie_op_query(unsigned long arg);
+static long nnie_op_add_tskbuf(unsigned long arg);
+static long nnie_op_remove_tskbuf(unsigned long arg);
+
 static long nnie_dispatch(unsigned int cmd, unsigned long arg)
 {
-	/* Phase 0: reject every ioctl with -EOPNOTSUPP. Phase 1 will
-	 * decode the libnnie.so ioctl numbers and wire real handlers. */
-	pr_info_once("nnie_neo: ioctl path reached (cmd=0x%08x) — Phase 0 stub\n",
-		     cmd);
+	switch (cmd) {
+	case NNIE_IOC_FORWARD:
+		return nnie_op_forward(arg, 0);
+	case NNIE_IOC_FORWARD_WITH_BBOX:
+		return nnie_op_forward(arg, 1);
+	case NNIE_IOC_QUERY:
+		return nnie_op_query(arg);
+	case NNIE_IOC_ADD_TSKBUF:
+		return nnie_op_add_tskbuf(arg);
+	case NNIE_IOC_REMOVE_TSKBUF:
+		return nnie_op_remove_tskbuf(arg);
+	default:
+		pr_info_once("nnie_neo: unknown ioctl 0x%08x — vendor recognises 0x4d05..0x4d09 in bbox mode (Phase 3)\n",
+			     cmd);
+		return -ENOIOCTLCMD;
+	}
+}
+
+/* ── Phase 0/1 stubs (all reject with -EOPNOTSUPP for now) ─────── */
+
+static long nnie_op_forward(unsigned long arg, int with_bbox)
+{
+	pr_info_once("nnie_neo: Forward%s arg=%lx (Phase 1 stub — needs HW dispatch)\n",
+		     with_bbox ? "WithBbox" : "", arg);
+	return -EOPNOTSUPP;
+}
+
+static long nnie_op_query(unsigned long arg)
+{
+	/* arg = { u32 handle (in), u32 bBlock (in), u32 done_out } —
+	 * mirrors ive Query layout (kernel/ive_neo/ive_neo.c) until we
+	 * can verify the actual NNIE Query struct. For Phase 1 just say
+	 * "always done" since we never dispatch HW work yet. */
+	if (arg)
+		((u32 *)arg)[2] = 1;
+	return 0;
+}
+
+static long nnie_op_add_tskbuf(unsigned long arg)
+{
+	pr_info_once("nnie_neo: AddTskBuf (Phase 1 stub)\n");
+	return -EOPNOTSUPP;
+}
+
+static long nnie_op_remove_tskbuf(unsigned long arg)
+{
+	pr_info_once("nnie_neo: RemoveTskBuf (Phase 1 stub)\n");
 	return -EOPNOTSUPP;
 }
 
