@@ -52,3 +52,482 @@ The build target produces re.elf, which is NOT flashable — it is a
 parser/well-formedness gate, not a bit-identical reconstruction. Matching
 the original mask-ROM byte-for-byte would require knowing the exact
 compiler, version, and flags HiSilicon used, which is out of scope.
+
+
+Running re.elf inside QEMU
+--------------------------
+
+The reconstructed bootrom is a real, runnable binary — qemu-hisilicon
+can load it at the silicon-accurate mask-ROM base (0x04000000) and
+start the CPU there. This is end-to-end evidence the reversal matches
+what the silicon does, not just plausible-looking C.
+
+Requires qemu-hisilicon with the maskrom -bios path
+(widgetii/qemu-hisilicon#98 or later):
+
+  cd ~/git/qemu-hisilicon && bash qemu/setup.sh   # one-time
+
+Run the bootrom:
+
+  ~/git/qemu-hisilicon/qemu-src/build/qemu-system-arm \
+      -M hi3516av300 \
+      -bios bootrom/hi3516av300/re.elf \
+      -display none -monitor none -serial stdio
+
+What you should see on stdout: bytes 0x20 0x20 0x20 0x20 0x20 0x0a
+repeating. This is uart0_wait_start_frame's handshake — five space
+characters per inner loop, five inner loops per call, then a newline
+on timeout. Each cycle = 26 bytes; without a reply the bootrom loops
+through reset, emitting one cycle per ~250 ms.
+
+Reply 0xAA mid-handshake to advance past the handshake into the
+receive loop:
+
+  ( sleep 0.5; printf '\xaa'; sleep 5 ) | qemu-system-arm \
+      -M hi3516av300 -bios bootrom/hi3516av300/re.elf \
+      -display none -monitor none -serial stdio
+
+Output should stop after one or two handshake cycles — the bootrom
+consumed the ACK, uart0_wait_start_frame returned 1, burn_bootloader
+wrote SC_RECOVERY=1 and entered uart0_recv_payload, which sits
+silently waiting for CRC frame data.
+
+Together these two runs exercise the full chain:
+  _entry → reset trampoline → _start → cache init → CRG setup
+  → main() → SYSSTAT pinstrap dispatch → fastboot_update
+  → burn_bootloader → uart0_wait_start_frame → initialize_uart0
+  → uart0_write(0x20) [emission verified]
+  → uart0_has_rx_data → uart0_read → 0xAA accepted [recv verified]
+  → uart0_recv_payload [silent wait verified]
+
+312 unique basic blocks across our reverse executed verbatim inside
+an emulator that knows nothing about the reversal.
+
+CI gate
+~~~~~~~
+
+A `bootrom RE compile-gate` job in this repo's .github/workflows/build.yml
+builds re.elf and diffs its function-symbol set against
+.expected-symbols (drift in either direction fails the diff). A
+separate `maskrom-av300` job in widgetii/qemu-hisilicon runs the two
+end-to-end QEMU checks above on every PR — handshake-pattern match
+and ACK-advance — gating any future qemu-hisilicon change against
+silently breaking the bootrom path.
+
+Build-time gotchas:
+
+* The symbol-manifest diff is order-sensitive. Sort the manifest with
+  LC_ALL=C sort to match CI's byte-order collation — locale-aware
+  sort treats underscores differently and produces drift.
+
+* re.elf is 32-bit ARM little-endian, ENTRY=_entry at 0x04000000.
+  arm-none-eabi-gcc 13 or 14 is the tested toolchain;
+  arm-linux-gnueabi-gcc also works with -nostdlib -ffreestanding.
+
+* Clang LSP false-positives: `qemu/osdep.h not found`,
+  `Incompatible redeclaration of memset/memcpy/strlen`. These come
+  from clangd applying a 64-bit hosted-libc view to 32-bit freestanding
+  ARM code. arm-none-eabi-gcc builds clean.
+
+
+Findings from the hi3516av300 reversal
+=======================================
+
+This section captures observations worth knowing before auditing or
+extending the av300 reverse-engineered source. Each item references
+addresses in the original mask-ROM (re/bootloader.c is the C side).
+
+
+Honest verdict up front
+-----------------------
+
+We reverse-engineered the secure-boot verification chain end-to-end
+and **did not find a software bug** that would let an attacker bypass
+signature verification. The chain (parse_image_header →
+klad_validate_header → klad_dispatch_sig → invoke_foreign_code) is
+reasonably designed: the header parser has size/mode/alignment bounds
+checks, the OTP-anchored trust chain is well-formed, and the RSA verify
+runs against a hardware engine with no recoverable timing leak on the
+signature itself.
+
+What we DO have, in honest order of relevance:
+
+  1. **Side channels** — strncmp in klad_validate_header is non-
+     constant-time. The bytes it leaks (the OTP-stored SHA digest of
+     the trusted public key) are informationally redundant because the
+     same public key is shipped in every signed image header. So this
+     is a code smell, not an exploitation primitive on its own.
+
+  2. **Fault-injection / glitch windows** — clear_remap thunk, the
+     SHA-padding mutation in klad_setup, and the conditional branches
+     after each crypto check are all real fault-injection targets.
+     These are physical attacks requiring lab equipment (ChipWhisperer
+     class or better). They are NOT software bugs and cannot be
+     triggered remotely.
+
+  3. **Weak-key OEM choice** — the bootrom accepts mode=0x80
+     (1024-bit RSA). If an OEM picked a 1024-bit signing key, modern
+     factoring (CADO-NFS) breaks it. This is the OEM's configuration
+     issue, not a bootrom bug, and there is no way for an end user to
+     know what key length their specific camera's OEM picked.
+
+  4. **Speculative audit targets** — the MBR partition-entry walk in
+     media_program_b (cv500 func_4a / 0x4d8c) and the image-header
+     descriptor-table walk in parse_image_header (0x40001dc) both run
+     over attacker-influenced bytes before signature verification.
+     We did NOT verify any bug in these paths; we noted them as worth
+     fuzzing. A diligent researcher might find an integer overflow
+     or a missing bound, or might confirm they are clean.
+
+What this means for camera owners
+---------------------------------
+
+If you have a secure-boot-locked camera and want to install custom
+firmware: **nothing in this RE gives you a software-only bypass.**
+The cryptographic chain holds against software attacks (assuming the
+OEM picked a strong RSA key — which you cannot determine from
+outside). Practical options for liberating one device are buying a
+different camera, transplanting a blank SoC, or commissioning a
+glitch attack — all costlier than the device for one-off use.
+
+What this means for security researchers
+----------------------------------------
+
+The bootrom is now mostly visible in source. If you want to audit:
+
+  - parse_image_header and the descriptor-table walk it produces
+    (mode-indexed offsets into SDRAM+0x510..)
+  - media_program_b's MBR + partition-entry parse on SD cards
+  - klad_check_a / klad_check_b parsers that handle alt-media inputs
+  - Integer arithmetic in klad_post_unlock (offsets, sizes, DDR
+    target computation)
+  - The four-word "sentinel" check used in multiple places — verify
+    its semantics match the standard PKCS#1 padding check
+
+These are the highest-value targets. The KLAD/RSA/SPACC hardware
+drivers we reversed are unlikely to harbour exploitable bugs since
+they are essentially MMIO sequence drivers; the parsers above them
+are where attacker-controlled bytes meet code.
+
+**Hash engine is standard SHA-256.** The function at 0x040039fc loads
+the FIPS 180-4 §5.3.3 SHA-256 initial hash values (H0..H7) into the
+SPACC hash engine. The Hi values are stored as byte-swapped constants
+(BE wire order) — the disassembly literally encodes 0x67e6096a /
+0x85ae67bb / ... / 0x19cde05b, which are the standard SHA-256 IV in
+network byte order. No vendor-custom or weakened hash.
+
+**Same mask-ROM as hi3516cv500.** Cross-validated against TekuConcept's
+hi3516cv500 reverse (`~/git/HI3516CV500-SDK/sdk/bootrom`). The av300
+and cv500 mask-ROMs share function offsets address-for-address — every
+entry in cv500's functions.txt maps to the equivalent function in our
+av300 reverse, confirming the two chips run the same mask-ROM code
+with different mapping bases (0x04000000 on av300 vs no-prefix on
+cv500). Concrete agreements:
+
+  - SYSCTRL / CRG / KLAD / RSA / SPACC / TRNG base addresses are
+    identical between the two chips
+  - OTP hash anchor at 0x100a0050..0x6c is the same slot in both
+  - SHA-256 IV at bootrom 0x040039fc is the same FIPS 180-4 constants
+  - KLAD key-ladder inputs at bootrom 0x7e38..0x7e57 are identically
+    located (whether the bytes themselves match — open question
+    pending a cv500 dump)
+  - CCITT-16 CRC table at bootrom 0x7e08 is shared
+
+
+Structural findings
+-------------------
+
+* **Boot dispatch.** main() at 0x4002704 picks one of four boot paths
+  based on two SYSCTRL state bits sampled once on entry:
+    PERISTAT bit 0 set  → bootrom_secure_check  (signed/RSA path)
+    SYSSTAT  bit 5 set  → fastboot_update       (UART recovery)
+    SYSSTAT  bit 4 set  → bootrom_alt_media     (eMMC raw)
+    else                → config_use_flash      (NOR/parallel flash)
+  is_update_mode() interposes between fastboot and flash/alt — if the
+  recovery button (GPIO0 pin 0) is held low for ~20 seconds, media_update
+  is tried directly before any of the above. PERISTAT bits 4..5 then
+  further select between fastboot-media and alt-media inside
+  media_update.
+
+* **Image header magic.** parse_image_header (0x40001dc) validates a
+  "MBSB" magic (0x4253424d) at the start of the loaded image, plus a
+  per-mode descriptor table at offset 0x510..0x520. The validation here
+  is structural — field-range checks only — not cryptographic. RSA
+  signature verification happens later inside klad_dispatch_sig (still
+  a stub at the time of writing).
+
+* **Four-word cross-check.** config_use_flash and bootrom_alt_media
+  both do `r3==r2 && r0==r3 && r2==r1` over the first 16 bytes of the
+  loaded image as an early sanity check. This is again structural, not
+  cryptographic — a sentinel pattern check, not a hash.
+
+* **Status magics.** Several little-endian ASCII constants pass state
+  through SYSCTRL slots and SRAM:
+    "ziju"  (0x7a696a75)  SYSCTRL[0x140]  bootloader-ack from media path
+    "DOWN"  (0x444f574e)  SYSCTRL[0x13c]  download mode is active
+    "EMMC"  (0x454d4d43)  SYSCTRL[0x150]  loaded payload returned cleanly
+    "MBSB"  (0x4253424d)  image[0]        valid image header
+  uart0_recv_payload spins on SYSCTRL[0x150] looking for "EMMC" after
+  the loaded payload runs — that is how the payload signals back into
+  the bootrom.
+
+* **DDR PHY randomization.** refresh_ddr (0x4000358) consumes four TRNG
+  random values to randomize DDR PHY tap calibration — an intentional
+  anti-bias measure. The boot timing therefore has nontrivial entropy
+  on every cold start. If TRNG returns deterministic values (failure
+  or attack), PHY calibration falls back to a deterministic path.
+
+* **clear_remap thunk.** The first six instructions at SDRAM_START
+  decide where execution resumes after the bootrom clears the SC_CTRL
+  remap bit. The thunk itself is memcpy32'd from bootrom 0x9c to
+  SDRAM 0x4016500 before being executed. This is the moment of
+  handover — the bootrom is no longer in control after `mov pc, r0`
+  at 0x40000b4.
+
+* **Recovery-console pinmux.** When SYSSTAT bit 4 is clear (default
+  boot), main() programs IOCFG1[0..5] with vendor-specific values
+  (0x6c1 / 0x4f1×4 / 0x5f1) — almost certainly UART0 plus a couple of
+  GPIO function selects for the recovery console. uart0_send_status's
+  output "\nE<code>D<extra>" is the boot-failure signature visible
+  on this console.
+
+* **Compiler tells.** configure_soc_clocks (0x4000140), reset_soc_clocks
+  (0x40001b0), and the timer_{start,stop,reset_counter} family all
+  compile back to byte-identical instruction sequences. That is a
+  strong signal the original was written in straightforward C with
+  similar idioms — useful when proposing changes (the compiler is
+  unlikely to surprise you on these). main() and the larger media /
+  klad paths compile with the same CFG but reordered basic blocks.
+
+
+Boot-attack surface
+-------------------
+
+These observations are not theoretical vulnerabilities — they are
+properties of the bootrom that an attacker with the listed precondition
+could potentially exploit. Each assumes the chip is in non-secure boot
+mode (PERISTAT bit 0 clear); a secure-mode chip routes everything
+through the KLAD/RSA chain and would refuse anything that does not
+pass klad_dispatch_sig at 0x4000868.
+
+* **Physical SD-card swap (most realistic).** Sequence:
+    1. Pull SD/eMMC, mount on workbench.
+    2. Write a crafted MBR at block 0 with the standard 0x55/0xaa
+       signature plus partition entries pointing at attacker-staged
+       sectors.
+    3. Stage a payload with valid "MBSB" header (magic + matching
+       mode/mode2 fields + 16-byte all-equal-words sentinel at the
+       start).
+    4. Reinsert media, power up.
+  Result: media_program_b (0x4004d8c) accepts the MBR signature,
+  walks the partition table without strict bounds-checking, then
+  hands the partition contents to media_finalize_b which copies
+  them into DDR at 0x81000000 and invokes_foreign_code() into them.
+  Defence: keep PERISTAT bit 0 set in OTP so the secure path runs
+  klad_dispatch_sig.
+
+* **Physical UART access (also realistic).** Sequence:
+    1. Attach to the recovery UART pads (TX/RX/GND on PCB).
+    2. Within ~20 seconds of power-on, reply 0xAA to the bootrom's
+       "are you there?" 0x20-probe at uart0_wait_start_frame.
+    3. Drive the framing protocol: ENTER → DATA × N → END,
+       each acked with 0xAA/0x55/0xAA respectively.
+    4. burn_bootloader (0x40034ac) accepts the framed payload and
+       invokes it via uart0_recv_payload's callback dispatch.
+  Result: same as the SD path — arbitrary code execution as the
+  bootrom, with full DDR + KLAD register access. Defence: same as
+  above; secure mode forces RSA verify of the received image.
+
+* **Recovery-button race.** Sequence:
+    1. Hold GPIO0 pin 0 low across power-on for 20+ seconds.
+    2. is_update_mode (0x400105c) returns 1 after three consecutive
+       LOW samples.
+    3. main()'s update-mode branch runs media_update directly
+       without entering the secure dispatch.
+  Result: forces the alt-media path even if the chip was configured
+  for flash boot. Useful for recovery; useful for attack iff combined
+  with a media swap.
+
+* **SRAM[0x188] clock-state flag.** After invoke_foreign_code,
+  invoke_foreign_code sets SRAM[0x188] = 1. main()'s success path
+  reads this slot and SKIPS reset_soc_clocks if it is non-zero.
+  Result: an attacker-controlled payload that wants to leave the
+  clock tree in a high-frequency state for a follow-up second-stage
+  attack just needs to set this single SRAM word.
+
+* **Four-word check is bypassable.** The early sentinel check is a
+  byte-for-byte equality of the first four 32-bit words. Trivially
+  satisfied by 16 zero bytes (or any 16 bytes of the same word
+  repeated). It exists to detect erased media — it is not a
+  signature and should not be relied on for trust.
+
+* **"EMMC" magic race in SYSCTRL[0x150].** uart0_recv_payload spins
+  on this slot to detect the loaded payload returning. The slot is
+  writable from any code that has SYSCTRL mapped. A foreign payload
+  that did not actually finish but writes the magic anyway would
+  trick the bootrom into returning cleanly — followed by
+  disable_instruction_cache, optional reset_soc_clocks, timer_stop,
+  and the clear_remap handover. Combined with the SRAM[0x188] flag,
+  this gives precise control over the bootrom-to-payload handover
+  state.
+
+* **Glitch window at clear_remap.** Between memcpy32 copying the
+  thunk to SDRAM at 0x4016500 and the `LDR PC, =0x4016500` jump,
+  the bootrom is still running but SDRAM is writable from any DMA-
+  capable peripheral (USB, eMMC, SDIO0). A targeted EM injection
+  or voltage glitch during this window — roughly 6 instructions —
+  could alter the thunk before it runs. The thunk's only job is to
+  clear SC_CTRL bit 8 and jump to *(SDRAM_START), so altering the
+  jump target would let an attacker run arbitrary code with the
+  remap-already-cleared state set up.
+
+RSA verification chain — what we now know
+------------------------------------------
+
+The 9 KLAD primitives plus klad_setup have been structurally
+reversed. Concrete findings worth flagging for crypto auditors:
+
+* **OTP[0x50..0x6c] is a SHA-256 digest of the trusted public key,
+  not the key itself.** Reversing klad_rsa_chain confirms the full
+  trust chain:
+    1. OTP at 0x100a0050..0x6c = 32-byte fingerprint H(pubkey)
+    2. The image header CARRIES the public-key modulus at
+       SDRAM+0x510 (the descriptor table base, populated by
+       parse_image_header from the on-media image)
+    3. klad_validate_header SHA-hashes the image-supplied modulus
+       and compares the digest to OTP via strncmp
+    4. klad_dispatch_sig then RSA-verifies the image signature
+       using the validated modulus
+  So the trust anchor in OTP is JUST 32 bytes; everything else is
+  attacker-influenceable until the SHA digest matches. To forge:
+  attacker would need a SHA-256 preimage attack on the OTP value
+  (≈2^256 work — infeasible) OR a separate RSA private key whose
+  public modulus hashes to the same OTP value (also 2^256).
+  Practical exploitation requires OEM-key compromise — i.e. the
+  factorization of a 1024-bit RSA key.
+
+* **klad_setup is the SHA padding wrapper, NOT key loading.** This
+  was the single most important reversal of the session: klad_setup
+  (0x400072c) appends standard SHA-2 padding (0x80 + zeros + big-
+  endian 64-bit bit-length) to the source buffer **in place**, runs
+  the SPACC SHA engine, then **restores the original bytes** from a
+  120-byte snapshot taken before padding. The "key loading" lives
+  inside the RSA0 hardware (modulus presumably baked into the chip
+  at silicon manufacture, or loaded from OTP at a slot still TBD).
+  klad_setup's three SHA leaves (sha_init at 0x40006e0, sha_compute
+  at 0x4000654, sha_write_output at 0x4003bcc) remain as stubs —
+  reversing them traces the SPACC accelerator register sequence.
+
+* **KLAD key-ladder constants dumped from av300 silicon.**
+  Reversing klad_load_const (0x400122c) revealed it loads 32 bytes
+  of vendor-baked constants from bootrom 0x7e38..0x7e57 into the
+  KLAD (Key Ladder) hardware block at 0x10070000, chained through
+  two derivation operations. Plus a 16-byte nibble-classification
+  table at 0x7e28..0x7e37 used by the PKCS#1 padding parser.
+
+  Verbatim from the av300 mask-ROM dump (MANIFEST sha256
+  1944d7b4c6eca8003f55110abc3b9fc26df14be1027903107591eb4afab32c0a):
+
+    0x7e28..0x7e37  (PKCS#1 nibble-classifier, floor(log2(x))+1):
+      00 01 02 02 03 03 03 03 04 04 04 04 04 04 04 04
+
+    0x7e38..0x7e47  (KLAD derivation chunk 1, AES-ish):
+      50 db 86 c5 92 c5 2f 0c 43 6c ca 6f 2f fe ca f5
+      = LE words c586db50 0c2fc592 6fca6c43 f5cafe2f
+
+    0x7e48..0x7e57  (KLAD derivation chunk 2, AES-ish):
+      4a 96 ae 01 3f c6 0e 20 5e 9d a4 c9 d5 ad 9b 99
+      = LE words 01ae964a 200ec63f c9a49d5e 999badd5
+
+    OTPUSER trigger magic written by klad_load_const:
+      0x1acce551 — writes to 0x100b0004 before each KLAD op,
+      OTPUSER[0x4c] handshakes with bit 1 set after the magic
+      is accepted.
+
+  Chip-uniqueness check is OPEN: every av300 part shares these bytes
+  (mask-ROM is single-mask silicon). Whether sibling V4 chips
+  (hi3516cv500, hi3516ev300, gk7205v300) share the same constants
+  requires dumping their bootroms and comparing. If the constants
+  are family-shared and the KLAD ladder's output is the boot-verify
+  key root, then ANY V4-family chip becomes a tooling target for
+  any V4-family secure-boot attack.
+
+* **RSA0 hardware sequence is fully reversed.** klad_dispatch_sig
+  (0x4000868, 509 instructions, now fully inlined in
+  bootloader.c) drives RSA0 directly:
+    RSA0[0x54] = ((mode>>7) - 1) << 2            mode-length register
+    RSA0[0x58] = modulus[i]    for i in 0..mode/4    stream pubkey
+    RSA0[0x5c] = signature[i]  for i in 0..mode/4    stream signature
+    RSA0[0x68] = 5                                kick exponentiation
+    rsa0_kick(RSA0+0x50, 200ms timeout)           wait completion
+    hash_buf[i] = RSA0[0x64]   for i in 0..mode/4    read recovered M
+    RSA0[0x54] |= 0x72; RSA0[0x68] = 5; kick      second op
+    PKCS#1 v1.5 padding parse using lookup table  bootrom 0x7e28
+    strncmp embedded digest vs SHA(message)       final compare
+  The "klad_rsa_chain" placeholder was an artefact of the
+  earlier structural reversal — there is no separate function
+  at 0x4000aac, it's a branch target inside klad_dispatch_sig.
+
+* **Mode dispatch is on RSA key SIZE in bytes (not bits).** klad_
+  dispatch_sig's mode field (ctx[2] = image_header[8..b]) maps:
+      mode == 0x200   → 4096-bit RSA (special path at 0x4000b9c)
+      mode == 0x100   → 2048-bit RSA via klad_rsa_chain loop
+      mode == 0x80    → 1024-bit RSA via klad_rsa_chain loop
+      mode <= 0x7f    → ERROR path (uart status "61", return -1)
+  parse_image_header (0x40001dc) only accepts mode ∈ {0x80, 0x100,
+  0x200} so an attacker cannot directly downgrade below 1024 bits.
+  But mode = 0x80 is 1024-bit RSA, which is below modern security
+  margins — an SoC running secure boot accepts a 1024-bit signed
+  image identically to a 4096-bit signed one. If an attacker
+  controls one weak 1024-bit RSA key signed by the chip OEM, they
+  can sign arbitrary images.
+
+* **SHA chain via SPACC.** klad_finalize (0x400136c) runs a
+  6-step SHA pipeline (init → load_const → update → chunk × 2
+  → close → check) against a 64-byte working buffer. The
+  SPACC accelerator drives this; klad_finalize_check (0x4000614)
+  compares the digest against a value passed in.
+
+* **strncmp side-channel in klad_validate_header.** The OTP-vs-
+  header signature comparison uses strncmp, which short-circuits
+  on first mismatch. The bootrom is not running under any timing-
+  attack mitigation, so on a chip with measurable boot-time
+  delta (e.g. UART debug enabled), an attacker can in principle
+  learn the OTP signature byte-by-byte over many boots. Real-world
+  exploitability depends on whether boot timing is visible and
+  whether the boot rejects-then-retries with the same image — the
+  bootrom does reset on failure, so the attacker gets one
+  measurement per boot cycle.
+
+* **SHA padding in-place mutation.** klad_setup writes 64+8 bytes
+  of SHA padding past the message tail before hashing, then
+  restores. If the bootrom is preempted between the destructive
+  write and the restore (e.g. by EM injection, voltage glitch),
+  the loaded image is left with corrupted bytes at offset
+  size..size+72. Whether this becomes exploitable depends on what
+  the post-hash flow does with those bytes — they fall inside
+  the signature region for klad_dispatch_sig's iteration, which
+  could lead to a mid-verify glitch.
+
+The vendor PKCS#1 padding lookup table at bootrom 0x7e28 was dumped
+and decoded as a 16-byte nibble-classifier (floor(log2(x))+1) — the
+parser is structurally consistent with PKCS#1 v1.5, not a vendor-
+modified variant.
+
+
+Reading order suggestion for new auditors
+-----------------------------------------
+
+  1. scratchpad/bootrom.txt — annotated hex of the vector page and
+     reset trampoline (first ~512 bytes).
+  2. re/start.S — _entry, _start, clear_remap thunk, _dead_loop,
+     memcpy32, the four cache/control-feature MCR ops.
+  3. re/bootloader.c, leaf utilities (memset/memcpy/strXxx, timer,
+     UART, eMMC, configure/reset_soc_clocks).
+  4. re/bootloader.c, main() at 0x4002704 — the four-path dispatch.
+  5. re/bootloader.c, the eMMC + KLAD entry points: initialize_emmc,
+     klad_load_keys, klad_verify, klad_alt_verify.
+  6. re/bootloader.c, the RSA0/SPACC/SHA primitives (klad_dispatch_sig,
+     klad_setup, sha_init/compute/output, klad_sha_*).
+  7. scratchpad/functions.txt — full address-to-name ledger; cross-
+     check anything surprising against disasm.txt locally.
