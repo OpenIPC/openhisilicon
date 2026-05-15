@@ -114,7 +114,22 @@ static struct completion g_nnie_done;
 
 static irqreturn_t nnie_irq_handler(int irq, void *dev)
 {
-	/* Phase 0: stub. Phase 3 will read status + ack + signal completion. */
+	u32 status;
+
+	/* Shared SPI line with vendor open_gdc.ko (and possibly others) —
+	 * read IRQ_STATUS first; if no NNIE bits are pending, return
+	 * IRQ_NONE so the next handler in the chain gets a chance. */
+	if (!g_nnie_regs)
+		return IRQ_NONE;
+
+	status = readl(g_nnie_regs + NNIE_REG_IRQ_STATUS);
+	if (!(status & NNIE_IRQ_ALL))
+		return IRQ_NONE;
+
+	/* Ack: write-1-to-clear all 3 status bits. Drv layer will inspect
+	 * the cause later via the completion mechanism (Phase 6 — for now
+	 * just signal completion). */
+	writel(status & NNIE_IRQ_ALL, g_nnie_regs + NNIE_REG_IRQ_CLEAR);
 	complete(&g_nnie_done);
 	return IRQ_HANDLED;
 }
@@ -419,7 +434,12 @@ int nnie_std_mod_init(void)
 	}
 
 	if (g_nnie_irq) {
-		ret = request_irq(g_nnie_irq, nnie_irq_handler, 0,
+		/* IRQF_SHARED: vendor open_gdc.ko on the same SPI line uses
+		 * IRQF_SHARED (kprobed from its request_irq call), so we have
+		 * to match. The dev_id (&g_nnie_dev) must be unique per
+		 * registered handler — sharing dev_id with another module
+		 * would make IRQF_SHARED reject the registration. */
+		ret = request_irq(g_nnie_irq, nnie_irq_handler, IRQF_SHARED,
 				  "nnie_neo", &g_nnie_dev);
 		if (ret)
 			pr_err("nnie_neo: request_irq(%u) failed: %d\n",
