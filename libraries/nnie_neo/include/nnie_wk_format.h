@@ -86,31 +86,60 @@ typedef struct __attribute__((packed)) nnie_wk_header {
 _Static_assert(sizeof(nnie_wk_header_t) == NNIE_WK_HEADER_SIZE,
 	       "nnie_wk_header_t must be exactly 192 bytes");
 
-/* Per-segment record in the segment table at file[inst_offset_extra].
- * Loader at 1e90-1edc reads these fields and copies them into the
- * corresponding SVP_NNIE_SEG_S layout (which is the public API struct
- * declared in <hi_nnie.h>). The on-disk format is more compact:
- * SrcNum/DstNum/RoiPoolNum are u8 in the file but u16 in the struct.
+/* Per-segment record in the segment table at file[192] (= end of the
+ * fixed 192-byte file header; the loader stores a pointer to this in
+ * sp+24 from file[8]==0xC0=192). Loader at 1e90-1edc reads these
+ * fields and copies them into the corresponding SVP_NNIE_SEG_S layout.
+ * The on-disk format is more compact: SrcNum/DstNum/RoiPoolNum are u8
+ * in the file but u16 in the struct.
  *
- * The "after_hdr" region (offset 16+) presumably holds the node arrays
- * (astSrcNode[SrcNum] + astDstNode[DstNum]) and the ROIPool index
- * pairs. Layout TODO in Phase 3. */
+ * Validator bounds:
+ *   - enNetType <= 2
+ *   - SrcNum    <= 16  (SVP_NNIE_MAX_INPUT_NUM)
+ *   - DstNum    <= 16  (SVP_NNIE_MAX_OUTPUT_NUM)
+ *   - RoiPoolNum<= 4   (SVP_NNIE_MAX_ROI_LAYER_NUM_OF_SEG)
+ *   - MaxStep   <= 1024
+ *   - InstOffset 16-byte aligned, in [inst_offset_extra .. inst_off+inst_len)
+ */
 typedef struct __attribute__((packed)) nnie_wk_seg_record {
-	uint8_t  net_type;             /* [0]     -> enNetType,  must be <= 2 */
-	uint8_t  src_num;              /* [1]     -> u16SrcNum,  <= 16 */
-	uint8_t  dst_num;              /* [2]     -> u16DstNum,  <= 16 */
-	uint8_t  roi_pool_num;         /* [3]     -> u16RoiPoolNum, <= 4 */
-	uint16_t max_step;             /* [4..5]  -> u16MaxStep, <= 1024 */
+	uint8_t  net_type;             /* [0]     -> enNetType */
+	uint8_t  src_num;              /* [1]     -> u16SrcNum */
+	uint8_t  dst_num;              /* [2]     -> u16DstNum */
+	uint8_t  roi_pool_num;         /* [3]     -> u16RoiPoolNum */
+	uint16_t max_step;             /* [4..5]  -> u16MaxStep */
 	uint16_t unk_06_07;            /* [6..7]  */
-	uint32_t inst_offset;          /* [8..11] -> u32InstOffset (bounds-checked vs
-	                                                 inst_offset_extra + inst_len) */
-	uint32_t inst_len;             /* [12..15] -> u32InstLen, alignment-checked (& 15 == 0) */
-	/* Then: src node records + dst node records + ROIPool index pairs.
-	 * Total record size depends on src_num + dst_num — Phase 3 decodes. */
+	uint32_t inst_offset;          /* [8..11] -> u32InstOffset (16-byte aligned) */
+	uint32_t inst_len;             /* [12..15] -> u32InstLen */
 } nnie_wk_seg_record_t;
 
 _Static_assert(sizeof(nnie_wk_seg_record_t) == 16,
 	       "nnie_wk_seg_record_t must be exactly 16 bytes (header part)");
+
+/* Node records, on-disk layout per segment. The first node record is
+ * compact (~14 B) and lives immediately after the seg header at +16.
+ * Subsequent node records are 64-B slots starting at seg+32 with stride
+ * 64 (loop @0x1fe0-0x208c walks r5 += 64). The 32-byte ASCII name
+ * (matches SVP_NNIE_NODE_S.szName[32]) is the *first* field of each
+ * 64-B slot (strncpy_s @0x2024 with src=r5+0, n=31). Verified against
+ * vendor mnist.wk:
+ *   file[208..211] = 28  (u32 Height)
+ *   file[212..215] = 28  (u32 Width)
+ *   file[216..219] =  1  (u32 Chn — grayscale)
+ *   file[224..227] = "data" (Caffe input-layer name)
+ *
+ * Full per-node-slot layout (64 B) — partial decode, Phase 3 will
+ * confirm the offsets of the remaining u16/u32 fields read at
+ * 0x205c-0x20bc: */
+typedef struct __attribute__((packed)) nnie_wk_node_slot {
+	char     name[32];             /* [0..31]  szName (null-terminated) */
+	/* The following 32 bytes hold the per-node shape/dim metadata.
+	 * Inferred from loader reads at 0x203c-0x20bc but not all offsets
+	 * are confirmed. Phase 3 work. */
+	uint8_t  unk_20_3F[32];        /* [32..63] dims + blob type + node id */
+} nnie_wk_node_slot_t;
+
+_Static_assert(sizeof(nnie_wk_node_slot_t) == 64,
+	       "nnie_wk_node_slot_t must be exactly 64 bytes");
 
 /* Forward declarations for Phase 2+ work. The full parser will produce
  * a populated SVP_NNIE_MODEL_S (defined in <hi_nnie.h>) from a .wk
