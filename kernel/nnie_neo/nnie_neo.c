@@ -192,6 +192,16 @@ static long nnie_op_forward(unsigned long arg, int with_bbox)
 	 *      open_nnie_neo.ko by ioremap()'ing the sys register window,
 	 *      or (b) export a small helper API from open_sys.ko (the
 	 *      clean-room sys module — not yet implemented).
+	 *
+	 *      Concrete starting point for Phase 4 path (a):
+	 *        cv500 DT node: sys@12010000 has 4 reg windows, one named
+	 *        "sys" at phys 0x12020000 size 0x8000. The sys_hal_*
+	 *        functions in hi_sys.o use that window: g_reg_sys_base_va
+	 *        is set from the ioremap. The RAM/mutex bits live at
+	 *        offset +0x34 within that window — phys 0x12020034.
+	 *        Verified live on av300: that register currently reads
+	 *        0x00000000 (NNIE idle, bit 0 clear), matching the
+	 *        expected idle state.
 	 *   3. Submit task to NNIE block. svp_nnie_start_task @0x1934 also
 	 *      goes through cmpi (module ID 37) — uses function-pointer table
 	 *      slots [r5+120], [r5+124], [r5+128], [r5+132] to prepare/fire/
