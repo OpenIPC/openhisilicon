@@ -622,11 +622,12 @@ static long nnie_dispatch_forward(const struct nnie_hw_task *task)
 	 * function would have set). Match observed vendor state. */
 	writel(0xFFFFFFFFu,              g_nnie_regs + NNIE_REG_TIMEOUT_LO);
 	writel(0x00000000u,              g_nnie_regs + NNIE_REG_TIMEOUT_HI);
-	/* Vendor: disable_check_sum at init — clear bit 0 of +0x68. */
-	{
-		u32 v = readl(g_nnie_regs + NNIE_REG_CHECK_SUM);
-		writel(v & ~NNIE_CHECK_SUM_EN, g_nnie_regs + NNIE_REG_CHECK_SUM);
-	}
+	/* Vendor disable_check_sum @0xbc74 clears bit 0 of +0x68, but live
+	 * register readback shows CHECK_SUM=0x1 after vendor init runs —
+	 * the symbol name 'disable' may be misleading and bit 0 is actually
+	 * "disable=1, enable=0" (i.e. the clear-to-enable convention).
+	 * Empirically: our cleanroom writes 0 here → cfg_err info=1.
+	 * Don't touch CHECK_SUM and let vendor's previous state stand. */
 	writel((u32)task_dma,            g_nnie_regs + NNIE_REG_TASK_ADDR_LO);
 	writel((u32)((u64)task_dma >> 32), g_nnie_regs + NNIE_REG_TASK_ADDR_HI);
 	wmb();
