@@ -428,6 +428,8 @@ static long nnie_dispatch(unsigned int cmd, unsigned long arg)
 #define NNIE_CTRL_OFF_TMP_PHYS       16   /* stTmpBuf.u64PhyAddr */
 #define NNIE_CTRL_OFF_TSK_PHYS       40   /* stTskBuf.u64PhyAddr */
 
+static atomic_t g_nnie_task_idx;   /* monotonic task index across Forwards */
+
 static void __maybe_unused
 nnie_fill_task_header(struct nnie_hw_task *task,
                       u64 model_phys, u32 inst_off, u32 inst_len,
@@ -436,6 +438,11 @@ nnie_fill_task_header(struct nnie_hw_task *task,
 {
 	memset(task, 0, sizeof(*task));
 	task->trigger_mode    = cpu_to_le16(instant ? 1 : 0);
+	/* descriptor[+4] is the per-task slot index in vendor's 512-entry
+	 * ring. HW may track which task it last accepted; submitting the
+	 * same slot_idx twice could be rejected. Use a monotonic counter
+	 * mod 512 to never repeat. */
+	task->reserved_04     = cpu_to_le32(atomic_inc_return(&g_nnie_task_idx) & 0x1ff);
 	task->model_file_phys = cpu_to_le64(model_phys);
 	task->seg_inst_offset = cpu_to_le32(inst_off);
 	task->seg_inst_len    = cpu_to_le32(inst_len);
@@ -644,15 +651,11 @@ static long nnie_dispatch_forward(const struct nnie_hw_task *task)
 	 * DISABLES it per task. Post-task HW restores chip default 0x1. */
 	writel(0u,                       g_nnie_regs + NNIE_REG_CHECK_SUM);
 
-	/* +0x44: vendor writes 0x3 at task start. Purpose unknown — Phase
-	 * 12 RE needs more work. Without it cfg_err info=0; with it HW
-	 * accepts the task (no cfg_err, just timeout). */
-	writel(0x3u,                     g_nnie_regs + 0x44);
-
-	/* +0xb0..+0xb8: tried writing 0 (matching vendor's live state),
-	 * but HW responded with cfg_err info=0x1000001 — these are
-	 * presumably RO HW status and writes corrupt internal state.
-	 * Leaving alone now. */
+	/* +0x44 = 0x3 in vendor's live capture is HW-set DURING task
+	 * execution (post-task it's 0). hi_nnie.o disasm has NO writes to
+	 * +0x44, confirming it's RO. Don't write it.
+	 *
+	 * Same for +0xb0..+0xb8 — Phase 12 found they're HW status. */
 	/* Clear any leftover IRQ status from a previous failed Forward —
 	 * with cfg_err bit 2 left set in NNIE_REG_IRQ_STATUS the next
 	 * START write might re-fire the IRQ immediately. */
