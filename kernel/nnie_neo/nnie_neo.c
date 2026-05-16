@@ -144,6 +144,11 @@ static void __maybe_unused nnie_sys2_clear_bit(u32 reg_off, u32 bit)
 #define NNIE_CRG_BASE_PHYS         0x12010000UL
 #define NNIE_CRG_WINDOW_SIZE       0x1000
 #define NNIE_CRG_REG_NNIE_CLK      0x00BC   /* bit 0=reset, bit 1=clk_en */
+#define NNIE_CRG_REG_VEDU_CLK      0x00A4   /* hi_sys.o sys_hal_vedu_clk_en —
+                                              vendor open_nnie load sets this
+                                              to 0x6 even though VEDU is a
+                                              separate IP. NNIE may share
+                                              infra with VEDU on cv500. */
 
 #define NNIE_SYS_BIT_VGS_RAM       (1u << 13)
 #define NNIE_SYS_BIT_MUTEX_VENC    (1u <<  1)
@@ -578,6 +583,15 @@ static long nnie_dispatch_forward(const struct nnie_hw_task *task)
 	udelay(1);
 	nnie_crg_clear_bit(NNIE_CRG_REG_NNIE_CLK, NNIE_SYS_BIT_NNIE_RESET);
 	nnie_crg_set_bit  (NNIE_CRG_REG_NNIE_CLK, NNIE_SYS_BIT_NNIE_CLK_EN);
+
+	/* Vendor open_nnie load sets CRG+0xa4 (= VEDU clock) to 0x6. NNIE
+	 * may share clock infrastructure with VEDU on cv500. Without this,
+	 * HW returns cfg_err info=0 after START. */
+	if (g_crg_regs) {
+		u32 v = readl(g_crg_regs + NNIE_CRG_REG_VEDU_CLK);
+		if ((v & 0x7) != 0x6)
+			writel((v & ~0x7u) | 0x6u, g_crg_regs + NNIE_CRG_REG_VEDU_CLK);
+	}
 
 	/* Coordinate with vendor open_sys.ko / open_gdc.ko via the cv500
 	 * sys2-window RAM-using flag (bit 0 of 0x12030034). Vendor's
