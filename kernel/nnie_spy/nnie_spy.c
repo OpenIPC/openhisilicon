@@ -78,21 +78,33 @@ static int nnie_spy_pre(struct kprobe *p, struct pt_regs *regs)
 }
 
 static struct kprobe g_kp = {
-	.symbol_name = "hal_svp_nnie_write_task_addr",
 	.pre_handler = nnie_spy_pre,
 };
 
+/* hal_svp_nnie_write_task_addr is a LOCAL (lowercase t) symbol in
+ * vendor open_nnie.ko — register_kprobe(symbol_name=...) returns
+ * -ENOSYS for it. Resolve via kallsyms_lookup_name and pass addr. */
+static unsigned long g_target_addr;
+module_param_named(addr, g_target_addr, ulong, 0644);
+MODULE_PARM_DESC(addr, "Kprobe target addr (e.g. from /proc/kallsyms)");
+
 static int __init nnie_spy_init(void)
 {
-	int ret = register_kprobe(&g_kp);
+	int ret;
 
+	if (!g_target_addr) {
+		pr_err("nnie_spy: pass addr=0xXXXX (from /proc/kallsyms hal_svp_nnie_write_task_addr)\n");
+		return -EINVAL;
+	}
+	g_kp.addr = (kprobe_opcode_t *)g_target_addr;
+	ret = register_kprobe(&g_kp);
 	if (ret < 0) {
-		pr_err("nnie_spy: register_kprobe('%s') failed: %d\n",
-		       g_kp.symbol_name, ret);
+		pr_err("nnie_spy: register_kprobe(addr=0x%lx) failed: %d\n",
+		       g_target_addr, ret);
 		return ret;
 	}
-	pr_info("nnie_spy: hooked %s @%p — run a Forward to capture\n",
-		g_kp.symbol_name, g_kp.addr);
+	pr_info("nnie_spy: hooked @0x%lx — run a Forward to capture\n",
+		g_target_addr);
 	return 0;
 }
 
