@@ -42,9 +42,11 @@
 #include <linux/vmalloc.h>
 #include <linux/io.h>
 #include <linux/delay.h>
+#include <asm/cacheflush.h>
 
 #include "hi_osal.h"
 #include "hi_common.h"
+#include "osal_mmz.h"
 
 #include "nnie_hw_task.h"
 #include "nnie_hw_regs.h"
@@ -535,8 +537,9 @@ static int nnie_build_task_tail(struct nnie_tskbuf *tb, const u8 *fwd_arg,
  * timeout. */
 static long nnie_dispatch_forward(const struct nnie_hw_task *task)
 {
+	hil_mmb_t *mmb;
 	void *task_kvirt;
-	dma_addr_t task_dma;
+	unsigned long task_dma;
 	unsigned long completed;
 	u32 cause;
 	long ret = 0;
@@ -544,13 +547,25 @@ static long nnie_dispatch_forward(const struct nnie_hw_task *task)
 	if (!g_nnie_regs || !g_nnie_pf_dev)
 		return -ENODEV;
 
-	task_kvirt = dma_alloc_coherent(&g_nnie_pf_dev->dev,
-					NNIE_HW_TASK_SIZE,
-					&task_dma, GFP_KERNEL);
-	if (!task_kvirt)
+	/* Allocate descriptor from the MMZ pool (same pool vendor uses
+	 * for its pre-allocated ring) instead of dma_alloc_coherent. HW
+	 * may restrict task-addr DMA to specific MMZ-zone phys ranges;
+	 * dma_alloc_coherent on cv500 returned 0xa00fxxxx which is a
+	 * different CMA pool than vendor's 0xa9cxxxxx ring. */
+	mmb = hil_mmb_alloc("nnie_desc", NNIE_HW_TASK_SIZE, 64, 0, NULL);
+	if (!mmb)
 		return -ENOMEM;
+	task_kvirt = hil_mmb_map2kern_cached(mmb);
+	if (!task_kvirt) {
+		hil_mmb_free(mmb);
+		return -ENOMEM;
+	}
+	task_dma = mmb->phys_addr;
+	pr_info("nnie_neo: descriptor mmb: phys=0x%lx kvirt=%p len=%lu\n",
+		(unsigned long)mmb->phys_addr, task_kvirt, mmb->length);
 
 	memcpy(task_kvirt, task, NNIE_HW_TASK_SIZE);
+	__cpuc_flush_dcache_area(task_kvirt, NNIE_HW_TASK_SIZE);
 
 	/* Bring NNIE block out of reset + ungate its clock. CRG register
 	 * 0x120100bc holds bit 0 = reset (1=held), bit 1 = clk enable.
@@ -662,8 +677,8 @@ static long nnie_dispatch_forward(const struct nnie_hw_task *task)
 
 	nnie_sys2_clear_bit(NNIE_SYS2_REG_NNIE_RAM, NNIE_SYS_BIT_NNIE_RAM);
 
-	dma_free_coherent(&g_nnie_pf_dev->dev, NNIE_HW_TASK_SIZE,
-			  task_kvirt, task_dma);
+	hil_mmb_free(mmb);
+	(void)task_kvirt; (void)task_dma;
 
 	if (!completed) {
 		u32 live_status, live_start, live_task_id, live_clk;
@@ -765,8 +780,16 @@ static long nnie_op_forward(unsigned long arg, int with_bbox)
 	 * addresses, so without the tail the inference can't run.) */
 	mutex_lock(&g_nnie_tskbuf_lock);
 	tb = nnie_find_tskbuf_locked(tsk_phys);
-	if (tb)
+	if (tb) {
 		tail_bytes = nnie_build_task_tail(tb, buf, src_num, dst_num);
+		/* memremap WB gives a cached kernel mapping; CPU stores hit
+		 * L1/L2. HW reads from phys via DMA — needs cache flush so
+		 * HW sees the new tail content. Vendor sample explicitly calls
+		 * SAMPLE_COMM_SVP_FlushCache before each Forward; we mirror
+		 * that here. */
+		if (tail_bytes > 0)
+			__cpuc_flush_dcache_area(tb->kvirt, tb->size);
+	}
 	mutex_unlock(&g_nnie_tskbuf_lock);
 
 	if (!tb) {
