@@ -39,9 +39,17 @@ static int watch_thread(void *unused)
 			u32 start = readl(g_regs + 0x30);
 			u32 status = readl(g_regs + 0x3c);
 			u32 tid    = readl(g_regs + 0x48);
+			int o;
 
 			pr_info("nnie_watch[%d]: TASK_ADDR=0x%x_%08x  START=0x%x STATUS=0x%x TASK_ID=0x%x\n",
 				captures++, hi, lo, start, status, tid);
+			/* Dump all NNIE registers at this moment. */
+			for (o = 0; o < 0xc0; o += 16) {
+				pr_info("nnie_watch[%d]: reg+0x%02x: %08x %08x %08x %08x\n",
+					captures-1, o,
+					readl(g_regs + o + 0), readl(g_regs + o + 4),
+					readl(g_regs + o + 8), readl(g_regs + o + 12));
+			}
 
 			if (lo && pfn_valid(lo >> PAGE_SHIFT)) {
 				const u32 *d = (const u32 *)phys_to_virt(lo);

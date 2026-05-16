@@ -557,7 +557,11 @@ static long nnie_dispatch_forward(const struct nnie_hw_task *task)
 	 * may restrict task-addr DMA to specific MMZ-zone phys ranges;
 	 * dma_alloc_coherent on cv500 returned 0xa00fxxxx which is a
 	 * different CMA pool than vendor's 0xa9cxxxxx ring. */
-	mmb = hil_mmb_alloc("nnie_desc", NNIE_HW_TASK_SIZE, 64, 0, NULL);
+	/* Allocate 64 KB instead of 64 B so MMZ picks a phys from the
+	 * "high" sub-region (vendor's ring lives at 0xa9cxxxxx, our 4 KB
+	 * allocs land in the fragmented low region 0xa00fxxxx). HW may
+	 * filter task-addr phys by range. */
+	mmb = hil_mmb_alloc("nnie_desc", 64 * 1024, 4096, 0, NULL);
 	if (!mmb)
 		return -ENOMEM;
 	task_kvirt = hil_mmb_map2kern_cached(mmb);
@@ -572,15 +576,11 @@ static long nnie_dispatch_forward(const struct nnie_hw_task *task)
 	memcpy(task_kvirt, task, NNIE_HW_TASK_SIZE);
 	__cpuc_flush_dcache_area(task_kvirt, NNIE_HW_TASK_SIZE);
 
-	/* Bring NNIE block out of reset + ungate its clock. CRG register
-	 * 0x120100bc holds bit 0 = reset (1=held), bit 1 = clk enable.
-	 * Without these, NNIE register writes silently drop. Vendor goes
-	 * through cmpi mod 2 (sys_config) fns 0xb3 (reset) and 0xb4
-	 * (clk_en); we drive the CRG register directly. Pulse reset to
-	 * force a clean state (a previous failed task may have left HW
-	 * in a stuck state with reset = 0). */
-	nnie_crg_set_bit  (NNIE_CRG_REG_NNIE_CLK, NNIE_SYS_BIT_NNIE_RESET);
-	udelay(1);
+	/* Ensure NNIE clock + reset are in normal state — but DON'T pulse
+	 * reset per task (vendor only resets once at module load).
+	 * Pulse-reset would also wipe the HW-self-populated chip-config
+	 * registers (+0x70..+0xa8) which encode the SoC clock/PLL params
+	 * NNIE needs. */
 	nnie_crg_clear_bit(NNIE_CRG_REG_NNIE_CLK, NNIE_SYS_BIT_NNIE_RESET);
 	nnie_crg_set_bit  (NNIE_CRG_REG_NNIE_CLK, NNIE_SYS_BIT_NNIE_CLK_EN);
 
@@ -632,16 +632,27 @@ static long nnie_dispatch_forward(const struct nnie_hw_task *task)
 	/* Vendor sets TIMEOUT to ~2 s at 500 MHz NNIE clock; without it
 	 * (TIMEOUT=0) HW seems to never IRQ — possibly stuck waiting on
 	 * a timeout counter that never advances. */
-	/* Vendor's live TIMEOUT_HI on av300 reads 0 (not 0xFF as the init
-	 * function would have set). Match observed vendor state. */
+	/* Phase 12 reg dump at vendor's TASK_ADDR write: TIMEOUT_LO=0xFFFFFFFF,
+	 * TIMEOUT_HI=0xFF (matches what hal_svp_nnie_set_timeout writes).
+	 * Earlier post-Forward snapshot showed TIMEOUT_HI=0 — that was HW
+	 * clearing after completion, not vendor's set value. */
 	writel(0xFFFFFFFFu,              g_nnie_regs + NNIE_REG_TIMEOUT_LO);
-	writel(0x00000000u,              g_nnie_regs + NNIE_REG_TIMEOUT_HI);
-	/* Vendor disable_check_sum @0xbc74 clears bit 0 of +0x68, but live
-	 * register readback shows CHECK_SUM=0x1 after vendor init runs —
-	 * the symbol name 'disable' may be misleading and bit 0 is actually
-	 * "disable=1, enable=0" (i.e. the clear-to-enable convention).
-	 * Empirically: our cleanroom writes 0 here → cfg_err info=1.
-	 * Don't touch CHECK_SUM and let vendor's previous state stand. */
+	writel(0x000000FFu,              g_nnie_regs + NNIE_REG_TIMEOUT_HI);
+	/* Vendor disable_check_sum @0xbc74 clears bit 0 of +0x68 to 0
+	 * BEFORE start (confirmed by Phase 12 live capture). Function name
+	 * matches behaviour — bit 0 = 1 IS "checksum enabled" but vendor
+	 * DISABLES it per task. Post-task HW restores chip default 0x1. */
+	writel(0u,                       g_nnie_regs + NNIE_REG_CHECK_SUM);
+
+	/* +0x44: vendor writes 0x3 at task start. Purpose unknown — Phase
+	 * 12 RE needs more work. Without it cfg_err info=0; with it HW
+	 * accepts the task (no cfg_err, just timeout). */
+	writel(0x3u,                     g_nnie_regs + 0x44);
+
+	/* +0xb0..+0xb8: tried writing 0 (matching vendor's live state),
+	 * but HW responded with cfg_err info=0x1000001 — these are
+	 * presumably RO HW status and writes corrupt internal state.
+	 * Leaving alone now. */
 	/* Clear any leftover IRQ status from a previous failed Forward —
 	 * with cfg_err bit 2 left set in NNIE_REG_IRQ_STATUS the next
 	 * START write might re-fire the IRQ immediately. */
