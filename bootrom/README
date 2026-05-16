@@ -233,6 +233,16 @@ cv500). Concrete agreements:
     pending a cv500 dump)
   - CCITT-16 CRC table at bootrom 0x7e08 is shared
 
+**Single-mask silicon across av300 board variants.** The mask-ROM
+hash tracked in MANIFEST has been independently reproduced from two
+additional hi3516av300 cameras (one with SPI NOR flash, one with
+eMMC) by reading the mask-ROM MMIO window at 0x04000000..0x04010000
+on each board. Both produced 65,536-byte dumps with the same sha256
+as the tracked MANIFEST. Storage controller wiring and DDR chip choice
+differ board-to-board within the av300 family, but the bootrom does
+not — corroborating the single-mask-silicon premise the reverse
+depends on.
+
 
 Structural findings
 -------------------
