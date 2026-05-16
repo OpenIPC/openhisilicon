@@ -584,12 +584,22 @@ static long nnie_dispatch_forward(const struct nnie_hw_task *task)
 	memcpy(task_kvirt, task, NNIE_HW_TASK_SIZE);
 	__cpuc_flush_dcache_area(task_kvirt, NNIE_HW_TASK_SIZE);
 
-	/* Ensure NNIE clock + reset are in normal state — but DON'T pulse
-	 * reset per task (vendor only resets once at module load).
-	 * Pulse-reset would also wipe the HW-self-populated chip-config
-	 * registers (+0x70..+0xa8) which encode the SoC clock/PLL params
-	 * NNIE needs. */
+	/* Vendor's clock/RAM dance captured via kprobe-tracing
+	 * sys_hal_wk_cnn_clk_en + sys_hal_gdc_nnie_set_ram_using during
+	 * a known-good mnist Forward (Phase 14):
+	 *
+	 *   clk_en(1) → reset_sel(0) → clk_en(0) → clk_en(1) →
+	 *   ram(0) → clk_en(1) → ram(1) → ram(0) → clk_en(0)
+	 *
+	 * The clock-toggle (OFF then ON) appears to be an HW init reset
+	 * pulse. Simple clock-on alone doesn't put HW into the state
+	 * needed for inference. */
+	nnie_crg_set_bit  (NNIE_CRG_REG_NNIE_CLK, NNIE_SYS_BIT_NNIE_CLK_EN);
 	nnie_crg_clear_bit(NNIE_CRG_REG_NNIE_CLK, NNIE_SYS_BIT_NNIE_RESET);
+	nnie_crg_clear_bit(NNIE_CRG_REG_NNIE_CLK, NNIE_SYS_BIT_NNIE_CLK_EN);
+	udelay(1);
+	nnie_crg_set_bit  (NNIE_CRG_REG_NNIE_CLK, NNIE_SYS_BIT_NNIE_CLK_EN);
+	nnie_sys2_clear_bit(NNIE_SYS2_REG_NNIE_RAM, NNIE_SYS_BIT_NNIE_RAM);
 	nnie_crg_set_bit  (NNIE_CRG_REG_NNIE_CLK, NNIE_SYS_BIT_NNIE_CLK_EN);
 
 	/* Vendor open_nnie load sets CRG+0xa4 (= VEDU clock) to 0x6. NNIE
