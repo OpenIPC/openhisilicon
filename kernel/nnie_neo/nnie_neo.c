@@ -642,6 +642,11 @@ static long nnie_dispatch_forward(const struct nnie_hw_task *task)
 	 * "disable=1, enable=0" (i.e. the clear-to-enable convention).
 	 * Empirically: our cleanroom writes 0 here → cfg_err info=1.
 	 * Don't touch CHECK_SUM and let vendor's previous state stand. */
+	/* Clear any leftover IRQ status from a previous failed Forward —
+	 * with cfg_err bit 2 left set in NNIE_REG_IRQ_STATUS the next
+	 * START write might re-fire the IRQ immediately. */
+	writel(NNIE_IRQ_ALL,             g_nnie_regs + NNIE_REG_IRQ_CLEAR);
+
 	writel((u32)task_dma,            g_nnie_regs + NNIE_REG_TASK_ADDR_LO);
 	writel((u32)((u64)task_dma >> 32), g_nnie_regs + NNIE_REG_TASK_ADDR_HI);
 	wmb();
@@ -653,7 +658,7 @@ static long nnie_dispatch_forward(const struct nnie_hw_task *task)
 		const u32 *d = (const u32 *)task_kvirt;
 
 		pr_info("nnie_neo: pre-START regs: CLK=0x%x OUT=0x%x IRQ_CFG=0x%x "
-			"TO_LO=0x%x TO_HI=0x%x ADDR_LO=0x%x ADDR_HI=0x%x CHKSUM=0x%x\n",
+			"TO_LO=0x%x TO_HI=0x%x ADDR_LO=0x%x ADDR_HI=0x%x CHKSUM=0x%x STATUS=0x%x ERR_INFO=0x%x\n",
 			readl(g_nnie_regs + NNIE_REG_CLK_GATE),
 			readl(g_nnie_regs + NNIE_REG_OUTSTANDING),
 			readl(g_nnie_regs + NNIE_REG_IRQ_CFG),
@@ -661,7 +666,9 @@ static long nnie_dispatch_forward(const struct nnie_hw_task *task)
 			readl(g_nnie_regs + NNIE_REG_TIMEOUT_HI),
 			readl(g_nnie_regs + NNIE_REG_TASK_ADDR_LO),
 			readl(g_nnie_regs + NNIE_REG_TASK_ADDR_HI),
-			readl(g_nnie_regs + NNIE_REG_CHECK_SUM));
+			readl(g_nnie_regs + NNIE_REG_CHECK_SUM),
+			readl(g_nnie_regs + NNIE_REG_IRQ_STATUS),
+			readl(g_nnie_regs + NNIE_REG_CFG_ERR_INFO));
 		pr_info("nnie_neo: 64-B task desc: %08x %08x %08x %08x  %08x %08x %08x %08x\n",
 			d[0], d[1], d[2], d[3], d[4], d[5], d[6], d[7]);
 		pr_info("nnie_neo:                  %08x %08x %08x %08x  %08x %08x %08x %08x\n",
