@@ -203,6 +203,18 @@ HI_S32 HI_MPI_SVP_NNIE_LoadModel(const SVP_SRC_MEM_INFO_S *pstModelBuf,
 	 * whole .wk file in MMZ — the per-segment offsets are file-
 	 * relative. */
 	pstModel->stBase    = *pstModelBuf;
+	/* Vendor LoadModel adjusts stBase.PhyAddr to skip the .wk header
+	 * — the HW expects task[+16] = stBase.PhyAddr + 0 to land on the
+	 * start of the instruction stream area, NOT the .wk file's CRC/
+	 * version header. inst_offset_extra (file[52..55]) is the byte
+	 * offset where the instruction stream tail begins. Captured live
+	 * from vendor on av300: task[+16] = 0xaa880150 for a .wk loaded
+	 * at phys 0xaa880000 with inst_offset_extra=0x150.
+	 *
+	 * The userspace stBase.u64VirAddr is NOT adjusted here because
+	 * userspace code reads from the start of the file. Only PhyAddr
+	 * is rebased. */
+	pstModel->stBase.u64PhyAddr += inst_off_extra;
 	pstModel->enRunMode = (SVP_NNIE_RUN_MODE_E)file[48];
 	pstModel->u32NetSegNum  = seg_num;
 	/* Vendor reports u32TmpBufSize = 1989888 (~1.9 MB) for mnist; the

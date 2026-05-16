@@ -437,10 +437,23 @@ nnie_fill_task_header(struct nnie_hw_task *task,
 	task->src_batch_num   = cpu_to_le32(batch_num);
 }
 
-/* Variable-length descriptor tail builder. See nnie_hw_task.h "Variable-
- * length descriptor tail" for the section layout. Handles non-LSTM
- * (net_type != SVP_NNIE_NET_TYPE_RECURRENT) CNN inputs with enType==0;
- * enType ∈ [1..5] paths are stubbed and return -EOPNOTSUPP. */
+/* Variable-length descriptor tail builder.
+ *
+ * Layout EMPIRICALLY captured from a known-good vendor Forward on
+ * mnist (av300, Phase 9 nnie_dump):
+ *
+ *   +0x00  u32  src[0].u32Stride
+ *   +0x04  u32  dst[0].u32Stride
+ *   +0x08  u64  reserved (zero)
+ *   +0x10  u64  dst[0].u64PhyAddr           (one slot per dst, packed)
+ *   +0x10+8*DstNum: align to 16 (zero pad)
+ *   +next  u64  src[0].u64PhyAddr           (one slot per src×batch)
+ *   ...
+ *
+ * Multi-src/multi-dst: per-src stride at +0 + i*4, per-dst stride
+ * after. (Educated guess — vendor mnist only has SrcNum=DstNum=1, so
+ * the multi-N layout is inferred from what would be a natural
+ * extension. Phase 10 needs a multi-output model to verify.) */
 static int nnie_build_task_tail(struct nnie_tskbuf *tb, const u8 *fwd_arg,
                                 u32 src_num, u32 dst_num)
 {
@@ -458,24 +471,28 @@ static int nnie_build_task_tail(struct nnie_tskbuf *tb, const u8 *fwd_arg,
 	} while (0)
 	#define TIP_ALIGN_16() while (off & 0xF) TIP_PUT_U32(0)
 
-	/* §1: per-input stride table */
+	/* +0x00..: per-src strides, then per-dst strides */
 	for (i = 0; i < src_num; i++) {
 		u32 stride = *(u32 *)(fwd_arg + NNIE_FWD_OFF_ASTSRC +
 				      i * NNIE_BLOB_S_SIZE + NNIE_BLOB_OFF_STRIDE);
 		TIP_PUT_U32(stride);
 	}
+	for (i = 0; i < dst_num; i++) {
+		u32 stride = *(u32 *)(fwd_arg + NNIE_FWD_OFF_ASTDST +
+				      i * NNIE_BLOB_S_SIZE + NNIE_BLOB_OFF_STRIDE);
+		TIP_PUT_U32(stride);
+	}
 	TIP_ALIGN_16();
 
-	/* §2: 16 destination phys addresses, zero-padded past dst_num */
-	for (i = 0; i < 16; i++) {
-		u64 dst_phys = 0;
-		if (i < dst_num)
-			dst_phys = *(u64 *)(fwd_arg + NNIE_FWD_OFF_ASTDST +
-					    i * NNIE_BLOB_S_SIZE + NNIE_BLOB_OFF_PHYADDR);
+	/* +0x10: dst phys addrs (DstNum × u64, packed) */
+	for (i = 0; i < dst_num; i++) {
+		u64 dst_phys = *(u64 *)(fwd_arg + NNIE_FWD_OFF_ASTDST +
+					i * NNIE_BLOB_S_SIZE + NNIE_BLOB_OFF_PHYADDR);
 		TIP_PUT_U64(dst_phys);
 	}
+	TIP_ALIGN_16();
 
-	/* §3: per-source DMA address vector */
+	/* Next: src per-batch phys addrs */
 	for (i = 0; i < src_num; i++) {
 		const u8 *blob = fwd_arg + NNIE_FWD_OFF_ASTSRC + i * NNIE_BLOB_S_SIZE;
 		u32 en_type = *(u32 *)(blob + 0);
@@ -487,36 +504,19 @@ static int nnie_build_task_tail(struct nnie_tskbuf *tb, const u8 *fwd_arg,
 		u64 batch_size;
 
 		switch (en_type) {
-		case 0:                  /* SVP_BLOB_TYPE_S32 — generic CNN feature map */
-			batch_size = (u64)stride * height * chn;
-			break;
-		case 1:                  /* SVP_BLOB_TYPE_U8 — image input */
-			if (chn != 1) {
-				/* Chn==3 packed-RGB needs 32 B/batch (3 plane
-				 * addrs + zero pad) per vendor svp_nnie_fill_
-				 * image_src_addr @0x7a8c. Phase 8 work. */
-				pr_info_once("nnie_neo: U8 Chn=%u not yet supported (mnist Chn=1 only)\n",
-					     chn);
-				return -EOPNOTSUPP;
-			}
-			batch_size = (u64)stride * height;
-			break;
-		case 4:                  /* SVP_BLOB_TYPE_VEC_S32 — FC layer vector */
-			batch_size = (u64)stride * height;
-			break;
-		case 2: case 3:          /* YVU420SP / YVU422SP */
-		case 5:                  /* SEQ_S32 (LSTM/RNN) */
+		case 0: batch_size = (u64)stride * height * chn; break;
+		case 1: batch_size = (u64)stride * height;       break;
+		case 4: batch_size = (u64)stride * height;       break;
+		default:
 			pr_info_once("nnie_neo: src[%u] enType=%u not yet supported\n",
 				     i, en_type);
 			return -EOPNOTSUPP;
-		default:
-			return -EINVAL;
 		}
 
 		for (j = 0; j < num; j++)
 			TIP_PUT_U64(phys + j * batch_size);
-		TIP_ALIGN_16();
 	}
+	TIP_ALIGN_16();
 
 	#undef TIP_PUT_U32
 	#undef TIP_PUT_U64
@@ -578,15 +578,35 @@ static long nnie_dispatch_forward(const struct nnie_hw_task *task)
 	 * them every time so the block recovers if vendor open_gdc.ko (or
 	 * a stale boot state) left them in a weird state. */
 	/* Init-time register setup (vendor does this once in svp_nnie_init
-	 * @0x10f4; we redo each call for simplicity/idempotence). */
-	writel(NNIE_CLK_GATE_EN,         g_nnie_regs + NNIE_REG_CLK_GATE);
-	writel(NNIE_OUTSTANDING_DEFAULT, g_nnie_regs + NNIE_REG_OUTSTANDING);
+	 * @0x10f4; we redo each call for simplicity/idempotence).
+	 *
+	 * IMPORTANT: vendor's hal_svp_nnie_enable_clk_gt @0xbc18 does
+	 * read-modify-write OR'ing 0x80 into CLK_GATE (NOT plain write).
+	 * Live capture on av300 after vendor inference shows CLK_GATE =
+	 * 0x349 — chip-reset bits 0/3/6/8/9 must be preserved or HW
+	 * stays silent. Same RMW pattern for OUTSTANDING. */
+	{
+		u32 v;
+		v = readl(g_nnie_regs + NNIE_REG_CLK_GATE);
+		writel(v | NNIE_CLK_GATE_EN, g_nnie_regs + NNIE_REG_CLK_GATE);
+
+		/* vendor bfi r2, #0xf, #0, #5 → bits[4:0]=0xF; then OR 0xf00.
+		 * Implement as: clear low 5 bits, set 0xf in low 5 bits, OR 0xf00. */
+		v = readl(g_nnie_regs + NNIE_REG_OUTSTANDING);
+		v = (v & ~0x1Fu) | 0x0Fu | 0xF00u;
+		writel(v, g_nnie_regs + NNIE_REG_OUTSTANDING);
+	}
+	/* IRQ_CFG: vendor does 3 separate R-M-W to set bits 0, 1, 2; we
+	 * can write the combined value because all 3 bits enable
+	 * orthogonal IRQ sources. */
 	writel(NNIE_IRQ_ALL,             g_nnie_regs + NNIE_REG_IRQ_CFG);
 	/* Vendor sets TIMEOUT to ~2 s at 500 MHz NNIE clock; without it
 	 * (TIMEOUT=0) HW seems to never IRQ — possibly stuck waiting on
 	 * a timeout counter that never advances. */
+	/* Vendor's live TIMEOUT_HI on av300 reads 0 (not 0xFF as the init
+	 * function would have set). Match observed vendor state. */
 	writel(0xFFFFFFFFu,              g_nnie_regs + NNIE_REG_TIMEOUT_LO);
-	writel(0x000000FFu,              g_nnie_regs + NNIE_REG_TIMEOUT_HI);
+	writel(0x00000000u,              g_nnie_regs + NNIE_REG_TIMEOUT_HI);
 	/* Vendor: disable_check_sum at init — clear bit 0 of +0x68. */
 	{
 		u32 v = readl(g_nnie_regs + NNIE_REG_CHECK_SUM);

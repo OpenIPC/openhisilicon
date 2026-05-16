@@ -1,0 +1,3 @@
+obj-m += nnie_spy.o
+obj-m += nnie_dump.o
+obj-m += nnie_watch.o
