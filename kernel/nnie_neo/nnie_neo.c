@@ -439,10 +439,11 @@ nnie_fill_task_header(struct nnie_hw_task *task,
 	memset(task, 0, sizeof(*task));
 	task->trigger_mode    = cpu_to_le16(instant ? 1 : 0);
 	/* descriptor[+4] is the per-task slot index in vendor's 512-entry
-	 * ring. HW may track which task it last accepted; submitting the
-	 * same slot_idx twice could be rejected. Use a monotonic counter
-	 * mod 512 to never repeat. */
-	task->reserved_04     = cpu_to_le32(atomic_inc_return(&g_nnie_task_idx) & 0x1ff);
+	 * ring. Vendor's first-task value is 0. HW expects slot N to
+	 * follow slot N-1; jumping to non-zero first-task means HW waits
+	 * forever for slot 0 to complete. Use atomic_inc_return - 1 to
+	 * get the pre-increment value (0 on first call). */
+	task->reserved_04     = cpu_to_le32((atomic_inc_return(&g_nnie_task_idx) - 1) & 0x1ff);
 	task->model_file_phys = cpu_to_le64(model_phys);
 	task->seg_inst_offset = cpu_to_le32(inst_off);
 	task->seg_inst_len    = cpu_to_le32(inst_len);
