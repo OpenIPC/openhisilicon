@@ -6,3 +6,4 @@ first16: 10 00 00 ea 14 f0 9f e5 14 f0 9f e5 14 f0 9f e5
 magic_at_3c: 0x12345678
 dump_tool: ipctool master+956052a built 2026-05-14
 dump_date: 2026-05-14
+verified_by: OpenIPC/defib (SPI NOR + eMMC variants, 2026-05-16)
