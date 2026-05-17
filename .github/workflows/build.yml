@@ -45,6 +45,9 @@ jobs:
           - platform: hi3516cv500
             board: hi3516av300_neo
             kernel: "7.0"
+          - platform: hi3516cv300
+            board: hi3516cv300_neo
+            kernel: "7.0"
 
     steps:
       - name: Checkout Source
@@ -164,6 +167,39 @@ jobs:
           # should already be in the firmware repo. If not, create minimal versions.
           if [ ! -f br-ext-chip-hisilicon/configs/hi3516av300_neo_defconfig ]; then
             echo "ERROR: hi3516av300_neo_defconfig not found in firmware repo" >&2
+            exit 1
+          fi
+
+          sed -i 's|cat $(CONFIG) $(PWD)/general/openipc.fragment|cat $(PWD)/general/openipc.fragment $(CONFIG)|' Makefile
+
+      # CV300 (V3, ARM926EJ-S) is the cleanest legacy platform — issue #60
+      # verified that zero blobs bypass OSAL for kernel APIs, so a kernel
+      # bump is just recompiling OSAL. The PDE_DATA() shim in
+      # kernel/compat/kernel_compat.h covers the one symbol OSAL touches
+      # that changed on 5.17. CV300 is also the only HiSi SoC with real
+      # mainline DT/SoC support upstream (arch/arm/boot/dts/hisilicon/
+      # hi3516cv300.dtsi) — a future neo build could ride pure mainline
+      # rather than the BVT vendor patches; this matrix entry uses the
+      # same upstream-patches branch as EV300/AV300 for now so the
+      # delta-from-working is minimal.
+      - name: Setup neo target (CV300, 7.0 kernel)
+        if: matrix.kernel == '7.0' && matrix.platform == 'hi3516cv300'
+        run: |
+          cd ../firmware
+
+          # Neo patches dir (may already exist from EV300/CV500 setup)
+          mkdir -p general/package/all-patches-neo/linux
+          for d in general/package/all-patches/*/; do
+            name=$(basename "$d")
+            [ "$name" != "linux" ] && [ ! -e "general/package/all-patches-neo/$name" ] && \
+              ln -sf "../all-patches/$name" "general/package/all-patches-neo/$name"
+          done
+
+          # Firmware-side dependency: hi3516cv300_neo_defconfig, neo kernel
+          # config, and (if upstream-patches lacks a CV300 DT) the
+          # all-patches-neo/linux DT drop-in must already be in firmware.
+          if [ ! -f br-ext-chip-hisilicon/configs/hi3516cv300_neo_defconfig ]; then
+            echo "ERROR: hi3516cv300_neo_defconfig not found in firmware repo" >&2
             exit 1
           fi
 
