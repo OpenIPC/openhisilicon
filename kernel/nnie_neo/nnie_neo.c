@@ -388,16 +388,24 @@ static int nnie_build_task_tail(struct nnie_tskbuf *tb, const u8 *fwd_arg,
 		u32 chn     = *(u32 *)(blob + NNIE_BLOB_OFF_CHN);
 		u64 plane_size = (u64)stride * height;
 
-		/* en_type encoding matches SVP_BLOB_TYPE_E:
-		 *   0 = S32 (4 B per pixel; HW expects one phys per frame)
-		 *   1 = U8  image (chn=1 → 1 entry per frame; chn=3 → vendor
-		 *                  emits a 4-u64 quartet per frame for the
-		 *                  three planar channels + one zero slot)
-		 *   4 = VEC_S32 vector (one entry per frame)
+		/* en_type encoding matches SVP_BLOB_TYPE_E. Layout cross-
+		 * checked against vendor svp_nnie_fill_image_src_addr +
+		 * fill_forward_task (decompiled from open_nnie.ko):
 		 *
-		 * Vendor svp_nnie_fill_image_src_addr (hi_nnie.o:0x78ac)
-		 * encodes this; see kaeru node
-		 * `nnie-neo-cv500-detector-tskbuf-pattern-2026-05-17`. */
+		 *   0 = S32        — 1 u64 / frame at phys + j * stride*h*chn
+		 *   1 = U8 image   — chn=1: 1 u64 / frame at phys + j*stride*h
+		 *                    chn=3: 4 u64 quartet / frame (3 planar
+		 *                           channel phys + zero pad slot)
+		 *   2 = YVU420SP   — 2 u64 / frame: Y plane phys, UV plane phys
+		 *                    Frame size = 1.5 * stride*h (chroma
+		 *                    sub-sampled 2x2). UV offset = stride*h.
+		 *   3 = YVU422SP   — 2 u64 / frame: Y plane phys, UV plane phys
+		 *                    Frame size = 2 * stride*h (UV at full H).
+		 *   4 = VEC_S32    — 1 u64 / frame at phys + j*stride*h
+		 *
+		 * YVU420SP/YVU422SP unlock the VI→VPSS→NNIE pipeline path —
+		 * camera frames in their native YUV layout can be inferred
+		 * directly without an RGB conversion VPSS step. */
 		switch (en_type) {
 		case 0: /* S32 frame */
 			for (j = 0; j < num; j++)
@@ -416,6 +424,25 @@ static int nnie_build_task_tail(struct nnie_tskbuf *tb, const u8 *fwd_arg,
 				}
 			} else {
 				return -EOPNOTSUPP;
+			}
+			break;
+		case 2: { /* YVU420SP: Y full, UV half-height interleaved
+			   * Frame = 1.5 × stride×h (i.e. chn=3 / 2 of plane).
+			   * UV offset from frame start = stride×h (plane_size)
+			   * algebraically: 2·(chn·plane/2)/chn = plane. */
+			u64 frame_chr2 = (u64)chn * plane_size;  /* 2×frame */
+			u64 uv_off = plane_size;
+			for (j = 0; j < num; j++) {
+				u64 frame_base = (j * frame_chr2) >> 1;
+				TIP_PUT_U64(phys + frame_base);
+				TIP_PUT_U64(phys + frame_base + uv_off);
+			}
+			break;
+		}
+		case 3: /* YVU422SP: Y and UV both full-height interleaved */
+			for (j = 0; j < num; j++) {
+				TIP_PUT_U64(phys + (2 * j + 0) * plane_size);
+				TIP_PUT_U64(phys + (2 * j + 1) * plane_size);
 			}
 			break;
 		case 4: /* VEC_S32 */

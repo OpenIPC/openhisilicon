@@ -141,6 +141,59 @@ static int test_roi_overprovision(void)
 	return 0;
 }
 
+static int test_yvu420sp_shape(void)
+{
+	/* YVU420SP: 2 u64 / frame (Y + UV) → stride table + dst phys +
+	 * 2*8 src phys = 16 + 16 + 16 = 48 B for (1 src,1 dst,num=1).
+	 * Vendor svp_nnie_fill_image_src_addr enType=2 path. */
+	SVP_NNIE_MODEL_S m = {0};
+	HI_U32 sizes[SVP_NNIE_MAX_NET_SEG_NUM] = {0};
+	HI_S32 ret;
+
+	m.u32NetSegNum = 1;
+	m.astSeg[0].enNetType = SVP_NNIE_NET_TYPE_CNN;
+	m.astSeg[0].u16SrcNum = 1;
+	m.astSeg[0].u16DstNum = 1;
+	fill_node(&m.astSeg[0].astSrcNode[0], SVP_BLOB_TYPE_YVU420SP, 3);
+
+	ret = HI_MPI_SVP_NNIE_GetTskBufSize(1, 0, &m, sizes, 1);
+	if (ret != HI_SUCCESS) {
+		fprintf(stderr, "FAIL: YVU420SP ret=0x%x\n", ret);
+		return 1;
+	}
+	if (sizes[0] != 48) {
+		fprintf(stderr, "FAIL: YVU420SP size=%u, expected 48\n", sizes[0]);
+		return 1;
+	}
+	printf("ok: YVU420SP shape → 48 B (VI/VPSS native — no RGB conversion)\n");
+	return 0;
+}
+
+static int test_yvu422sp_shape(void)
+{
+	SVP_NNIE_MODEL_S m = {0};
+	HI_U32 sizes[SVP_NNIE_MAX_NET_SEG_NUM] = {0};
+	HI_S32 ret;
+
+	m.u32NetSegNum = 1;
+	m.astSeg[0].enNetType = SVP_NNIE_NET_TYPE_CNN;
+	m.astSeg[0].u16SrcNum = 1;
+	m.astSeg[0].u16DstNum = 1;
+	fill_node(&m.astSeg[0].astSrcNode[0], SVP_BLOB_TYPE_YVU422SP, 3);
+
+	ret = HI_MPI_SVP_NNIE_GetTskBufSize(1, 0, &m, sizes, 1);
+	if (ret != HI_SUCCESS) {
+		fprintf(stderr, "FAIL: YVU422SP ret=0x%x\n", ret);
+		return 1;
+	}
+	if (sizes[0] != 48) {
+		fprintf(stderr, "FAIL: YVU422SP size=%u, expected 48\n", sizes[0]);
+		return 1;
+	}
+	printf("ok: YVU422SP shape → 48 B\n");
+	return 0;
+}
+
 static int test_lstm_unsupported(void)
 {
 	SVP_NNIE_MODEL_S m = {0};
@@ -182,6 +235,8 @@ int main(void)
 	fail += test_mnist_shape();
 	fail += test_ssd_shape();
 	fail += test_yolov2_shape();
+	fail += test_yvu420sp_shape();
+	fail += test_yvu422sp_shape();
 	fail += test_roi_overprovision();
 	fail += test_lstm_unsupported();
 	fail += test_null_pointer();
