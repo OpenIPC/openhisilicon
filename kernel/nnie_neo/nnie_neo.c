@@ -255,7 +255,8 @@ static irqreturn_t nnie_irq_handler(int irq, void *dev)
 #define NNIE_IOC_ADD_TSKBUF           0xc0184d03u
 #define NNIE_IOC_REMOVE_TSKBUF        0xc0184d04u
 
-static long nnie_op_forward(unsigned long arg, int with_bbox);
+static long nnie_op_forward(unsigned long arg);
+static long nnie_op_forward_with_bbox(unsigned long arg);
 static long nnie_op_query(unsigned long arg);
 static long nnie_op_add_tskbuf(unsigned long arg);
 static long nnie_op_remove_tskbuf(unsigned long arg);
@@ -263,8 +264,8 @@ static long nnie_op_remove_tskbuf(unsigned long arg);
 static long nnie_dispatch(unsigned int cmd, unsigned long arg)
 {
 	switch (cmd) {
-	case NNIE_IOC_FORWARD:           return nnie_op_forward(arg, 0);
-	case NNIE_IOC_FORWARD_WITH_BBOX: return nnie_op_forward(arg, 1);
+	case NNIE_IOC_FORWARD:           return nnie_op_forward(arg);
+	case NNIE_IOC_FORWARD_WITH_BBOX: return nnie_op_forward_with_bbox(arg);
 	case NNIE_IOC_QUERY:             return nnie_op_query(arg);
 	case NNIE_IOC_ADD_TSKBUF:        return nnie_op_add_tskbuf(arg);
 	case NNIE_IOC_REMOVE_TSKBUF:     return nnie_op_remove_tskbuf(arg);
@@ -312,6 +313,7 @@ static long nnie_dispatch(unsigned int cmd, unsigned long arg)
 #define NNIE_CTRL_OFF_NETSEGID      8
 #define NNIE_CTRL_OFF_TMP_PHYS      16
 #define NNIE_CTRL_OFF_TSK_PHYS      40
+#define NNIE_CTRL_OFF_TSK_SIZE      56
 
 /* Monotonic task index — must increment per Forward and wrap at 512
  * so HW can map each task to a ring slot. Starting at 0 matches the
@@ -384,18 +386,45 @@ static int nnie_build_task_tail(struct nnie_tskbuf *tb, const u8 *fwd_arg,
 		u32 num     = *(u32 *)(blob + NNIE_BLOB_OFF_NUM);
 		u32 height  = *(u32 *)(blob + NNIE_BLOB_OFF_HEIGHT);
 		u32 chn     = *(u32 *)(blob + NNIE_BLOB_OFF_CHN);
-		u64 batch_size;
+		u64 plane_size = (u64)stride * height;
 
+		/* en_type encoding matches SVP_BLOB_TYPE_E:
+		 *   0 = S32 (4 B per pixel; HW expects one phys per frame)
+		 *   1 = U8  image (chn=1 → 1 entry per frame; chn=3 → vendor
+		 *                  emits a 4-u64 quartet per frame for the
+		 *                  three planar channels + one zero slot)
+		 *   4 = VEC_S32 vector (one entry per frame)
+		 *
+		 * Vendor svp_nnie_fill_image_src_addr (hi_nnie.o:0x78ac)
+		 * encodes this; see kaeru node
+		 * `nnie-neo-cv500-detector-tskbuf-pattern-2026-05-17`. */
 		switch (en_type) {
-		case 0: batch_size = (u64)stride * height * chn; break;
-		case 1:
-		case 4: batch_size = (u64)stride * height;       break;
+		case 0: /* S32 frame */
+			for (j = 0; j < num; j++)
+				TIP_PUT_U64(phys + j * plane_size * chn);
+			break;
+		case 1: /* U8 image */
+			if (chn == 1) {
+				for (j = 0; j < num; j++)
+					TIP_PUT_U64(phys + j * plane_size);
+			} else if (chn == 3) {
+				for (j = 0; j < num; j++) {
+					TIP_PUT_U64(phys + (3 * j + 0) * plane_size);
+					TIP_PUT_U64(phys + (3 * j + 1) * plane_size);
+					TIP_PUT_U64(phys + (3 * j + 2) * plane_size);
+					TIP_PUT_U64(0);
+				}
+			} else {
+				return -EOPNOTSUPP;
+			}
+			break;
+		case 4: /* VEC_S32 */
+			for (j = 0; j < num; j++)
+				TIP_PUT_U64(phys + j * plane_size);
+			break;
 		default:
 			return -EOPNOTSUPP;
 		}
-
-		for (j = 0; j < num; j++)
-			TIP_PUT_U64(phys + j * batch_size);
 	}
 	TIP_ALIGN_16();
 
@@ -519,12 +548,12 @@ static long nnie_dispatch_forward(const struct nnie_hw_task *task)
 	return ret;
 }
 
-static long nnie_op_forward(unsigned long arg, int with_bbox)
+static long nnie_op_forward(unsigned long arg)
 {
 	u8 *buf = (u8 *)arg;
 	u32 src_num, dst_num, net_seg_id, instant, batch_num, net_seg_num;
 	u64 tsk_phys, tmp_phys, model_uva, model_phys;
-	u32 inst_off, inst_len;
+	u32 inst_off, inst_len, tsk_size;
 	u8 *model_kbuf;
 	struct nnie_tskbuf *tb;
 	int tail_bytes;
@@ -539,6 +568,7 @@ static long nnie_op_forward(unsigned long arg, int with_bbox)
 	net_seg_id = *(u32 *)(buf + NNIE_FWD_OFF_CTRL + NNIE_CTRL_OFF_NETSEGID);
 	tmp_phys   = *(u64 *)(buf + NNIE_FWD_OFF_CTRL + NNIE_CTRL_OFF_TMP_PHYS);
 	tsk_phys   = *(u64 *)(buf + NNIE_FWD_OFF_CTRL + NNIE_CTRL_OFF_TSK_PHYS);
+	tsk_size   = *(u32 *)(buf + NNIE_FWD_OFF_CTRL + NNIE_CTRL_OFF_TSK_SIZE);
 	instant    = *(u32 *)(buf + NNIE_FWD_OFF_INSTANT);
 	batch_num  = *(u32 *)(buf + NNIE_FWD_OFF_ASTSRC + NNIE_BLOB_OFF_NUM);
 	model_uva  = *(u64 *)(buf + NNIE_FWD_OFF_PSTMODEL_UVA);
@@ -575,14 +605,36 @@ static long nnie_op_forward(unsigned long arg, int with_bbox)
 	inst_len   = *(u32 *)(model_kbuf + 12 + net_seg_id * NNIE_SEG_S_STRIDE + 16);
 	vfree(model_kbuf);
 
-	/* Build the tail into the registered tskbuf and flush it: cached
-	 * mapping means CPU stores hit L1/L2, but HW reads via DMA. */
+	/* Build the tail into the tskbuf and flush it: cached mapping
+	 * means CPU stores hit L1/L2, but HW reads via DMA.
+	 *
+	 * Vendor libnnie has two patterns for the tskbuf:
+	 *   - mnist-style: AddTskBuf called explicitly before Forward.
+	 *   - SSD/detector-style: libnnie allocates an MMZ block and
+	 *     references it from CTRL.{TskPhys,TskSize} without an
+	 *     AddTskBuf round-trip — the kernel is expected to memremap
+	 *     it on demand. We cover both by lazy-adding when the lookup
+	 *     misses; the entry stays cached until module rmmod
+	 *     (nnie_drain_tskbufs). */
 	mutex_lock(&g_nnie_tskbuf_lock);
 	tb = nnie_find_tskbuf_locked(tsk_phys);
+	mutex_unlock(&g_nnie_tskbuf_lock);
 	if (!tb) {
+		if (!tsk_size) {
+			pr_warn_ratelimited("nnie_neo: tskbuf phys=%llx not registered and CTRL.TskSize=0\n",
+					    (unsigned long long)tsk_phys);
+			return -ENOENT;
+		}
+		ret = nnie_add_tskbuf(tsk_phys, 0, tsk_size);
+		if (ret && ret != -EEXIST)
+			return ret;
+		mutex_lock(&g_nnie_tskbuf_lock);
+		tb = nnie_find_tskbuf_locked(tsk_phys);
 		mutex_unlock(&g_nnie_tskbuf_lock);
-		return -ENOENT;
+		if (!tb)
+			return -ENOENT;
 	}
+	mutex_lock(&g_nnie_tskbuf_lock);
 	tail_bytes = nnie_build_task_tail(tb, buf, src_num, dst_num);
 	if (tail_bytes > 0)
 		__cpuc_flush_dcache_area(tb->kvirt, tb->size);
@@ -600,6 +652,28 @@ static long nnie_op_forward(unsigned long arg, int with_bbox)
 
 	*(u32 *)(buf + NNIE_FWD_OFF_HANDLE) = 0;
 	return 0;
+}
+
+/* ForwardWithBbox (RPN/SSD detection-net second stage):
+ *
+ *   The 1728 B user buffer has a different layout from Forward:
+ *   astBbox[2] inserted at +776, pstModel at +872, astDst at +880,
+ *   CTRL_S (72 B) at +1648, bInstant at +1720. The 64 B HW
+ *   descriptor is identical to Forward — the bbox-ness lives in
+ *   tskbuf §3, which carries the per-proposal phys-addr table.
+ *
+ *   The §3 layout is not yet decoded (vendor
+ *   svp_nnie_fill_forward_with_bbox_task is ~1.4K instructions,
+ *   220 B stack frame); see kaeru node
+ *   `nnie-neo-cv500-vendor-forward-with-bbox-kernel-re`.
+ *
+ *   Reject explicitly so callers fall back rather than silently
+ *   running Forward-shaped offsets against a bbox-shaped buffer.
+ */
+static long nnie_op_forward_with_bbox(unsigned long arg)
+{
+	pr_info_once("nnie_neo: ForwardWithBbox not implemented yet; use Forward for classifier nets\n");
+	return -EOPNOTSUPP;
 }
 
 static long nnie_op_query(unsigned long arg)
