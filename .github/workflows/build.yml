@@ -872,11 +872,21 @@ jobs:
             mem: 256M
             allow-failure: true
             append: "console=ttyAMA0,115200 mem=32M root=/dev/ram0 rootfstype=squashfs"
-          # cv300: load_hisilicon does `insmod cma_osal.ko` but the firmware
-          # ships only hi_osal.ko. Pre-existing bug — same root cause as
-          # cv500 below. Needs a separate OpenIPC/firmware fix to either
-          # ship cma_osal.ko or have load_hisilicon use hi_osal.ko on both
-          # branches.
+          # cv300: the cma_osal.ko-missing bug is fixed in firmware
+          # (OpenIPC/firmware#2105), but qemu-hisilicon's hi3516cv300
+          # machine model appends `mmz_allocator=hisi mmz=…,96M` to
+          # bootargs unconditionally, while the cv300_lite kernel ships
+          # with `# CONFIG_CMA is not set`. load_hisilicon sees `mmz=` in
+          # /proc/cmdline → takes the cma allocator branch → hi_osal.ko
+          # tries to register a CMA allocator against a kernel without
+          # CMA support → registration fails silently and the script
+          # hangs. Real cv300 hardware doesn't pass mmz= in bootargs and
+          # always takes the hisi branch (verified on
+          # openipc-hi3516cv300.dlab.torturelabs.com:
+          # `mem=32M console=ttyAMA0,115200 panic=20 ...`, no mmz=).
+          # Keep allow-failure pending either a qemu-hisilicon bootargs
+          # fix (drop mmz= for cv300 to match real boards) or a cv300
+          # CMA kernel config (orthogonal scope).
           - machine: hi3516cv300
             firmware: hi3516cv300
             mem: 128M
@@ -886,14 +896,9 @@ jobs:
             firmware: hi3519v101
             mem: 64M
             append: "console=ttyAMA0,115200 mem=32M root=/dev/ram0 rootfstype=squashfs"
-          # cv500: same cma_osal.ko-missing bug as cv300. This was already
-          # the only red qemu-boot row on main before this PR; the row is
-          # kept (with allow-failure) so the future firmware fix has a
-          # detectable target. See comment on the cv300 row.
           - machine: hi3516cv500
             firmware: hi3516cv500
             mem: 128M
-            allow-failure: true
             append: "console=ttyAMA0,115200 earlyprintk mem=128M root=/dev/ram0 rootfstype=squashfs"
           - machine: hi3516ev200
             firmware: hi3516ev200
