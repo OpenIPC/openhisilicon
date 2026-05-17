@@ -227,23 +227,84 @@ HI_S32 HI_MPI_SVP_NNIE_LoadModel(const SVP_SRC_MEM_INFO_S *pstModelBuf,
 
 	/* Segment table is at file[192]; each on-disk record is 16 B and
 	 * decodes to the SVP_NNIE_SEG_S layout (see nnie_wk_format.h).
-	 * Node + ROI tables follow but aren't decoded here — leaving
-	 * astSrcNode/astDstNode/au32RoiIdx zeroed is safe because the
-	 * kernel Forward path only touches u32InstOffset / u32InstLen. */
-	for (i = 0; i < seg_num; i++) {
-		const uint8_t *r = file + 192 + i * sizeof(nnie_wk_seg_record_t);
+	 * Node tables follow each segment record:
+	 *   [seg_hdr 16 B]
+	 *   [src_node[0] compact 16 B][src_node[0] name 32 B]   = 48 B
+	 *   ...
+	 *   [src_node[SrcNum-1] compact 16 B][name 32 B]
+	 *   [dst_node[0] ...]
+	 *
+	 * Node compact form (decoded from vendor inst_mnist_cycle.wk
+	 * hex dump at file[208]):
+	 *   [+0..+11]  u32 H, u32 W, u32 C   (interpreted by vendor as
+	 *              stWhc — note .wk stores H first, vendor populates
+	 *              SVP_NNIE_NODE_S.unShape.stWhc.{u32Width,u32Height,
+	 *              u32Chn} so Width and Height fields end up swapped
+	 *              vs file order, but for square inputs they're equal)
+	 *   [+14]      u8  enType (= 1 for the input layer of mnist.wk;
+	 *              vendor reports astSrcNode[0].enType=1)
+	 *   [+15]      u8  NodeId
+	 * Phase 14 critical finding: when the user-supplied src blob's
+	 * enType doesn't match astSrcNode[0].enType the HW rejects with
+	 * cfg_err info=0x1. Userspace test reads astSrcNode[0].enType to
+	 * pick the right SVP_BLOB_TYPE for its MmzAlloc, so populating
+	 * this field is load-bearing for HW dispatch correctness.
+	 *
+	 * NOTE: output node enType / NodeId aren't read from the file —
+	 * vendor's libnnie derives them from the model's run mode (outputs
+	 * are always SVP_BLOB_TYPE_S32 = 4, NodeId increments per
+	 * downstream layer). For now we leave astDstNode mostly zero and
+	 * force enType=4 so userspace allocates S32-sized buffers. */
+	{
+		const uint8_t *p = file + 192 + (size_t)seg_num * 16;
 
-		pstModel->astSeg[i].enNetType     = (SVP_NNIE_NET_TYPE_E)r[0];
-		pstModel->astSeg[i].u16SrcNum     = r[1];
-		pstModel->astSeg[i].u16DstNum     = r[2];
-		pstModel->astSeg[i].u16RoiPoolNum = r[3];
-		pstModel->astSeg[i].u16MaxStep    = *(const uint16_t *)(r + 4);
-		pstModel->astSeg[i].u32InstOffset = *(const uint32_t *)(r + 8);
-		pstModel->astSeg[i].u32InstLen    = *(const uint32_t *)(r + 12);
+		for (i = 0; i < seg_num; i++) {
+			const uint8_t *r = file + 192 + i * 16;
+			uint32_t j;
 
-		if (pstModel->astSeg[i].u32InstOffset + pstModel->astSeg[i].u32InstLen
-		    > file_size)
-			return HI_ERR_SVP_NNIE_ILLEGAL_PARAM;
+			pstModel->astSeg[i].enNetType     = (SVP_NNIE_NET_TYPE_E)r[0];
+			pstModel->astSeg[i].u16SrcNum     = r[1];
+			pstModel->astSeg[i].u16DstNum     = r[2];
+			pstModel->astSeg[i].u16RoiPoolNum = r[3];
+			pstModel->astSeg[i].u16MaxStep    = *(const uint16_t *)(r + 4);
+			pstModel->astSeg[i].u32InstOffset = *(const uint32_t *)(r + 8);
+			pstModel->astSeg[i].u32InstLen    = *(const uint32_t *)(r + 12);
+
+			if (pstModel->astSeg[i].u32InstOffset + pstModel->astSeg[i].u32InstLen
+			    > file_size)
+				return HI_ERR_SVP_NNIE_ILLEGAL_PARAM;
+
+			for (j = 0; j < pstModel->astSeg[i].u16SrcNum; j++) {
+				SVP_NNIE_NODE_S *n = &pstModel->astSeg[i].astSrcNode[j];
+
+				if ((size_t)(p + 48 - file) > file_size)
+					return HI_ERR_SVP_NNIE_ILLEGAL_PARAM;
+				n->unShape.stWhc.u32Height = *(const uint32_t *)(p + 0);
+				n->unShape.stWhc.u32Width  = *(const uint32_t *)(p + 4);
+				n->unShape.stWhc.u32Chn    = *(const uint32_t *)(p + 8);
+				n->enType                  = (SVP_BLOB_TYPE_E)p[14];
+				n->u32NodeId               = p[15];
+				memcpy(n->szName, p + 16, SVP_NNIE_NODE_NAME_LEN - 1);
+				n->szName[SVP_NNIE_NODE_NAME_LEN - 1] = 0;
+				p += 48;
+			}
+			for (j = 0; j < pstModel->astSeg[i].u16DstNum; j++) {
+				SVP_NNIE_NODE_S *n = &pstModel->astSeg[i].astDstNode[j];
+
+				if ((size_t)(p + 48 - file) > file_size)
+					return HI_ERR_SVP_NNIE_ILLEGAL_PARAM;
+				/* Output activation dims — vendor's libnnie swaps so
+				 * that the layer's "feature count" lands in Width. */
+				n->unShape.stWhc.u32Height = *(const uint32_t *)(p + 0);
+				n->unShape.stWhc.u32Chn    = *(const uint32_t *)(p + 4);
+				n->unShape.stWhc.u32Width  = *(const uint32_t *)(p + 8);
+				n->enType                  = SVP_BLOB_TYPE_S32;
+				n->u32NodeId               = (j + 1) * 8; /* vendor pattern */
+				memcpy(n->szName, p + 16, SVP_NNIE_NODE_NAME_LEN - 1);
+				n->szName[SVP_NNIE_NODE_NAME_LEN - 1] = 0;
+				p += 48;
+			}
+		}
 	}
 
 	return HI_SUCCESS;

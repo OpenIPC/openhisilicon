@@ -518,6 +518,9 @@ static int nnie_build_task_tail(struct nnie_tskbuf *tb, const u8 *fwd_arg,
 		u32 chn     = *(u32 *)(blob + NNIE_BLOB_OFF_CHN);
 		u64 batch_size;
 
+		pr_info("nnie_neo: src[%u] enType=%u stride=%u H=%u W=%u C=%u N=%u phys=0x%llx\n",
+			i, en_type, stride, height,
+			*(u32 *)(blob + NNIE_BLOB_OFF_WIDTH), chn, num, phys);
 		switch (en_type) {
 		case 0: batch_size = (u64)stride * height * chn; break;
 		case 1: batch_size = (u64)stride * height;       break;
@@ -694,19 +697,19 @@ static long nnie_dispatch_forward(const struct nnie_hw_task *task)
 	 * confirms what we passed it. */
 	{
 		const u32 *d = (const u32 *)task_kvirt;
-
-		pr_info("nnie_neo: pre-START regs: CLK=0x%x OUT=0x%x IRQ_CFG=0x%x "
-			"TO_LO=0x%x TO_HI=0x%x ADDR_LO=0x%x ADDR_HI=0x%x CHKSUM=0x%x STATUS=0x%x ERR_INFO=0x%x\n",
-			readl(g_nnie_regs + NNIE_REG_CLK_GATE),
-			readl(g_nnie_regs + NNIE_REG_OUTSTANDING),
-			readl(g_nnie_regs + NNIE_REG_IRQ_CFG),
-			readl(g_nnie_regs + NNIE_REG_TIMEOUT_LO),
-			readl(g_nnie_regs + NNIE_REG_TIMEOUT_HI),
-			readl(g_nnie_regs + NNIE_REG_TASK_ADDR_LO),
-			readl(g_nnie_regs + NNIE_REG_TASK_ADDR_HI),
-			readl(g_nnie_regs + NNIE_REG_CHECK_SUM),
-			readl(g_nnie_regs + NNIE_REG_IRQ_STATUS),
-			readl(g_nnie_regs + NNIE_REG_CFG_ERR_INFO));
+		u32 r[0x34];
+		int i;
+		for (i = 0; i < 0x34; i++)
+			r[i] = readl(g_nnie_regs + i * 4);
+		pr_info("nnie_neo: pre-START regs 0x00..0x40: %08x %08x %08x %08x  %08x %08x %08x %08x  %08x %08x %08x %08x  %08x %08x %08x %08x  %08x\n",
+			r[0], r[1], r[2], r[3], r[4], r[5], r[6], r[7],
+			r[8], r[9], r[10], r[11], r[12], r[13], r[14], r[15], r[16]);
+		pr_info("nnie_neo: pre-START regs 0x44..0x84: %08x %08x %08x %08x  %08x %08x %08x %08x  %08x %08x %08x %08x  %08x %08x %08x %08x  %08x\n",
+			r[17], r[18], r[19], r[20], r[21], r[22], r[23], r[24],
+			r[25], r[26], r[27], r[28], r[29], r[30], r[31], r[32], r[33]);
+		pr_info("nnie_neo: pre-START regs 0x88..0xc8: %08x %08x %08x %08x  %08x %08x %08x %08x  %08x %08x %08x %08x  %08x %08x %08x %08x  %08x\n",
+			r[34], r[35], r[36], r[37], r[38], r[39], r[40], r[41],
+			r[42], r[43], r[44], r[45], r[46], r[47], r[48], r[49], r[50]);
 		pr_info("nnie_neo: 64-B task desc: %08x %08x %08x %08x  %08x %08x %08x %08x\n",
 			d[0], d[1], d[2], d[3], d[4], d[5], d[6], d[7]);
 		pr_info("nnie_neo:                  %08x %08x %08x %08x  %08x %08x %08x %08x\n",
@@ -761,9 +764,21 @@ static long nnie_dispatch_forward(const struct nnie_hw_task *task)
 	}
 	if (cause & NNIE_IRQ_CFG_ERR) {
 		u32 info = readl(g_nnie_regs + NNIE_REG_CFG_ERR_INFO);
-
+		u32 r[0x34];
+		int i;
+		for (i = 0; i < 0x34; i++)
+			r[i] = readl(g_nnie_regs + i * 4);
 		pr_warn("nnie_neo: Forward cfg_err (cause=0x%x info=0x%x)\n",
 			cause, info);
+		pr_warn("nnie_neo: post-fail regs 0x00..0x40: %08x %08x %08x %08x  %08x %08x %08x %08x  %08x %08x %08x %08x  %08x %08x %08x %08x  %08x\n",
+			r[0], r[1], r[2], r[3], r[4], r[5], r[6], r[7],
+			r[8], r[9], r[10], r[11], r[12], r[13], r[14], r[15], r[16]);
+		pr_warn("nnie_neo: post-fail regs 0x44..0x84: %08x %08x %08x %08x  %08x %08x %08x %08x  %08x %08x %08x %08x  %08x %08x %08x %08x  %08x\n",
+			r[17], r[18], r[19], r[20], r[21], r[22], r[23], r[24],
+			r[25], r[26], r[27], r[28], r[29], r[30], r[31], r[32], r[33]);
+		pr_warn("nnie_neo: post-fail regs 0x88..0xc8: %08x %08x %08x %08x  %08x %08x %08x %08x  %08x %08x %08x %08x  %08x %08x %08x %08x  %08x\n",
+			r[34], r[35], r[36], r[37], r[38], r[39], r[40], r[41],
+			r[42], r[43], r[44], r[45], r[46], r[47], r[48], r[49], r[50]);
 		ret = -EIO;
 	} else if (cause & NNIE_IRQ_TIMEOUT) {
 		pr_warn("nnie_neo: Forward HW timeout (cause=0x%x)\n", cause);
