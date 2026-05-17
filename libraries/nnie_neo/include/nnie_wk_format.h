@@ -76,14 +76,25 @@ _Static_assert(sizeof(nnie_wk_seg_record_t) == 16,
 	       "nnie_wk_seg_record_t must be exactly 16 bytes");
 
 /* Per-node record (48 bytes), one per src then one per dst, immediately
- * after the segment record(s):
- *   [+0..+11]  u32 height, u32 width, u32 chn
- *   [+12..+13] padding
- *   [+14]      u8  enType (SVP_BLOB_TYPE_E)
- *   [+15]      u8  node id
- *   [+16..+47] szName[32]
+ * after the segment record. Each node body is followed by a 16-byte
+ * inter-node separator on disk:
+ *   [+0..+47]  body
+ *     [+0..+11]  u32 height, u32 width, u32 chn
+ *     [+12..+13] padding
+ *     [+14]      u8  enType (SVP_BLOB_TYPE_E)
+ *     [+15]      u8  node id
+ *     [+16..+47] szName[32]
+ *   [+48..+63] separator (mostly zeros; first byte sometimes carries a
+ *                         node-link count, but vendor's runtime parser
+ *                         doesn't read it)
+ *
+ * For a segment with N total nodes, the on-disk footprint after the
+ * seg record is N * NNIE_WK_NODE_STRIDE bytes. The next segment record
+ * begins at the byte after the last node's separator.
  */
 #define NNIE_WK_NODE_SIZE       48u
+#define NNIE_WK_NODE_SEP_SIZE   16u
+#define NNIE_WK_NODE_STRIDE     (NNIE_WK_NODE_SIZE + NNIE_WK_NODE_SEP_SIZE)
 
 int nnie_wk_verify_crc(const void *file_buf, uint32_t file_size);
 

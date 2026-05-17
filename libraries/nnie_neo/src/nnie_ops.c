@@ -186,29 +186,39 @@ HI_S32 HI_MPI_SVP_NNIE_LoadModel(const SVP_SRC_MEM_INFO_S *pstModelBuf,
 	 * detection models (yolov*, ssd) may need vendor's exact value. */
 	pstModel->u32TmpBufSize = 8 * 1024 * 1024;
 
-	p = file + NNIE_WK_HEADER_SIZE + (size_t)seg_num * sizeof(nnie_wk_seg_record_t);
+	/* Segments are interleaved with their node tables on disk —
+	 * NOT all-segs-then-all-nodes. Walk sequentially: read the 16 B
+	 * seg record at p, then each node body is 48 B followed by a
+	 * 16 B inter-node separator (= NNIE_WK_NODE_STRIDE). The next
+	 * seg record begins where the previous seg's last separator
+	 * ended. Verified against vendor pvanet (2-seg, FasterRCNN) and
+	 * mnist (1-seg) .wk files on av300. */
+	p = file + NNIE_WK_HEADER_SIZE;
 
 	for (i = 0; i < seg_num; i++) {
-		const uint8_t *r = file + NNIE_WK_HEADER_SIZE
-		                   + i * sizeof(nnie_wk_seg_record_t);
 		uint32_t j;
 
-		pstModel->astSeg[i].enNetType     = (SVP_NNIE_NET_TYPE_E)r[0];
-		pstModel->astSeg[i].u16SrcNum     = r[1];
-		pstModel->astSeg[i].u16DstNum     = r[2];
-		pstModel->astSeg[i].u16RoiPoolNum = r[3];
-		pstModel->astSeg[i].u16MaxStep    = *(const uint16_t *)(r + 4);
-		pstModel->astSeg[i].u32InstOffset = *(const uint32_t *)(r + 8);
-		pstModel->astSeg[i].u32InstLen    = *(const uint32_t *)(r + 12);
+		if ((size_t)(p + sizeof(nnie_wk_seg_record_t) - file) > file_size)
+			return HI_ERR_SVP_NNIE_ILLEGAL_PARAM;
+
+		pstModel->astSeg[i].enNetType     = (SVP_NNIE_NET_TYPE_E)p[0];
+		pstModel->astSeg[i].u16SrcNum     = p[1];
+		pstModel->astSeg[i].u16DstNum     = p[2];
+		pstModel->astSeg[i].u16RoiPoolNum = p[3];
+		pstModel->astSeg[i].u16MaxStep    = *(const uint16_t *)(p + 4);
+		pstModel->astSeg[i].u32InstOffset = *(const uint32_t *)(p + 8);
+		pstModel->astSeg[i].u32InstLen    = *(const uint32_t *)(p + 12);
 
 		if (pstModel->astSeg[i].u32InstOffset +
 		    pstModel->astSeg[i].u32InstLen > file_size)
 			return HI_ERR_SVP_NNIE_ILLEGAL_PARAM;
 
+		p += sizeof(nnie_wk_seg_record_t);
+
 		for (j = 0; j < pstModel->astSeg[i].u16SrcNum; j++) {
 			SVP_NNIE_NODE_S *n = &pstModel->astSeg[i].astSrcNode[j];
 
-			if ((size_t)(p + NNIE_WK_NODE_SIZE - file) > file_size)
+			if ((size_t)(p + NNIE_WK_NODE_STRIDE - file) > file_size)
 				return HI_ERR_SVP_NNIE_ILLEGAL_PARAM;
 			n->unShape.stWhc.u32Height = *(const uint32_t *)(p + 0);
 			n->unShape.stWhc.u32Width  = *(const uint32_t *)(p + 4);
@@ -217,12 +227,12 @@ HI_S32 HI_MPI_SVP_NNIE_LoadModel(const SVP_SRC_MEM_INFO_S *pstModelBuf,
 			n->u32NodeId               = p[15];
 			memcpy(n->szName, p + 16, SVP_NNIE_NODE_NAME_LEN - 1);
 			n->szName[SVP_NNIE_NODE_NAME_LEN - 1] = 0;
-			p += NNIE_WK_NODE_SIZE;
+			p += NNIE_WK_NODE_STRIDE;
 		}
 		for (j = 0; j < pstModel->astSeg[i].u16DstNum; j++) {
 			SVP_NNIE_NODE_S *n = &pstModel->astSeg[i].astDstNode[j];
 
-			if ((size_t)(p + NNIE_WK_NODE_SIZE - file) > file_size)
+			if ((size_t)(p + NNIE_WK_NODE_STRIDE - file) > file_size)
 				return HI_ERR_SVP_NNIE_ILLEGAL_PARAM;
 			/* Output activations: vendor's libnnie swaps fields so
 			 * the layer's feature count lands in Width. */
@@ -233,7 +243,7 @@ HI_S32 HI_MPI_SVP_NNIE_LoadModel(const SVP_SRC_MEM_INFO_S *pstModelBuf,
 			n->u32NodeId               = (j + 1) * 8;
 			memcpy(n->szName, p + 16, SVP_NNIE_NODE_NAME_LEN - 1);
 			n->szName[SVP_NNIE_NODE_NAME_LEN - 1] = 0;
-			p += NNIE_WK_NODE_SIZE;
+			p += NNIE_WK_NODE_STRIDE;
 		}
 	}
 
