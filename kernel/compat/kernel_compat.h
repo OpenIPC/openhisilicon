@@ -37,6 +37,9 @@
  * access_ok() lost its first (type) parameter in 5.0.
  * Pre-5.0: access_ok(type, addr, size)
  * 5.0+:    access_ok(addr, size)
+ *
+ * Can't macro-redefine bare access_ok — kernel's own uaccess.h calls it
+ * with 2 args which conflicts. OSAL source must call compat_access_ok().
  */
 #if LINUX_VERSION_CODE >= KERNEL_VERSION(5, 0, 0)
 #define compat_access_ok(type, addr, size) access_ok(addr, size)
@@ -71,8 +74,15 @@
 #endif
 
 /*
- * do_gettimeofday() removed in 5.0.
- * Use ktime_get_real_ts64() + timespec64 instead.
+ * do_gettimeofday() removed in 5.0; struct timeval removed in 5.6.
+ * Legacy OSAL still writes:
+ *     struct timeval t;
+ *     do_gettimeofday(&t);
+ *     ... t.tv_sec, t.tv_usec ...
+ * Provide both type and function as transparent shims so the source stays
+ * untouched. timespec64 is the modern replacement and has the same
+ * .tv_sec / .tv_usec pair (well, tv_nsec — but cv300 OSAL only reads
+ * tv_sec/tv_usec, and we adapt by mapping tv_usec to tv_nsec/1000).
  */
 #if LINUX_VERSION_CODE >= KERNEL_VERSION(5, 0, 0)
 #define COMPAT_NO_DO_GETTIMEOFDAY 1
@@ -80,14 +90,35 @@
 #include <linux/timekeeping.h>
 #endif
 
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(5, 6, 0)
+#include <linux/time64.h>
+/* shim struct: layout-compatible field access (tv_sec, tv_usec). Pad
+ * tv_nsec → tv_usec on read. */
+struct compat_timeval {
+	time64_t tv_sec;
+	long tv_usec;
+};
+#define timeval compat_timeval
+static inline void compat_do_gettimeofday(struct compat_timeval *tv)
+{
+	struct timespec64 ts;
+	ktime_get_real_ts64(&ts);
+	tv->tv_sec = ts.tv_sec;
+	tv->tv_usec = ts.tv_nsec / 1000;
+}
+#define do_gettimeofday(tvp) compat_do_gettimeofday(tvp)
+#endif
+
 /*
  * rtc_time_to_tm/rtc_tm_to_time removed in 5.6 in favor of
- * rtc_time64_to_tm/rtc_tm_to_time64.
+ * rtc_time64_to_tm/rtc_tm_to_time64. Redirect legacy calls transparently.
  */
 #if LINUX_VERSION_CODE >= KERNEL_VERSION(5, 6, 0)
 #define compat_rtc_time_to_tm  rtc_time64_to_tm
 /* rtc_tm_to_time64() returns time64_t instead of storing via pointer */
 #define compat_rtc_tm_to_time(tm, timep) do { *(timep) = rtc_tm_to_time64(tm); } while (0)
+#define rtc_time_to_tm(time, tm) rtc_time64_to_tm((unsigned long long)(time), (tm))
+#define rtc_tm_to_time(tm, timep) do { *(timep) = (unsigned long)rtc_tm_to_time64(tm); } while (0)
 #else
 #define compat_rtc_time_to_tm  rtc_time_to_tm
 #define compat_rtc_tm_to_time  rtc_tm_to_time
@@ -135,18 +166,41 @@
 
 /*
  * strlcpy() deprecated in 6.1, removed in 6.8. Use strscpy() instead.
+ * strscpy returns ssize_t (len or -E2BIG); strlcpy returns size_t (src len).
+ * Cast to size_t — call sites compare against size, not check for error.
  */
 #if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 1, 0)
-#define compat_strlcpy(dst, src, size) strscpy(dst, src, size)
+#define compat_strlcpy(dst, src, size) ((size_t)strscpy(dst, src, size))
+#define strlcpy(dst, src, size) ((size_t)strscpy(dst, src, size))
 #else
 #define compat_strlcpy(dst, src, size) strlcpy(dst, src, size)
 #endif
 
 /*
- * PDE_DATA() renamed to pde_data() in 5.17.
+ * print_symbol() removed in 4.x — was a wrapper around printk("%pS").
+ * Define as a transparent macro so legacy OSAL osal_addr.c calls keep
+ * working unchanged. fmt is expected to contain "%s" (the old contract);
+ * we redirect that single conversion to %pS (kernel symbol lookup).
+ * Multi-arg fmt strings are not supported — none of the call sites use them.
+ */
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(4, 0, 0)
+#include <linux/printk.h>
+#define print_symbol(fmt, addr) \
+	do { \
+		printk(KERN_INFO "%pS\n", (void *)(unsigned long)(addr)); \
+		(void)(fmt); \
+	} while (0)
+#endif
+
+/*
+ * PDE_DATA() renamed to pde_data() in 5.17. Keep both spellings working:
+ * - new code uses compat_pde_data() (canonical, version-agnostic);
+ * - legacy OSAL still writes PDE_DATA() — define it as a macro on >= 5.17
+ *   so per-generation osal_proc.c stays untouched (cv300, cv500, ...).
  */
 #if LINUX_VERSION_CODE >= KERNEL_VERSION(5, 17, 0)
 #define compat_pde_data(inode) pde_data(inode)
+#define PDE_DATA(inode) pde_data(inode)
 #elif defined(CONFIG_PROC_FS)
 #define compat_pde_data(inode) PDE_DATA(inode)
 #endif
@@ -180,10 +234,15 @@
 #endif
 
 /*
- * DEFINE_SEMAPHORE gained a count parameter in 6.6.
+ * DEFINE_SEMAPHORE gained a count parameter in 6.4 (commit 48380368dec).
+ * Old: DEFINE_SEMAPHORE(name)  →  count defaults to 1
+ * New: DEFINE_SEMAPHORE(name, count)
+ * Redirect the 1-arg form transparently so legacy OSAL source stays unchanged.
  */
 #if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 4, 0)
 #define compat_DEFINE_SEMAPHORE(name) DEFINE_SEMAPHORE(name, 1)
+#undef DEFINE_SEMAPHORE
+#define DEFINE_SEMAPHORE(name) struct semaphore name = __SEMAPHORE_INITIALIZER(name, 1)
 #else
 #define compat_DEFINE_SEMAPHORE(name) DEFINE_SEMAPHORE(name)
 #endif

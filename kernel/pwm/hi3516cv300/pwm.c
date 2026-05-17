@@ -358,3 +358,5 @@ void  pwm_exit(void)
 
     osal_printk("unload pwm.ko OK!\n");
 }
+
+MODULE_LICENSE("GPL");

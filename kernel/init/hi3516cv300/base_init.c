@@ -59,6 +59,9 @@ static struct ctl_table comm_eproc_table[] = {
 	{}
 };
 
+#ifndef COMPAT_NO_SYSCTL_TABLE
+/* .child was removed alongside register_sysctl_table in 6.6. On modern
+ * kernels we register the leaf table directly with a path string instead. */
 static struct ctl_table comm_dir_table[] = {
     {
         .procname       = "debug",
@@ -76,12 +79,19 @@ static struct ctl_table comm_parent_tbl[] = {
 	},
 	{}
 };
+#endif
 
 static struct ctl_table_header *comm_eproc_tbl_head;
 
 int __init COMM_init_proc_ctrl(void)
 {
+#ifdef COMPAT_NO_SYSCTL_TABLE
+	/* 6.6 dropped register_sysctl_table + .child hierarchy. Use the
+	 * modern path-based register_sysctl() with just the leaf table. */
+	comm_eproc_tbl_head = register_sysctl("dev/debug", comm_eproc_table);
+#else
 	comm_eproc_tbl_head = register_sysctl_table(comm_parent_tbl);
+#endif
 	if (!comm_eproc_tbl_head)
 	    return -ENOMEM;
 	return 0;

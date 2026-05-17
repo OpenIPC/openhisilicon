@@ -302,11 +302,32 @@ static struct dev_pm_ops himedia_bus_pm_ops = {
 };
 
 
+/* bus_type.dev_attrs removed in 4.x; .dev_groups is the modern replacement
+ * but expects struct attribute[] not struct device_attribute[]. Setting to
+ * NULL on modern kernels — sysfs himedia_* attrs become unavailable on neo
+ * builds (not exercised by boot+login+eth0 path). Also match/uevent gained
+ * `const` device qualifier ~6.10-6.11 — provide const-trampolines. */
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 11, 0)
+static int himedia_match_const(struct device *dev, const struct device_driver *drv) {
+	return himedia_match(dev, (struct device_driver *)drv);
+}
+static int himedia_uevent_const(const struct device *dev, struct kobj_uevent_env *env) {
+	return himedia_uevent((struct device *)dev, env);
+}
+#define HIMEDIA_MATCH  himedia_match_const
+#define HIMEDIA_UEVENT himedia_uevent_const
+#else
+#define HIMEDIA_MATCH  himedia_match
+#define HIMEDIA_UEVENT himedia_uevent
+#endif
+
 struct bus_type himedia_bus_type = {
 	.name		= "himedia",
+#if LINUX_VERSION_CODE < KERNEL_VERSION(4, 0, 0)
 	.dev_attrs	= himedia_dev_attrs,
-	.match		= himedia_match,
-	.uevent		= himedia_uevent,
+#endif
+	.match		= HIMEDIA_MATCH,
+	.uevent		= HIMEDIA_UEVENT,
 	.pm		    = &himedia_bus_pm_ops,
 };
 

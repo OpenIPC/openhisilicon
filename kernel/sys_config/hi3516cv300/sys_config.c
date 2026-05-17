@@ -18,6 +18,8 @@
  */
 
 #include <linux/bitops.h>
+/* 6.x split of_property_* declarations out of of_platform.h into of.h. */
+#include <linux/of.h>
 #include <linux/clk.h>
 #include <linux/delay.h>
 #include <linux/io.h>
@@ -136,9 +138,9 @@ static int hibvt_pinctrl_probe(struct platform_device *pdev)
 	return hibvt_sys_init(pdev);
 }
 
-static int hibvt_pinctrl_remove(struct platform_device *pdev)
+static compat_platform_remove_ret hibvt_pinctrl_remove(struct platform_device *pdev)
 {
-	return 0;
+	compat_platform_remove_return;
 }
 
 static struct platform_driver hibvt_pinctrl_driver = {

@@ -9,6 +9,80 @@
 #include "hi_osal.h"
 
 
+#ifdef COMPAT_TIMER_SETUP
+
+/* 4.15+: init_timer() / timer_list.function / .data removed in favor of
+ * timer_setup() with a (struct timer_list *) callback. Wrap with a shim
+ * struct so the OSAL public API (function = void(*)(unsigned long), data)
+ * still works for the cv300 blobs. Pattern mirrors cv500's osal_timer.c. */
+struct osal_timer_compat {
+    struct timer_list tl;
+    void (*function)(unsigned long);
+    unsigned long data;
+};
+
+static void osal_timer_shim_callback(struct timer_list *t)
+{
+    struct osal_timer_compat *ot =
+        container_of(t, struct osal_timer_compat, tl);
+    if (ot->function)
+        ot->function(ot->data);
+}
+
+int osal_timer_init(osal_timer_t *timer){
+    struct osal_timer_compat *ot = NULL;
+
+    if(timer == NULL){
+        osal_printk("%s - parameter invalid!\n", __FUNCTION__);
+        return -1;
+    }
+    ot = kmalloc(sizeof(struct osal_timer_compat), GFP_KERNEL);
+    if(ot == NULL){
+        osal_printk("%s - kmalloc error!\n", __FUNCTION__);
+        return -1;
+    }
+    memset(ot, 0, sizeof(*ot));
+    timer_setup(&ot->tl, osal_timer_shim_callback, 0);
+    timer->timer = ot;
+    return 0;
+}
+EXPORT_SYMBOL(osal_timer_init);
+
+int osal_set_timer(osal_timer_t *timer, unsigned long interval){
+    struct osal_timer_compat *ot = NULL;
+    if(timer == NULL || timer->timer == NULL || timer->function == NULL || interval == 0){
+        osal_printk("%s - parameter invalid!\n", __FUNCTION__);
+        return -1;
+    }
+    ot = timer->timer;
+    ot->function = timer->function;
+    ot->data = timer->data;
+    return mod_timer(&ot->tl, jiffies + msecs_to_jiffies(interval));
+}
+EXPORT_SYMBOL(osal_set_timer);
+
+int osal_del_timer(osal_timer_t *timer){
+    struct osal_timer_compat *ot = NULL;
+    if(timer == NULL || timer->timer == NULL || timer->function == NULL){
+        osal_printk("%s - parameter invalid!\n", __FUNCTION__);
+        return -1;
+    }
+    ot = timer->timer;
+    return del_timer(&ot->tl);
+}
+EXPORT_SYMBOL(osal_del_timer);
+
+int osal_timer_destory(osal_timer_t *timer){
+    struct osal_timer_compat *ot = timer->timer;
+    del_timer(&ot->tl);
+    kfree(ot);
+    timer->timer = NULL;
+    return 0;
+}
+EXPORT_SYMBOL(osal_timer_destory);
+
+#else /* pre-4.15: original init_timer / .function / .data API */
+
 int osal_timer_init(osal_timer_t *timer){
     struct timer_list *t = NULL;
 
@@ -61,6 +135,8 @@ int osal_timer_destory(osal_timer_t *timer){
     return 0;
 }
 EXPORT_SYMBOL(osal_timer_destory);
+
+#endif /* COMPAT_TIMER_SETUP */
 
 unsigned long osal_msleep(unsigned int msecs){
     return  msleep_interruptible(msecs);

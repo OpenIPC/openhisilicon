@@ -134,14 +134,14 @@ static int hi35xx_vgs_probe(struct platform_device *pdev)
     return 0;
 }
 
-static int hi35xx_vgs_remove(struct platform_device *pdev)
+static compat_platform_remove_ret hi35xx_vgs_remove(struct platform_device *pdev)
 {
     //printk("<%s> is called\n",__FUNCTION__);
     VGS_ModExit();
     pVgsReg[0] = 0;
 	vgs_hw_exit(pdev);
 
-    return 0;
+    compat_platform_remove_return;
 }
 
 

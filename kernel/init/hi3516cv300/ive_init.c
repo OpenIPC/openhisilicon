@@ -125,12 +125,12 @@ static int hi35xx_ive_probe(struct platform_device *pdev)
     return 0;
 }
 
-static int hi35xx_ive_remove(struct platform_device *pdev)
+static compat_platform_remove_ret hi35xx_ive_remove(struct platform_device *pdev)
 {
     //printk("<%s> is called\n",__FUNCTION__);
     IVE_ModExit();
 	ive_hw_exit(pdev);
-    return 0;
+    compat_platform_remove_return;
 }
 
 

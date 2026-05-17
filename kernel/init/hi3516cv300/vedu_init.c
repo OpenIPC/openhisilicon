@@ -124,11 +124,11 @@ static int hi35xx_vedu_probe(struct platform_device *pdev)
     return VEDU_ModInit();
 }
 
-static int hi35xx_vedu_remove(struct platform_device *pdev)
+static compat_platform_remove_ret hi35xx_vedu_remove(struct platform_device *pdev)
 {
     VEDU_ModExit();
 	vedu_hw_exit(pdev);
-    return 0;
+    compat_platform_remove_return;
 }
 
 static const struct of_device_id hi35xx_vedu_match[] = {

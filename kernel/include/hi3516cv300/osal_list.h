@@ -6,16 +6,14 @@
 /*
  * Simple doubly linked list implementation.
  *
- * Some of the internal functions ("__xxx") are useful when
- * manipulating whole lists rather than single entries, as
- * sometimes we already know the next/prev entries and we can
- * generate better code by using them directly rather than
- * using the generic single-entry routines.
+ * osal_list_head is byte-identical to the kernel's struct list_head.
+ * Alias it so cv300 OSAL can call bare list_for_each_entry / list_is_head
+ * (which got strict typing in 5.x+) on osal_list_head-typed lists without
+ * incompatible-pointer-type errors. ABI preserved — both structs have
+ * the same { next, prev } layout.
  */
-
-struct osal_list_head {
-    struct osal_list_head *next, *prev;
-};
+#include <linux/list.h>
+#define osal_list_head list_head
 #define OSAL_LIST_HEAD_INIT(name) { &(name), &(name) }
 
 #define OSAL_LIST_HEAD(name) \
