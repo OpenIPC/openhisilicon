@@ -308,21 +308,16 @@ jobs:
           fi
           echo "ok: descriptor MMZ pre-alloc wired"
 
-          # IRQ handler symbol must be exported (request_irq target).
-          if ! arm-linux-gnueabi-nm "$KO" 2>/dev/null | grep -q ' [tT] nnie_irq_handler'; then
-              echo "FAIL: $KO missing nnie_irq_handler symbol" >&2
-              exit 1
-          fi
-          echo "ok: nnie_irq_handler symbol present"
-
-          # The Forward dispatch path. If somebody deletes the
-          # serialization mutex or the dispatch path itself, the
-          # function disappears too.
-          if ! arm-linux-gnueabi-nm "$KO" 2>/dev/null | grep -q ' [tT] nnie_dispatch_forward'; then
-              echo "FAIL: $KO missing nnie_dispatch_forward — HW dispatch regressed?" >&2
-              exit 1
-          fi
-          echo "ok: nnie_dispatch_forward present"
+          # Function names appear in the .ko's symbol string table, so
+          # `strings | grep -x` is enough — avoids needing
+          # arm-linux-gnueabi-nm, which isn't installed in this job.
+          for sym in nnie_irq_handler nnie_dispatch_forward; do
+              if ! strings "$KO" | grep -qx "$sym"; then
+                  echo "FAIL: $KO missing $sym symbol" >&2
+                  exit 1
+              fi
+              echo "ok: $sym present"
+          done
 
   #
   # libraries-header-check
