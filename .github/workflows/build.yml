@@ -265,6 +265,60 @@ jobs:
               echo "ok: cv500 build has ive_submit_chain helper"
           fi
 
+      # nnie_neo ships on cv500-family only (separate NNIE block at
+      # 0x11100000 — V4 has no NNIE). Same shape as the ive_neo check
+      # above: confirm the .ko built, that it carries the expected
+      # platform-driver match string, and that the load-bearing
+      # support functions (descriptor MMZ pre-alloc, IRQ handler) are
+      # present.
+      - name: Verify nnie_neo built for this platform
+        if: matrix.platform == 'hi3516cv500'
+        run: |
+          KO=$(find ../firmware/output -name open_nnie_neo.ko 2>/dev/null | head -1)
+          if [ -z "$KO" ] || [ ! -f "$KO" ]; then
+              echo "FAIL: open_nnie_neo.ko not built for ${{ matrix.platform }}" >&2
+              find ../firmware/output -name 'open_nnie*' 2>/dev/null >&2 || true
+              exit 1
+          fi
+          echo "ok: $KO ($(stat -c%s "$KO") bytes)"
+
+          # Platform-driver bind target must match the DT compatible.
+          if ! strings "$KO" | grep -qF "hisilicon,hisi-nnie"; then
+              echo "FAIL: $KO missing DT compatible 'hisilicon,hisi-nnie'" >&2
+              exit 1
+          fi
+          echo "ok: DT compatible wired"
+
+          # /dev/nnie miscdevice — caller-facing surface. Renaming this
+          # silently would break every userspace consumer.
+          if ! strings "$KO" | grep -qF "/dev/nnie ready"; then
+              echo "FAIL: $KO missing '/dev/nnie ready' init log" >&2
+              exit 1
+          fi
+          echo "ok: /dev/nnie miscdevice wired"
+
+          # Descriptor MMZ is pre-allocated at module init so its phys
+          # stays stable across Forwards. The hil_mmb_alloc name is
+          # baked in as the MMZ-zone label — losing it means the
+          # pre-alloc step was removed and we'd regress to per-Forward
+          # alloc (TASK_ADDR drift → HW cfg_err).
+          if ! strings "$KO" | grep -qx "nnie_desc"; then
+              echo "FAIL: $KO missing 'nnie_desc' MMZ label — descriptor pre-alloc regressed?" >&2
+              exit 1
+          fi
+          echo "ok: descriptor MMZ pre-alloc wired"
+
+          # Function names appear in the .ko's symbol string table, so
+          # `strings | grep -x` is enough — avoids needing
+          # arm-linux-gnueabi-nm, which isn't installed in this job.
+          for sym in nnie_irq_handler nnie_dispatch_forward; do
+              if ! strings "$KO" | grep -qx "$sym"; then
+                  echo "FAIL: $KO missing $sym symbol" >&2
+                  exit 1
+              fi
+              echo "ok: $sym present"
+          done
+
   #
   # libraries-header-check
   #
@@ -331,6 +385,51 @@ jobs:
               /tmp/probe.c
           echo "all headers compile cleanly; ABI sizes locked"
 
+      - name: Compile NNIE public-header probe
+        run: |
+          cat > /tmp/probe_nnie.c <<'EOF'
+          #include <stddef.h>
+          #include "hi_type.h"
+          #include "hi_common.h"
+          #include "hi_comm_svp.h"
+          #include "hi_nnie.h"
+          #include "mpi_nnie.h"
+          #include "nnie_wk_format.h"
+
+          /* Binary ABI for the NNIE userspace ↔ kernel interface. The
+           * 1624-byte Forward ioctl arg buffer packs SVP_BLOB_S +
+           * SVP_NNIE_FORWARD_CTRL_S at fixed offsets; SVP_NNIE_MODEL_S
+           * is copy_from_user'd directly by the kernel and indexed by
+           * offsetof(stBase) + sizeof(SEG_S) — drift in either of those
+           * silently corrupts the kernel's read. */
+          _Static_assert(sizeof(SVP_BLOB_S)                       == 48,   "SVP_BLOB_S size");
+          _Static_assert(sizeof(SVP_NNIE_NODE_S)                  == 52,   "SVP_NNIE_NODE_S size");
+          _Static_assert(sizeof(SVP_NNIE_ROIPOOL_INFO_S)          == 104,  "SVP_NNIE_ROIPOOL_INFO_S size");
+          _Static_assert(sizeof(SVP_NNIE_SEG_S)                   == 1692, "SVP_NNIE_SEG_S size");
+          _Static_assert(sizeof(SVP_NNIE_MODEL_S)                 == 13992,"SVP_NNIE_MODEL_S size");
+          _Static_assert(sizeof(SVP_NNIE_FORWARD_CTRL_S)          == 64,   "SVP_NNIE_FORWARD_CTRL_S size");
+          _Static_assert(sizeof(SVP_NNIE_FORWARD_WITHBBOX_CTRL_S) == 72,   "SVP_NNIE_FORWARD_WITHBBOX_CTRL_S size");
+
+          /* The kernel's nnie_op_forward reads pstModel via copy_from_user
+           * and indexes ([+0x3690] = stBase, +12 + seg*1692 + 12/16 for
+           * astSeg[seg].u32InstOffset / u32InstLen). Lock those offsets
+           * here so a header refactor can't drift them silently. */
+          _Static_assert(offsetof(SVP_NNIE_MODEL_S, stBase)       == 13968, "MODEL_S.stBase offset");
+
+          int main(void) { return 0; }
+          EOF
+
+          gcc -Wall -Wextra -Werror -fsyntax-only \
+              -I libraries/include \
+              -I libraries/nnie_neo/include \
+              /tmp/probe_nnie.c
+          echo "NNIE ABI sizes locked"
+
+      - name: Run NNIE LoadModel sanity test
+        run: |
+          make -C libraries/nnie_neo/test test_loadmodel
+          ./libraries/nnie_neo/test/test_loadmodel
+
   #
   # libraries-cross-compile
   #
@@ -360,13 +459,16 @@ jobs:
             CC=arm-linux-gnueabi-gcc AR=arm-linux-gnueabi-ar
           make -C libraries/ivp_neo \
             CC=arm-linux-gnueabi-gcc AR=arm-linux-gnueabi-ar
+          make -C libraries/nnie_neo \
+            CC=arm-linux-gnueabi-gcc AR=arm-linux-gnueabi-ar
 
       - name: Verify outputs exist
         run: |
           for f in \
               libraries/mpi_neo/libmpi_neo.so libraries/mpi_neo/libmpi_neo.a \
               libraries/ive_neo/libive_neo.so libraries/ive_neo/libive_neo.a \
-              libraries/ivp_neo/libivp_neo.so libraries/ivp_neo/libivp_neo.a; do
+              libraries/ivp_neo/libivp_neo.so libraries/ivp_neo/libivp_neo.a \
+              libraries/nnie_neo/libnnie_neo.so libraries/nnie_neo/libnnie_neo.a; do
               [ -f "$f" ] || { echo "MISSING: $f" >&2; exit 1; }
               echo "ok: $f ($(stat -c%s $f) bytes)"
           done
@@ -403,13 +505,24 @@ jobs:
           for sym in hi_ivp_init hi_ivp_deinit hi_ivp_process_ex hi_ivp_load_resource_from_memory hi_ivp_set_ctrl_attr; do
               check libraries/ivp_neo/libivp_neo.so $sym
           done
+          # NNIE — eight HI_MPI_SVP_NNIE_* entry points. LoadModel /
+          # UnloadModel / GetTskBufSize are pure-userspace; the other
+          # five ioctl through /dev/nnie.
+          for sym in \
+              HI_MPI_SVP_NNIE_LoadModel HI_MPI_SVP_NNIE_UnloadModel \
+              HI_MPI_SVP_NNIE_GetTskBufSize HI_MPI_SVP_NNIE_Forward \
+              HI_MPI_SVP_NNIE_ForwardWithBbox HI_MPI_SVP_NNIE_Query \
+              HI_MPI_SVP_NNIE_AddTskBuf HI_MPI_SVP_NNIE_RemoveTskBuf; do
+              check libraries/nnie_neo/libnnie_neo.so $sym
+          done
 
       - name: Assert no vendor libs in NEEDED
         run: |
           for f in \
               libraries/mpi_neo/libmpi_neo.so \
               libraries/ive_neo/libive_neo.so \
-              libraries/ivp_neo/libivp_neo.so; do
+              libraries/ivp_neo/libivp_neo.so \
+              libraries/nnie_neo/libnnie_neo.so; do
               echo "=== $(basename $f) NEEDED ==="
               arm-linux-gnueabi-readelf -d "$f" | grep NEEDED
               # Expect only libc and (for pthread) libpthread. Any NEEDED
