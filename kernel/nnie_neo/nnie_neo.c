@@ -63,6 +63,17 @@ static void __iomem *g_sys2_regs;       /* sys2 @ 0x12030000 (NNIE_RAM flag) */
 static spinlock_t g_crg_lock;
 static spinlock_t g_sys2_lock;
 
+/* Pre-allocated descriptor MMZ (Phase 14 / commit cc55aac comparison).
+ * Vendor open_nnie.ko allocates its 64KB task descriptor ring once at
+ * module init, so the descriptor phys stays stable across Forwards.
+ * Match that allocation order so we hit the same MMZ slot as vendor
+ * — kprobe capture showed vendor TASK_ADDR=0xa9c70000, cleanroom was
+ * getting 0xa9cb0000 because our per-Forward alloc lands AFTER the
+ * test's nnie_tsk allocation has consumed 0xa9c70000. */
+static hil_mmb_t *g_nnie_desc_mmb;
+static void      *g_nnie_desc_kvirt;
+static u64        g_nnie_desc_phys;
+
 EXPORT_SYMBOL(g_nnie_regs);
 EXPORT_SYMBOL(g_gdc_regs);
 EXPORT_SYMBOL(g_nnie_irq);
@@ -572,21 +583,13 @@ static long nnie_dispatch_forward(const struct nnie_hw_task *task)
 	 * "high" sub-region (vendor's ring lives at 0xa9cxxxxx, our 4 KB
 	 * allocs land in the fragmented low region 0xa00fxxxx). HW may
 	 * filter task-addr phys by range. */
-	mmb = hil_mmb_alloc("nnie_desc", 64 * 1024, 4096, 0, NULL);
-	if (!mmb)
-		return -ENOMEM;
-	/* Phase 14: use NOCACHE mapping for the descriptor so HW reads
-	 * see writes immediately without depending on L1/L2 flush
-	 * propagation. Vendor uses cmpi_mmz_malloc_nocache for its
-	 * pre-allocated task ring at module init (svp_nnie_init @0x11a8). */
-	task_kvirt = hil_mmb_map2kern(mmb);
-	if (!task_kvirt) {
-		hil_mmb_free(mmb);
+	if (!g_nnie_desc_kvirt) {
+		pr_warn("nnie_neo: descriptor MMZ not pre-allocated\n");
 		return -ENOMEM;
 	}
-	task_dma = mmb->phys_addr;
-	pr_info("nnie_neo: descriptor mmb: phys=0x%lx kvirt=%p len=%lu (nocache)\n",
-		(unsigned long)mmb->phys_addr, task_kvirt, mmb->length);
+	task_kvirt = g_nnie_desc_kvirt;
+	task_dma   = g_nnie_desc_phys;
+	mmb        = NULL;            /* don't free in cleanup below */
 
 	memcpy(task_kvirt, task, NNIE_HW_TASK_SIZE);
 	wmb();
@@ -618,11 +621,11 @@ static long nnie_dispatch_forward(const struct nnie_hw_task *task)
 			writel((v & ~0x7u) | 0x6u, g_crg_regs + NNIE_CRG_REG_VEDU_CLK);
 	}
 
-	/* Coordinate with vendor open_sys.ko / open_gdc.ko via the cv500
-	 * sys2-window RAM-using flag (bit 0 of 0x12030034). Vendor's
-	 * sys_hal_gdc_nnie_set_ram_using @0x897c uses LANCHOR0+16 =
-	 * sys-init's ioremap of 0x12030000, NOT 0x12020000. */
-	nnie_sys2_set_bit(NNIE_SYS2_REG_NNIE_RAM, NNIE_SYS_BIT_NNIE_RAM);
+	/* Don't set NNIE_RAM bit back to 1 here — vendor's
+	 * hal_svp_nnie_enable_ram passes `using=0` (normalized to bit-0=0)
+	 * via SYS ioctl 0xd1, and the bit stays 0 from select_ram all the
+	 * way through START. Setting it to 1 was a Phase 8 guess that we
+	 * never validated against vendor's actual sequence. */
 
 	atomic_set(&g_nnie_last_status, 0);
 	reinit_completion(&g_nnie_done);
@@ -692,29 +695,13 @@ static long nnie_dispatch_forward(const struct nnie_hw_task *task)
 	writel((u32)((u64)task_dma >> 32), g_nnie_regs + NNIE_REG_TASK_ADDR_HI);
 	wmb();
 
-	/* Diagnostic: dump key NNIE registers + first bytes of the
-	 * descriptor right before START. If HW reads bogus data this
-	 * confirms what we passed it. */
-	{
-		const u32 *d = (const u32 *)task_kvirt;
-		u32 r[0x34];
-		int i;
-		for (i = 0; i < 0x34; i++)
-			r[i] = readl(g_nnie_regs + i * 4);
-		pr_info("nnie_neo: pre-START regs 0x00..0x40: %08x %08x %08x %08x  %08x %08x %08x %08x  %08x %08x %08x %08x  %08x %08x %08x %08x  %08x\n",
-			r[0], r[1], r[2], r[3], r[4], r[5], r[6], r[7],
-			r[8], r[9], r[10], r[11], r[12], r[13], r[14], r[15], r[16]);
-		pr_info("nnie_neo: pre-START regs 0x44..0x84: %08x %08x %08x %08x  %08x %08x %08x %08x  %08x %08x %08x %08x  %08x %08x %08x %08x  %08x\n",
-			r[17], r[18], r[19], r[20], r[21], r[22], r[23], r[24],
-			r[25], r[26], r[27], r[28], r[29], r[30], r[31], r[32], r[33]);
-		pr_info("nnie_neo: pre-START regs 0x88..0xc8: %08x %08x %08x %08x  %08x %08x %08x %08x  %08x %08x %08x %08x  %08x %08x %08x %08x  %08x\n",
-			r[34], r[35], r[36], r[37], r[38], r[39], r[40], r[41],
-			r[42], r[43], r[44], r[45], r[46], r[47], r[48], r[49], r[50]);
-		pr_info("nnie_neo: 64-B task desc: %08x %08x %08x %08x  %08x %08x %08x %08x\n",
-			d[0], d[1], d[2], d[3], d[4], d[5], d[6], d[7]);
-		pr_info("nnie_neo:                  %08x %08x %08x %08x  %08x %08x %08x %08x\n",
-			d[8], d[9], d[10], d[11], d[12], d[13], d[14], d[15]);
-	}
+	/* No pre-START register dump: each readl on the NNIE window takes
+	 * ~1us, and our 52-reg dump-loop introduces a >50us gap between
+	 * TASK_ADDR write and START write. HW seems to interpret that gap
+	 * as some kind of timeout / config violation (cfg_err info=0x1 with
+	 * dump enabled, success path without). Vendor's hal_svp_nnie_start
+	 * sequence is just: write_task_addr → dmb → start (no reads in
+	 * between). Match that exact ordering. */
 
 	/* Vendor hal_svp_nnie_start @0xbb2c uses RMW (OR bit 0). On a
 	 * post-reboot run reg+0x30 reads back 0x0, so the RMW is
@@ -747,7 +734,7 @@ static long nnie_dispatch_forward(const struct nnie_hw_task *task)
 
 	nnie_sys2_clear_bit(NNIE_SYS2_REG_NNIE_RAM, NNIE_SYS_BIT_NNIE_RAM);
 
-	hil_mmb_free(mmb);
+	if (mmb) hil_mmb_free(mmb);
 	(void)task_kvirt; (void)task_dma;
 
 	if (!completed) {
@@ -1051,6 +1038,26 @@ int nnie_std_mod_init(void)
 			g_nnie_irq_requested = 1;
 	}
 
+	/* Pre-allocate the descriptor MMZ so its phys is stable across
+	 * Forwards and (importantly) matches the slot vendor's open_nnie.ko
+	 * task ring would land in (kprobe-verified 0xa9c70000 on av300).
+	 * Zero the full 64KB at init the same way vendor does (via memset
+	 * during svp_nnie_init @0x1284) — HW may scan the ring for valid
+	 * entries by looking for non-zero slot headers, so leaving the
+	 * uninitialised bytes could trick HW into thinking older slots
+	 * are pending. */
+	g_nnie_desc_mmb = hil_mmb_alloc("nnie_desc", 64 * 1024, 4096, 0, NULL);
+	if (g_nnie_desc_mmb) {
+		g_nnie_desc_kvirt = hil_mmb_map2kern(g_nnie_desc_mmb);
+		g_nnie_desc_phys  = g_nnie_desc_mmb->phys_addr;
+		if (g_nnie_desc_kvirt)
+			memset(g_nnie_desc_kvirt, 0, 64 * 1024);
+		pr_info("nnie_neo: descriptor MMZ pre-allocated phys=0x%llx kvirt=%p (zeroed)\n",
+			g_nnie_desc_phys, g_nnie_desc_kvirt);
+	} else {
+		pr_err("nnie_neo: descriptor MMZ pre-alloc failed\n");
+	}
+
 	pr_info("nnie_neo: /dev/nnie ready (Phase 7 — full Forward path wired, IRQF_SHARED)\n");
 	return 0;
 }
@@ -1059,6 +1066,12 @@ void nnie_std_mod_exit(void)
 {
 	nnie_drain_tskbufs();
 
+	if (g_nnie_desc_mmb) {
+		hil_mmb_free(g_nnie_desc_mmb);
+		g_nnie_desc_mmb   = NULL;
+		g_nnie_desc_kvirt = NULL;
+		g_nnie_desc_phys  = 0;
+	}
 	if (g_nnie_irq_requested) {
 		free_irq(g_nnie_irq, &g_nnie_dev);
 		g_nnie_irq_requested = 0;
