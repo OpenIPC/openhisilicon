@@ -1,1 +1,2 @@
-libraries/nnie_neo/test/test_loadmodel
+test_loadmodel
+test_forward_with_bbox

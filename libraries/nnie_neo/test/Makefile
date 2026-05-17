@@ -34,3 +34,8 @@ clean:
 	rm -f test_loadmodel
 
 .PHONY: all run clean
+
+# Target-runnable bbox marshalling test (requires /dev/nnie).
+# Builds with the cross toolchain; only runs on cv500/av300 boards.
+test_forward_with_bbox: test_forward_with_bbox.c $(ROOT)/libraries/nnie_neo/src/nnie_ops.c
+	$(CC) $(CFLAGS) -o $@ test_forward_with_bbox.c $(ROOT)/libraries/nnie_neo/src/nnie_ops.c -lpthread

@@ -37,7 +37,21 @@
 #define NNIE_IOC_REMOVE_TSKBUF        0xc0184d04u
 
 #define NNIE_FWD_ARG_SIZE       1624u
+#define NNIE_FWD_BBOX_ARG_SIZE  1728u
 #define NNIE_BLOB_SIZE            48u
+
+/* ForwardWithBbox user buffer offsets (kernel-side mirror in
+ * kernel/nnie_neo/nnie_neo.c). The bbox CTRL_S inserts u32ProposalNum
+ * at +8, shifting NetSegId and the SVP_MEM_INFO_S members by 8 B
+ * compared to plain Forward CTRL_S — see
+ * `hiSVP_NNIE_FORWARD_WITHBBOX_CTRL_S` in hi_nnie.h. */
+#define NNIE_BBOX_OFF_HANDLE         0
+#define NNIE_BBOX_OFF_ASTSRC         8
+#define NNIE_BBOX_OFF_ASTBBOX      776
+#define NNIE_BBOX_OFF_PSTMODEL     872
+#define NNIE_BBOX_OFF_ASTDST       880
+#define NNIE_BBOX_OFF_CTRL        1648
+#define NNIE_BBOX_OFF_INSTANT     1720
 
 static int             g_nnie_fd      = -1;
 static pthread_mutex_t g_nnie_fd_lock = PTHREAD_MUTEX_INITIALIZER;
@@ -305,9 +319,42 @@ HI_S32 HI_MPI_SVP_NNIE_ForwardWithBbox(SVP_NNIE_HANDLE *phSvpNnieHandle,
                                        const SVP_NNIE_FORWARD_WITHBBOX_CTRL_S *pstForwardCtrl,
                                        HI_BOOL bInstant)
 {
-	(void)phSvpNnieHandle; (void)astSrc; (void)astBbox; (void)pstModel;
-	(void)astDst; (void)pstForwardCtrl; (void)bInstant;
-	return HI_ERR_SVP_NNIE_NOT_SURPPORT;
+	uint8_t buf[NNIE_FWD_BBOX_ARG_SIZE];
+	uint64_t model_uva;
+	int fd, src_n, dst_n, bbox_n;
+
+	if (!phSvpNnieHandle || !astSrc || !pstModel ||
+	    !astDst || !pstForwardCtrl)
+		return HI_ERR_SVP_NNIE_NULL_PTR;
+
+	src_n  = (int)pstForwardCtrl->u32SrcNum;
+	dst_n  = (int)pstForwardCtrl->u32DstNum;
+	bbox_n = (int)pstForwardCtrl->u32ProposalNum;
+	if (src_n < 1 || src_n > 16 || dst_n < 1 || dst_n > 16 ||
+	    bbox_n < 0 || bbox_n > 2)
+		return HI_ERR_SVP_NNIE_ILLEGAL_PARAM;
+	if (bbox_n > 0 && !astBbox)
+		return HI_ERR_SVP_NNIE_NULL_PTR;
+
+	fd = nnie_open_dev();
+	if (fd < 0)
+		return nnie_err_to_hi(fd);
+
+	memset(buf, 0, sizeof(buf));
+	memcpy(buf + NNIE_BBOX_OFF_ASTSRC,   astSrc,  NNIE_BLOB_SIZE * src_n);
+	if (bbox_n)
+		memcpy(buf + NNIE_BBOX_OFF_ASTBBOX, astBbox, NNIE_BLOB_SIZE * bbox_n);
+	model_uva = (uint64_t)(uintptr_t)pstModel;
+	memcpy(buf + NNIE_BBOX_OFF_PSTMODEL, &model_uva, 8);
+	memcpy(buf + NNIE_BBOX_OFF_ASTDST,   astDst,  NNIE_BLOB_SIZE * dst_n);
+	memcpy(buf + NNIE_BBOX_OFF_CTRL, pstForwardCtrl, sizeof(*pstForwardCtrl));
+	*(uint32_t *)(buf + NNIE_BBOX_OFF_INSTANT) = bInstant ? 1 : 0;
+
+	if (ioctl(fd, NNIE_IOC_FORWARD_WITH_BBOX, buf) < 0)
+		return nnie_err_to_hi(-errno);
+
+	*phSvpNnieHandle = *(uint32_t *)(buf + NNIE_BBOX_OFF_HANDLE);
+	return HI_SUCCESS;
 }
 
 HI_S32 HI_MPI_SVP_NNIE_Query(SVP_NNIE_ID_E enNnieId,

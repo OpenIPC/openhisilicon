@@ -570,6 +570,19 @@ jobs:
               fi
           done
 
+      - name: Cross-compile NNIE bbox marshalling test
+        # Target-only smoke test (needs /dev/nnie) — we just verify it
+        # links against libnnie_neo so a missing/renamed symbol in the
+        # bbox wrapper trips CI rather than waiting for on-target.
+        run: |
+          make -C libraries/nnie_neo/test test_forward_with_bbox \
+              CC=arm-linux-gnueabi-gcc
+          file libraries/nnie_neo/test/test_forward_with_bbox | grep -q ARM
+          arm-linux-gnueabi-nm libraries/nnie_neo/test/test_forward_with_bbox \
+              | grep -qE ' T HI_MPI_SVP_NNIE_ForwardWithBbox$' \
+              || { echo "FAIL: bbox symbol missing from test binary" >&2; exit 1; }
+          echo "ok: bbox test links cleanly"
+
   #
   # qemu-ive-ops
   #
