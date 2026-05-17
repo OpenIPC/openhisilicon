@@ -46,9 +46,14 @@ per channel).
 
 ## Module loading
 
-`open_mipi_rx.ko` (and on hi3516cv200, `open_isp.ko`) gains a
-`depends=open_openipc_frame_ts` line via `modinfo`, so `depmod` + `modprobe`
-order the load correctly. If using `insmod` directly, insert
+`open_mipi_rx.ko` (and on hi3516cv200, `open_isp.ko`) reference
+`openipc_frame_ts_push` via `EXPORT_SYMBOL`, so modpost stamps
+`depends=open_openipc_frame_ts` into their `modinfo`. `depmod` propagates
+this into `modules.dep`, and `modprobe open_mipi_rx` (used by
+`load_hisilicon`) auto-loads `open_openipc_frame_ts.ko` first.
+
+No `MODULE_SOFTDEP` is needed — the symbol-level dependency is sufficient
+under `modprobe`. If you must use `insmod` directly, insert
 `open_openipc_frame_ts.ko` before `open_mipi_rx.ko`.
 
 ## Test

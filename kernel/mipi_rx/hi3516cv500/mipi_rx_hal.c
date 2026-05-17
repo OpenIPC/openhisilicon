@@ -11,6 +11,8 @@
 #include "hi_mipi.h"
 #include "mipi_rx_reg.h"
 #include "openipc_frame_ts.h"
+#include <linux/reboot.h>
+#include <linux/notifier.h>
 
 #ifdef __cplusplus
 #if __cplusplus
@@ -2425,6 +2427,33 @@ static void mipi_rx_unregister_irq(void)
     osal_free_irq(g_mipi_rx_irq_num, mipi_rx_interrupt_route);
 }
 
+/*
+ * Re-mask vsync IRQs before the kernel reaches machine_restart(). On UP
+ * kernels (hi3516ev300) the level-triggered vsync stream can pin the CPU
+ * long enough during shutdown that reboot() never completes. SMP kernels
+ * (av300) don't deadlock but get the same defensive mask.
+ */
+static int mipi_rx_reboot_notify(struct notifier_block *nb,
+                                 unsigned long action, void *data)
+{
+    int i;
+
+    for (i = 0; i < MIPI_RX_MAX_DEV_NUM; i++) {
+        volatile mipi_ctrl_regs_t *mctl = get_mipi_ctrl_regs(i);
+        volatile lvds_ctrl_regs_t *lctl = get_lvds_ctrl_regs(i);
+
+        mctl->MIPI_CTRL_INT_MSK.u32 = MIPI_CTRL_INT_MASK & ~MIPI_INT_VSYNC;
+        lctl->LVDS_CTRL_INT_MSK.u32 = LVDS_CTRL_INT_MASK & ~LVDS_INT_VSYNC;
+        mctl->MIPI_CTRL_INT_RAW.u32 = MIPI_INT_VSYNC;
+        lctl->LVDS_CTRL_INT_RAW.u32 = LVDS_INT_VSYNC;
+    }
+    return NOTIFY_DONE;
+}
+
+static struct notifier_block mipi_rx_reboot_nb = {
+    .notifier_call = mipi_rx_reboot_notify,
+};
+
 static void mipi_rx_drv_hw_init(void)
 {
     unsigned long mipi_rx_crg_addr;
@@ -2483,6 +2512,7 @@ int mipi_rx_drv_init(void)
     }
 
     mipi_rx_drv_hw_init();
+    register_reboot_notifier(&mipi_rx_reboot_nb);
 
     return HI_SUCCESS;
 
@@ -2496,6 +2526,7 @@ fail0:
 
 void mipi_rx_drv_exit(void)
 {
+    unregister_reboot_notifier(&mipi_rx_reboot_nb);
     mipi_rx_unregister_irq();
     mipi_rx_drv_reg_exit();
     mipi_rx_drv_hw_exit();

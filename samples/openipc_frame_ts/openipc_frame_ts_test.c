@@ -7,6 +7,7 @@
  *          openipc_frame_ts_test.c
  *   run:   ./openipc_frame_ts_test            (log every event)
  *          ./openipc_frame_ts_test -s         (per-second summary only)
+ *          ./openipc_frame_ts_test -t 30      (auto-exit after 30 s)
  *          ./openipc_frame_ts_test -c 0x3     (channels 0 and 1 only)
  */
 #include <errno.h>
@@ -90,24 +91,28 @@ int main(int argc, char **argv)
 {
 	int opt, fd;
 	int summary_only = 0;
+	int seconds = 0;
 	uint32_t mask = 0xFFFFFFFFu;
 	struct chn_state st[MAX_CHN] = {0};
 	time_t last_print = 0;
 	struct pollfd pfd;
 	uint64_t dropped = 0;
 
-	while ((opt = getopt(argc, argv, "sc:")) != -1) {
+	while ((opt = getopt(argc, argv, "sc:t:")) != -1) {
 		switch (opt) {
 		case 's': summary_only = 1; break;
 		case 'c': mask = strtoul(optarg, NULL, 0); break;
+		case 't': seconds = atoi(optarg); break;
 		default:
-			fprintf(stderr, "usage: %s [-s] [-c <mask>]\n", argv[0]);
+			fprintf(stderr, "usage: %s [-s] [-t seconds] [-c <mask>]\n", argv[0]);
 			return 1;
 		}
 	}
 
 	signal(SIGINT, on_signal);
 	signal(SIGTERM, on_signal);
+
+	time_t deadline = seconds > 0 ? time(NULL) + seconds : 0;
 
 	fd = open(DEV_PATH, O_RDONLY);
 	if (fd < 0) {
@@ -127,7 +132,12 @@ int main(int argc, char **argv)
 	while (!g_stop) {
 		struct openipc_frame_ts_event ev;
 		ssize_t n;
-		int pr = poll(&pfd, 1, 1000);
+		int pr;
+
+		if (deadline && time(NULL) >= deadline)
+			break;
+
+		pr = poll(&pfd, 1, 1000);
 
 		if (pr < 0) {
 			if (errno == EINTR)

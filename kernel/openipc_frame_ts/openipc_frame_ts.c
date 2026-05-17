@@ -20,9 +20,17 @@
 
 #include "openipc_frame_ts.h"
 
-#define OPENIPC_FT_NAME       "openipc-frame-ts"
-#define OPENIPC_FT_MAX_CHN    8
-#define OPENIPC_FT_DEPTH      64    /* power of 2 */
+#define OPENIPC_FT_NAME           "openipc-frame-ts"
+#define OPENIPC_FT_MAX_CHN        8
+#define OPENIPC_FT_DEPTH          64        /* power of 2 */
+/*
+ * Drop double-pushes that arrive less than this far apart. Level-triggered
+ * IRQ retrigger or per-SoC quirks (e.g. cv500 firing the vsync IRQ twice
+ * ~30-80 us apart on ~4 % of frames) otherwise leak into userspace as
+ * spurious extra events. 1 ms is safely below any plausible sensor frame
+ * interval (1000 fps).
+ */
+#define OPENIPC_FT_MIN_INTERVAL_NS  1000000
 
 struct openipc_ft_chn {
 	struct openipc_frame_ts_event ring[OPENIPC_FT_DEPTH];
@@ -30,6 +38,7 @@ struct openipc_ft_chn {
 	unsigned int tail;
 	u32 seq;
 	u64 dropped;
+	u64 last_push_ns;
 	spinlock_t lock;
 };
 
@@ -72,6 +81,14 @@ void openipc_frame_ts_push(unsigned int vi_chn)
 	c = &g_chn[vi_chn];
 
 	spin_lock_irqsave(&c->lock, flags);
+	if (c->last_push_ns &&
+	    now_ns - c->last_push_ns < OPENIPC_FT_MIN_INTERVAL_NS) {
+		c->dropped++;
+		spin_unlock_irqrestore(&c->lock, flags);
+		return;
+	}
+	c->last_push_ns = now_ns;
+
 	if (ring_full(c)) {
 		/* drop oldest */
 		c->tail = (c->tail + 1) & (OPENIPC_FT_DEPTH - 1);
