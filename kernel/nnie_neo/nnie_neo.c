@@ -223,6 +223,14 @@ struct nnie_tskbuf {
 static LIST_HEAD(g_nnie_tskbuf_list);
 static DEFINE_MUTEX(g_nnie_tskbuf_lock);
 
+/* Serialize Forward calls. The HW has one channel and our pre-allocated
+ * descriptor MMZ + completion are single-instance globals — concurrent
+ * callers would race on the descriptor write, the START kick and the
+ * IRQ-driven completion wakeup. Vendor's svp_nnie_forward @0x2198 takes
+ * an osal_down_interruptible on its handle's semaphore at function
+ * entry for the same reason. */
+static DEFINE_MUTEX(g_nnie_forward_lock);
+
 static struct nnie_tskbuf *nnie_find_tskbuf_locked(u64 phys)
 {
 	struct nnie_tskbuf *e;
@@ -574,17 +582,12 @@ static long nnie_dispatch_forward(const struct nnie_hw_task *task)
 	if (!g_nnie_regs || !g_nnie_pf_dev)
 		return -ENODEV;
 
-	/* Allocate descriptor from the MMZ pool (same pool vendor uses
-	 * for its pre-allocated ring) instead of dma_alloc_coherent. HW
-	 * may restrict task-addr DMA to specific MMZ-zone phys ranges;
-	 * dma_alloc_coherent on cv500 returned 0xa00fxxxx which is a
-	 * different CMA pool than vendor's 0xa9cxxxxx ring. */
-	/* Allocate 64 KB instead of 64 B so MMZ picks a phys from the
-	 * "high" sub-region (vendor's ring lives at 0xa9cxxxxx, our 4 KB
-	 * allocs land in the fragmented low region 0xa00fxxxx). HW may
-	 * filter task-addr phys by range. */
+	if (mutex_lock_interruptible(&g_nnie_forward_lock))
+		return -ERESTARTSYS;
+
 	if (!g_nnie_desc_kvirt) {
 		pr_warn("nnie_neo: descriptor MMZ not pre-allocated\n");
+		mutex_unlock(&g_nnie_forward_lock);
 		return -ENOMEM;
 	}
 	task_kvirt = g_nnie_desc_kvirt;
@@ -747,6 +750,7 @@ static long nnie_dispatch_forward(const struct nnie_hw_task *task)
 		pr_warn("nnie_neo: Forward timed out (5s)  cause_snap=0x%x  "
 			"STATUS=0x%x START=0x%x TASK_ID=0x%x CLK_GATE=0x%x\n",
 			cause, live_status, live_start, live_task_id, live_clk);
+		mutex_unlock(&g_nnie_forward_lock);
 		return -ETIMEDOUT;
 	}
 	if (cause & NNIE_IRQ_CFG_ERR) {
@@ -775,6 +779,7 @@ static long nnie_dispatch_forward(const struct nnie_hw_task *task)
 			cause);
 		ret = -EIO;
 	}
+	mutex_unlock(&g_nnie_forward_lock);
 	return ret;
 }
 
