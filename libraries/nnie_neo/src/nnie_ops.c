@@ -248,14 +248,117 @@ HI_S32 HI_MPI_SVP_NNIE_UnloadModel(SVP_NNIE_MODEL_S *pstModel)
 	return HI_SUCCESS;
 }
 
+/*
+ * Compute the per-segment task buffer size that Forward / ForwardWithBbox
+ * needs to dispatch a network. Callers MmzAlloc this many bytes per
+ * segment and pass the result via SVP_NNIE_FORWARD_CTRL_S.stTskBuf.
+ *
+ * For CNN single-shot segments the size is exact, computed from the
+ * tail layout the kernel builds in nnie_build_task_tail (see
+ * kernel/nnie_neo/nnie_neo.c):
+ *
+ *   §1 src_stride[SrcNum]·u32  + dst_stride[DstNum]·u32      align16
+ *   §2 dst_phys[DstNum]·u64                                   align16
+ *   §3 src_phys table — entries-per-frame depends on enType:
+ *      enType=0  (S32):              1 u64 per frame
+ *      enType=1  (U8 image, chn=1):  1 u64 per frame
+ *      enType=1  (U8 image, chn=3):  4 u64 quartet per frame
+ *                                    (3 planar channel addrs + 0 slot)
+ *      enType=4  (VEC_S32):          1 u64 per frame
+ *
+ * Verified byte-equivalent to vendor open_nnie.ko on av300:
+ *   mnist  (src=1 chn=1, dst=1, num=1): 16 + 16 + 16 = 48  ✓
+ *   SSD    (src=1 chn=3, dst=12, num=1): 64 + 96 + 32 = 192 ✓
+ *
+ * For SVP_NNIE_NET_TYPE_ROI segments (two-stage detectors —
+ * Faster-RCNN, R-FCN, pvanet), vendor's tskbuf includes a much larger
+ * RPN-decoded proposal table built by HW-specific helpers (~7200
+ * 16-byte records per max_roi=200). The kernel handler for that path
+ * returns -EOPNOTSUPP today, so callers can't actually use the bbox
+ * dispatch — but we still need to give them a number that won't have
+ * them under-allocating if they MmzAlloc speculatively. We
+ * over-provision using the empirical 38-records-per-proposal × u32MaxBboxNum
+ * + a 256 B header pad, which covers pvanet (max_roi=200 → ~122 KB)
+ * with margin. Once #26 lands, this should switch to the exact
+ * vendor formula (svp_nnie_calc_seg_tskbuf_size_kernel at hi_nnie.o:0x3b4c).
+ *
+ * For SVP_NNIE_NET_TYPE_RECURRENT (LSTM): not implemented; returns
+ * NOT_SURPPORT.
+ */
 HI_S32 HI_MPI_SVP_NNIE_GetTskBufSize(HI_U32 u32MaxInputNum, HI_U32 u32MaxBboxNum,
                                      const SVP_NNIE_MODEL_S *pstModel,
                                      HI_U32 au32TskBufSize[],
                                      HI_U32 u32NetSegNum)
 {
-	(void)u32MaxInputNum; (void)u32MaxBboxNum;
-	(void)pstModel; (void)au32TskBufSize; (void)u32NetSegNum;
-	return HI_ERR_SVP_NNIE_NOT_SURPPORT;
+	HI_U32 i, j;
+
+	if (!pstModel || !au32TskBufSize)
+		return HI_ERR_SVP_NNIE_NULL_PTR;
+	if (u32NetSegNum == 0 || u32NetSegNum > SVP_NNIE_MAX_NET_SEG_NUM)
+		return HI_ERR_SVP_NNIE_ILLEGAL_PARAM;
+	if (u32MaxInputNum == 0 || u32MaxInputNum > SVP_NNIE_MAX_INPUT_NUM)
+		return HI_ERR_SVP_NNIE_ILLEGAL_PARAM;
+
+	for (i = 0; i < u32NetSegNum; i++) {
+		const SVP_NNIE_NODE_S *src_nodes;
+		HI_U32 src_n, dst_n;
+		HI_U32 stride_tbl, dst_phys, src_phys, total;
+
+		if (i >= pstModel->u32NetSegNum)
+			return HI_ERR_SVP_NNIE_ILLEGAL_PARAM;
+
+		if (pstModel->astSeg[i].enNetType == SVP_NNIE_NET_TYPE_RECURRENT)
+			return HI_ERR_SVP_NNIE_NOT_SURPPORT;
+
+		src_n = pstModel->astSeg[i].u16SrcNum;
+		dst_n = pstModel->astSeg[i].u16DstNum;
+		if (src_n == 0 || src_n > SVP_NNIE_MAX_INPUT_NUM ||
+		    dst_n == 0 || dst_n > SVP_NNIE_MAX_OUTPUT_NUM)
+			return HI_ERR_SVP_NNIE_ILLEGAL_PARAM;
+
+		stride_tbl = (src_n + dst_n) * 4;
+		stride_tbl = (stride_tbl + 15) & ~15u;
+
+		dst_phys = dst_n * 8;
+		dst_phys = (dst_phys + 15) & ~15u;
+
+		src_nodes = pstModel->astSeg[i].astSrcNode;
+		src_phys = 0;
+		for (j = 0; j < src_n; j++) {
+			HI_U32 chn  = src_nodes[j].unShape.stWhc.u32Chn;
+			HI_U32 per_frame_u64;
+			switch (src_nodes[j].enType) {
+			case SVP_BLOB_TYPE_U8:
+				per_frame_u64 = (chn == 3) ? 4 : 1;
+				break;
+			case SVP_BLOB_TYPE_S32:
+			case SVP_BLOB_TYPE_VEC_S32:
+				per_frame_u64 = 1;
+				break;
+			default:
+				return HI_ERR_SVP_NNIE_NOT_SURPPORT;
+			}
+			src_phys += per_frame_u64 * u32MaxInputNum * 8;
+		}
+		src_phys = (src_phys + 15) & ~15u;
+
+		total = stride_tbl + dst_phys + src_phys;
+
+		/* ROI/bbox segments: over-provision until #26 lands. The
+		 * vendor pvanet tskbuf for max_roi=200 was 120096 B
+		 * (~38 records/proposal × 16 B + 96 B header + small pad).
+		 * Use 48 B/proposal × max_roi + 1 KB header pad for safe
+		 * over-provision. */
+		if (pstModel->astSeg[i].enNetType == SVP_NNIE_NET_TYPE_ROI) {
+			HI_U32 roi_tail = 1024 + u32MaxBboxNum * 48;
+			if (roi_tail > total)
+				total = roi_tail;
+		}
+
+		au32TskBufSize[i] = total;
+	}
+
+	return HI_SUCCESS;
 }
 
 HI_S32 HI_MPI_SVP_NNIE_Forward(SVP_NNIE_HANDLE *phSvpNnieHandle,

@@ -463,8 +463,9 @@ jobs:
 
       - name: Run NNIE LoadModel sanity test
         run: |
-          make -C libraries/nnie_neo/test test_loadmodel
+          make -C libraries/nnie_neo/test test_loadmodel test_get_tskbuf_size
           ./libraries/nnie_neo/test/test_loadmodel
+          ./libraries/nnie_neo/test/test_get_tskbuf_size
 
   #
   # libraries-cross-compile

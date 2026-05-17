@@ -27,10 +27,20 @@ all:
 test_loadmodel: $(SRCS)
 	$(CC) $(CFLAGS) -o $@ $(SRCS) -lpthread
 
-run: test_loadmodel
+test_get_tskbuf_size: test_get_tskbuf_size.c $(ROOT)/libraries/nnie_neo/src/nnie_ops.c
+	$(CC) $(CFLAGS) -o $@ test_get_tskbuf_size.c $(ROOT)/libraries/nnie_neo/src/nnie_ops.c -lpthread
+
+# Target-only — loads a real .wk via mmap and prints GetTskBufSize.
+# Build with cross toolchain; run on cv500/av300 board to cross-check
+# against vendor libnnie's reported sizes for the same model.
+test_get_tskbuf_size_on_target: test_get_tskbuf_size_on_target.c $(ROOT)/libraries/nnie_neo/src/nnie_ops.c
+	$(CC) $(CFLAGS) -o $@ test_get_tskbuf_size_on_target.c $(ROOT)/libraries/nnie_neo/src/nnie_ops.c -lpthread
+
+run: test_loadmodel test_get_tskbuf_size
 	./test_loadmodel
+	./test_get_tskbuf_size
 
 clean:
-	rm -f test_loadmodel
+	rm -f test_loadmodel test_get_tskbuf_size test_get_tskbuf_size_on_target
 
 .PHONY: all run clean
