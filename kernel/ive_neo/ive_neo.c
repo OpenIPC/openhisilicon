@@ -336,11 +336,10 @@ static int ive_build_task_nodes(struct xnn_model_ctx *m,
 			node_idx++;
 			break;
 		case 2: /* FC */
-			/* node+32 and node+44 are vendor-patched per-tile in
-			 * ive_start_task; the formula isn't reverse-engineered.
-			 * The hardcoded values below match a kprobe capture for
-			 * a non-tiled FC layer; tiled FC will produce wrong
-			 * output. Loud one-time warn so users know. */
+			/* node+32 and node+44 are patched per-tile in
+			 * ive_start_task; the tiling formula is not decoded.
+			 * Hardcoded values match a non-tiled FC layer — tiled
+			 * FC produces wrong output. */
 			pr_warn_once("ive_neo: FC layer using non-tiled hardcoded params (node+32=0x400, node+44=0x20); tiled FC will compute incorrect output\n");
 			ive_link_node(node_buf, node_idx, node_phys);
 			*(u8 *)(node + 8) = desc[3];
@@ -549,14 +548,10 @@ static void ive_assert_clock_cv500(void)
 }
 #endif
 
-/* drv_ive_set_mem_speed — memory arbitration register [0x90].
- * Vendor init applies a long bit-field sequence that lands on a
- * specific priority/latency config. Without this [0x90] stays 0
- * and Conv HW hangs waiting for DRAM. Sequence was kprobed from the
- * V4 vendor blob; cv500's IVE block has no Conv unit so the [0x90]
- * write is unnecessary there (and the equivalent cv500 value is
- * unknown — it would matter only once the future NNIE backend lands).
- */
+/* Memory arbitration register [0x90] — priority/latency config for
+ * the Conv unit. Without this the register stays 0 and Conv HW hangs
+ * waiting for DRAM. cv500's IVE block has no Conv unit, so this write
+ * is V4-only. */
 static void ive_setup_mem_speed_ev200(void __iomem *regs)
 {
 	u32 v = readl(regs + 0x90);
@@ -600,17 +595,11 @@ static void ive_hw_init(void)
 		return;
 	}
 
-	/* The block of register writes below comes from the V4 (ev200) blob
-	 * init sequence and was confirmed working on hi3516ev300 in 2026-05.
-	 * On cv500 the same offsets caused a synchronous abort that hung
-	 * the board (offsets 0x34, 0x54, 0x60 are not part of cv500's IVE
-	 * register window — cv500 has the classic IVE block only, while V4
-	 * also has the NEO/XNN unit whose config lives at the same window).
-	 *
-	 * Until we kprobe the cv500 vendor blob to discover the correct
-	 * init sequence, do the minimum on cv500: enable + clear interrupts.
-	 * The HW is left in whatever state open_sys.ko / u-boot put it in,
-	 * which is sufficient for the 24 classic ops we expose. */
+	/* V4 (ev200) init sequence. Offsets 0x34, 0x54, 0x60 are NEO/XNN
+	 * config — present on V4 but not on cv500, where they cause a
+	 * synchronous abort. cv500 only needs the interrupt-enable + clear
+	 * for the 24 classic ops; HW state is otherwise left as open_sys.ko
+	 * / u-boot configured it. */
 	writel(6, g_ive_regs + 0x04);           /* drv_ive_en_int */
 	writel(7, g_ive_regs + 0x08);           /* drv_ive_clear_int */
 #if !defined(hi3516cv500)
@@ -999,7 +988,7 @@ static long ive_xnn_fwd_slice(unsigned long arg)
 static long ive_xnn_query(unsigned long arg)
 {
 	/* arg layout = { u32 handle (in), u32 bBlock (in), u32 done (out) }
-	 * (12 B), per vendor libive HI_MPI_IVE_Query @0x76d8 (writes handle
+	 * (12 B), per vendor libive HI_MPI_IVE_Query (writes handle
 	 * at sp+16, bBlock at sp+20, reads done from sp+24).
 	 *
 	 * All our dispatch paths (classic IVE, HOG, Resize, PerspTrans, LK,
@@ -1064,17 +1053,10 @@ static long ive_xnn_unloadmodel(unsigned long arg)
 
 /* ==== Non-XNN IVE ops ==== */
 
-/* 12-entry src-format-to-HW-encoding LUT, used by node[8] of
- * PerspTrans, Hog, and NCC handlers on cv500. Dumped from cv500
- * vendor blob obj/hi3516cv500/hi_ive.o .rodata @0x560 (R_ARM_MOVW/MOVT
- * relocations from ive_fill_persp_trans_task @0x95cc,
- * ive_fill_hog_task @0x9a24, ive_fill_ncc_task @0x86cc all target the
- * same anchor). en_type > 11 falls through to 7 — the "unknown" entry
- * vendor encoders use as a catchall for unsupported formats.
- *
- * Always compiled in so NCC (which is chip-agnostic) can call it;
- * V4 callers may want to bypass it since the V4 IVE block uses its
- * own LUT (not yet dumped). */
+/* cv500 src-format → HW-encoding LUT, used by node[8] of PerspTrans,
+ * Hog, and NCC handlers. en_type > 11 falls through to 7 (catchall
+ * for unsupported formats). Always compiled in for NCC, which is
+ * chip-agnostic. */
 static const u8 cv500_src_fmt_lut[12] = {
 	0, 7, 1, 2, 7, 7, 7, 7, 7, 7, 3, 4,
 };
@@ -1305,7 +1287,7 @@ static long ive_op_thresh(unsigned long arg)
 
 /* ---- LBP (op=26): arg = {handle(8), src(72), dst(72), ctrl(8)} ---- *
  * Local Binary Pattern. cv500-only HW op (vendor blob symbol
- * ive_fill_lbp_task @0x8830). Field map: node[10]=26, node[11]=enMode,
+ * ive_fill_lbp_task). Field map: node[10]=26, node[11]=enMode,
  * node[12]=threshold (sign-extended in NORMAL mode, zero-extended in
  * ABS mode). Each output pixel is an 8-bit mask of "neighbours brighter
  * by >= threshold" — useful for texture / face descriptors.
@@ -1352,7 +1334,7 @@ static long ive_op_lbp(unsigned long arg)
 
 /* ---- CSC (op=2): arg = {handle(8), src(72), dst(72), ctrl(4), instant(4)} ---- *
  * Color-Space Conversion. cv500-only HW op (vendor blob
- * `ive_fill_csc_task` @0x78cc). 12 modes: BT601/BT709 × YUV2RGB /
+ * `ive_fill_csc_task` ). 12 modes: BT601/BT709 × YUV2RGB /
  * YUV2HSV / YUV2LAB / RGB2YUV.
  *
  * First cut covers 8 modes that need no on-chip table:
@@ -1448,7 +1430,7 @@ static long ive_op_csc_cv500(unsigned long arg)
 
 /* ---- FilterAndCSC (op=3): arg = {handle(8), src(72), dst(72), ctrl(30+pad), instant(4)} ---- *
  * 5x5 filter followed by YUV→RGB color-space conversion. cv500-only
- * HW op (vendor blob `ive_fill_filter_and_csc_task` @0x7b54). Unlike
+ * HW op (vendor blob `ive_fill_filter_and_csc_task` ). Unlike
  * standalone CSC this unit has no on-chip lookup tables — supports
  * YUV2RGB modes only (0..3); HSV/LAB live on the separate CSC unit.
  *
@@ -1745,7 +1727,7 @@ static long ive_op_hist(unsigned long arg)
  *                  pixel-by-pixel to dst.
  *
  * Vendor cv500 instead chains a second HW task (DMA-with-LUT remap)
- * filled by `ive_fill_dma_task` @0x76d0; HW does the LUT remap at the
+ * filled by `ive_fill_dma_task` ; HW does the LUT remap at the
  * IVE block instead of the CPU. We do it on the CPU because (a) the
  * vendor's exact DMA-task field map for mode=1 (LUT remap) is non-
  * trivial to replicate byte-for-byte, and (b) for typical EqualizeHist
@@ -1761,7 +1743,7 @@ static long ive_op_hist(unsigned long arg)
  *   +176:  HI_BOOL instant
  *
  * Validator: stMem.u32Size must be >= 1280 (matches vendor
- * `ive_check_equalize_hist_param` @0xf0e4:f1dc) — 256×u32 bins +
+ * `ive_check_equalize_hist_param` :f1dc) — 256×u32 bins +
  * 256-byte LUT region.
  */
 static long ive_op_equalize_hist(unsigned long arg)
@@ -2403,11 +2385,8 @@ static long ive_op_gmm2(unsigned long arg)
 	return ive_submit_nonxnn(node, buf);
 }
 
-/* ---- NCC (op=?): arg = {handle(8), src1(72), src2(72), dst_mem(24+)} ---- */
-/* HI_MPI_IVE_NCC (ioctl 0xc0b84616) — Normalized Cross-Correlation.
- * Field map decoded from cv500 vendor blob obj/hi3516cv500/hi_ive.o
- * symbol ive_fill_ncc_task @0x86a0 (the previous handler guessed
- * node[10]=18 from nr proximity; vendor actually uses 22). */
+/* ---- NCC: arg = {handle(8), src1(72), src2(72), dst_mem(24+)} ---- */
+/* HI_MPI_IVE_NCC (ioctl 0xc0b84616) — Normalized Cross-Correlation. */
 static long ive_op_ncc(unsigned long arg)
 {
 	u8 *buf = (u8 *)arg;
@@ -2483,9 +2462,7 @@ static long ive_op_ccl(unsigned long arg)
  * node[0..3]. Returns 0 with the handle slot at arg[0..3] cleared
  * to match libive's "already-done" semantics.
  *
- * Arg buffer layout (7264 B, decoded from cv500 vendor blob symbols
- * ive_check_persp_trans_param @0x139e8 and ive_fill_persp_trans_task
- * @0x9584):
+ * Arg buffer (7264 B):
  *   +0:      IVE_HANDLE return slot                    8 B
  *   +8:      IVE_SRC_IMAGE_S src                      72 B
  *   +80:     IVE_RECT_U32_S astRoi[64]              1024 B  (16 B each)
@@ -2532,10 +2509,9 @@ static long ive_op_persp_trans_cv500(unsigned long arg)
 		return -EINVAL;
 
 	/* node[8] = LUT[src.enType], with a PerspTrans-specific override:
-	 * when csc=NONE and src is YUV420SP the encoding becomes 5 (the
-	 * dedicated "pass-through YUV" path the HW uses when no colour
-	 * conversion is requested). Decoded from vendor blob branch at
-	 * ive_fill_persp_trans_task @0x95d4. */
+	 * when csc=NONE and src is YUV420SP the encoding becomes 5 — the
+	 * dedicated "pass-through YUV" path used when no colour
+	 * conversion is requested. */
 	src_fmt = cv500_src_fmt(src_type);
 	if (csc_mode == 0 && src_type == 2)
 		src_fmt = 5;
@@ -2635,8 +2611,7 @@ out:
  * writing per-ROI feature blobs into the IVE_DST_BLOB_S array. Each
  * ROI emits one HW task node; chained submission via ive_submit_chain.
  *
- * Arg buffer layout (4200 B, from cv500 vendor blob symbols
- * ive_check_hog_param + ive_fill_hog_task + ive_hog_proc):
+ * Arg buffer (4200 B):
  *   +0:      IVE_HANDLE return slot                       8 B
  *   +8:      IVE_SRC_IMAGE_S src                         72 B
  *   +80:     IVE_RECT_U32_S astRoi[64]                1024 B  (16 B each)
@@ -2660,10 +2635,9 @@ out:
 #define IVE_HOG_MAX_ROIS 8
 #define IVE_HOG_CELL_LIMIT 136
 
-/* Magic-divide helper for the cell-grid scale field used by HW. The
- * vendor blob does umullhi(roi_w<<11, 0xf0f0f0f1) and extracts bits
- * [22:7] when roi > IVE_HOG_CELL_LIMIT; otherwise the cell-grid scale
- * is the fixed default 0x800. */
+/* Cell-grid scale field. For roi <= IVE_HOG_CELL_LIMIT the scale is
+ * the default 0x800; otherwise it's a magic-divide:
+ * umullhi(roi<<11, 0xf0f0f0f1) bits [22:7]. */
 static u32 ive_hog_cell_scale(u32 roi_dim)
 {
 	if (roi_dim <= IVE_HOG_CELL_LIMIT)
@@ -2796,7 +2770,7 @@ out:
 /* ---- cv500 Resize (HW op 0x30, ioctl 0xc4c0462e) ----
  *
  * Image resize, 1..8 images per call. Vendor blob symbols:
- * ive_resize_proc @0x490c, ive_fill_resize_task @0x91e8.
+ * ive_resize_proc, ive_fill_resize_task.
  *
  * Layout discovery: the vendor passes a 9264-byte user buffer (src[64]
  * + dst[64] + ctrl) via a small ioctl carrying handle + user-pointer.
@@ -2806,7 +2780,7 @@ out:
  * Critical insight from disassembly: fill_resize_task writes a
  * per-image table into a buffer it receives as its 5th arg. That
  * buffer is the user-allocated ctrl.stMem (remapped to kernel virt
- * via cmpi_remap_cached @0x49d8 in vendor). HW reads the table from
+ * via cmpi_remap_cached in vendor). HW reads the table from
  * stMem.phys (which we store in node[16]) at runtime — so the
  * 208-byte HW node is a single descriptor, not a chain of N nodes.
  *
@@ -3007,8 +2981,8 @@ static long ive_op_resize_cv500(unsigned long arg)
  *
  * Lucas-Kanade pyramidal optical flow. Up to 4 pyramid levels
  * (u8MaxLevel = 0..3). Vendor blob symbols: ive_lk_optical_flow_pyr
- * @0x46cc (top), ive_fill_lk_optical_flow_pyr_task @0x8ec4,
- * ive_check_lk_optical_flow_pyr_param @0x129c8.
+ *  (top), ive_fill_lk_optical_flow_pyr_task,
+ * ive_check_lk_optical_flow_pyr_param.
  *
  * Arg buffer (704 bytes, vendor's IVE_CMD_LK_OPT_FLOW=0xc2c0461c):
  *   +0:    HI_HANDLE                                  8
@@ -3033,7 +3007,7 @@ static long ive_op_resize_cv500(unsigned long arg)
  *   u16PtsNum <= 500, u8MaxLevel <= 3, u8IterCnt <= 19, enOutMode <= 2.
  *
  * Per-level pyramid node-field layout (decoded from
- * ive_fill_lk_optical_flow_pyr_task @0x8ec4):
+ * ive_fill_lk_optical_flow_pyr_task):
  *
  *   level 0: node[16]=prev.phys,  node[120]=next.phys,
  *            node[44]=prev.stride, node[50]=next.stride
@@ -3205,9 +3179,9 @@ static long ive_op_lk_optical_flow_pyr_cv500(unsigned long arg)
  * 22656-byte heap buffer (pstObjList->pu8TmpBuf) and ioctls in
  * with an 8-byte arg = { HI_HANDLE *handle, void *tmpBuf_user_va }.
  *
- * Vendor blob symbols (cv500 open_ive.ko): ive_kcf_proc @0x5be0,
- * ive_check_kcf_param @0x14144, ive_get_kcf_hog_param @0x0,
- * ive_fill_kcf_task @0x9718, ive_get_mmz_base_addr @0x7680.
+ * Vendor blob symbols (cv500 open_ive.ko): ive_kcf_proc,
+ * ive_check_kcf_param, ive_get_kcf_hog_param,
+ * ive_fill_kcf_task, ive_get_mmz_base_addr.
  *
  * Staging buffer layout (22656 B, copied user→kernel verbatim):
  *
@@ -3241,7 +3215,7 @@ static long ive_op_lk_optical_flow_pyr_cv500(unsigned long arg)
  * on TRACK iterations). We mirror that check.
  *
  * Static decode of ive_get_kcf_hog_param byte-verified against an
- * av300 kretprobe trace (2026-05) for padding=96, roi=16×16 →
+ * Vendor trace for padding=96, roi=16×16 →
  * hog_params=[0x800,0x800, 0x10,0x10, -1024,-1024, 56,56, 288].
  */
 #define IVE_KCF_STAGE_BYTES   22656u    /* 0x5880, vendor copy_from_user size */
@@ -3252,7 +3226,7 @@ static long ive_op_lk_optical_flow_pyr_cv500(unsigned long arg)
 #define IVE_KCF_TRACK_OFF     11336u    /* offset of TRACK slot array */
 #define IVE_KCF_CTRL_OFF      22608u    /* offset of IVE_KCF_PRO_CTRL_S */
 
-/* Replicates vendor ive_get_kcf_hog_param @0x0 (32-byte output). Derives
+/* Replicates vendor ive_get_kcf_hog_param (32-byte output). Derives
  * scan-window parameters from u3q5Padding + ROI. */
 static void ive_kcf_compute_hog_param(u32 padding,
 				      const u8 *roi,    /* 16-byte RECT_S24Q8_S */
@@ -3279,10 +3253,9 @@ static void ive_kcf_compute_hog_param(u32 padding,
 	*(u32 *)(out + 16) = nw << 3;
 	*(u32 *)(out + 20) = nh << 3;
 
-	/* X scale field (hog_params[0]) and X cells (hog_params[4]).
-	 * Cleared low/high bits mirror vendor's `bic r3, r3, #0xc0000001`
-	 * — this just makes r3 = (nw*2) with bits 0,30,31 forced 0 before
-	 * comparing to 32. For nw up to 0x4000 the bic is a no-op. */
+	/* X scale field (hog_params[0]) and X cell count (hog_params[4]).
+	 * The `& ~0xc0000001u` mirrors vendor's `bic r3, r3, #0xc0000001`
+	 * — for nw up to 0x4000 the mask is a no-op. */
 	r3x = ((nw << 1) & ~0xc0000001u) - 2;
 	if (r3x > 32) {
 		u32 mul = (u32)(((u64)(nw << 14) * 0xf0f0f0f1ULL) >> 32) >> 7;
@@ -3319,7 +3292,7 @@ static void ive_kcf_compute_hog_param(u32 padding,
 	*(u32 *)(out + 28) = 0;
 }
 
-/* Build one 208-byte KCF HW task node. Mirrors ive_fill_kcf_task @0x9718
+/* Build one 208-byte KCF HW task node. Mirrors ive_fill_kcf_task
  * field-by-field. obj is a 176-byte KCF_OBJ_S, ctrl is the 40-byte
  * KCF_PRO_CTRL_S, src is the 72-byte IVE_IMAGE_S, hog_params is the
  * 32-byte struct produced by ive_kcf_compute_hog_param above.
@@ -3401,7 +3374,7 @@ static void ive_kcf_fill_node(u8 *node, const u8 *src, const u8 *obj,
 
 	/* node[172]: (1<<40) / ((u0q8Sigma+1)^2 * L*H*31), where L,H are
 	 * scan-range-derived cell counts. Replicates the two-stage
-	 * osal_div_u64 sequence in ive_fill_kcf_task @0x98c0-0x98fc. Use
+	 * osal_div_u64 sequence in ive_fill_kcf_task-0x98fc. Use
 	 * div_u64 (not bare /) — ARM doesn't have a 64-bit udiv insn and
 	 * the kernel doesn't export __aeabi_uldivmod. */
 	{
@@ -3646,21 +3619,13 @@ static long ive_dispatch(unsigned int cmd, unsigned long arg)
 
 	/* ---- Silent-stub ops ----
 	 *
-	 * Audited 2026-05-13 against obj/hi3516cv500/hi_ive.o symbol table
-	 * + ive_ioctl dispatcher. Each op is in one of three categories:
-	 *
-	 * (a) cv500 HW supports it, we just haven't wired it. Vendor blob
-	 *     has both ive_check_<op>_param AND ive_fill_<op>_task. Worth
-	 *     porting — follow-up issues opened. Stub returns 0 to keep
-	 *     libive's handle-check happy until impl lands.
-	 *
-	 * (b) cv500 reuses another op's HW path with a flag override
-	 *     (e.g., EqualizeHist calls ive_fill_hist_task with
-	 *     node[7]=0x61 + an extra LUT remap at node[200]).
-	 *
-	 * (c) cv500 has no symbols for it — vendor genuinely doesn't
-	 *     dispatch HW. Userspace either falls back to CPU compute
-	 *     or rejects. Silent stub is correct here.
+	 * Three categories:
+	 *   (a) HW supports it, not yet wired here — stub returns 0 to
+	 *       keep libive's handle-check happy.
+	 *   (b) Vendor reuses another op's HW path with a flag override
+	 *       (e.g. EqualizeHist on hist).
+	 *   (c) Vendor doesn't dispatch to HW — userspace falls back to
+	 *       CPU compute or rejects. Silent stub is correct.
 	 */
 
 	/* (b) reuses ive_fill_hist_task with node[7]=0x61 + dst-image overrides. */
@@ -3693,25 +3658,19 @@ static long ive_dispatch(unsigned int cmd, unsigned long arg)
 		return 0;
 #endif
 
-	/* (c) GMM (single-Gaussian) — vendor cv500 ive_ioctl has no
-	 * dispatch case for ioctl 0x4618 (verified via objdump grep of
-	 * the ioctl-nr movw immediates). Userspace libive.so likely
-	 * routes single-Gaussian through GMM2 with mixture=1, or
-	 * computes on CPU. Silent stub is correct. */
+	/* (c) GMM (single-Gaussian): cv500 has no dispatch case for
+	 * 0x4618. Userspace libive routes through GMM2 with mixture=1
+	 * or computes on CPU. */
 	case 0xc1184618u:      return 0;  /* GMM */
 
-	/* (c) cv500 vendor blob has no symbols at all for these — HW
-	 * unit either doesn't exist or vendor never wired userspace
-	 * to it. Silent stub is correct; libive presumably falls back
-	 * to CPU implementation or returns its own error. */
+	/* (c) No HW dispatch on cv500; userspace falls back to CPU. */
 	case 0xc138461du:      return 0;  /* GradFg */
 	case 0xc178461eu:      return 0;  /* MatchBgModel */
 	case 0xc1d8461fu:      return 0;  /* UpdateBgModel */
 	case 0xc0b04621u:      return 0;  /* ANN_MLP_Predict */
 	case 0xc0c04622u:      return 0;  /* SVM_Predict */
 #ifndef IVE_STANDALONE
-	/* cv500-only IVE ops. Wire numbers + HW op codes captured from
-	 * cv500's libive.so + vendor hi_ive.o blob (2026-05). */
+	/* cv500-only IVE ops. */
 	case 0xdc604635u:      /* HI_MPI_IVE_PerspTrans (cv500 op 0x35, arg 7264 B) */
 #if defined(hi3516cv500)
 		/* Real HW dispatch — builds 1..8 chained nodes, submits,
