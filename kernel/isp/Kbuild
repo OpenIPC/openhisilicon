@@ -13,6 +13,10 @@ SRCS := \
 
 ccflags-y += -I$(src)/$(MOD_NAME)/include
 ccflags-y += -I$(src)/$(MOD_NAME)/arch/include
+# For openipc_frame_ts.h (openhisilicon#155). Header path is consistent
+# across all per-SoC kbuilds, so add it here in the shared ISP Kbuild
+# instead of repeating in each.
+ccflags-y += -I$(src)/../include
 
 OBJS := $(SRCS:%.c=%.o) $(ASM_SRCS:%.S=%.o)
 

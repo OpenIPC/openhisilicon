@@ -2359,7 +2359,7 @@ static int mipi_rx_interrupt_route(int irq, void *dev_id)
             lvds_ctrl_regs->LVDS_CTRL_INT_RAW.u32 = LVDS_INT_VSYNC;
         }
         if (vsync)
-            openipc_frame_ts_push(i);
+            openipc_frame_ts_push(i, OPENIPC_FT_EVT_MIPI_FS);
     }
 
     for (i = 0; i < MIPI_RX_MAX_DEV_NUM; i++) {

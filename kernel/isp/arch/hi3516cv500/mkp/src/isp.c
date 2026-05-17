@@ -10,6 +10,7 @@
 #include "hi_common.h"
 #include "hi_comm_isp.h"
 #include "isp_drv_defines.h"
+#include "openipc_frame_ts.h"
 #include "mkp_isp.h"
 #include "isp.h"
 #include "isp_drv.h"
@@ -6839,6 +6840,16 @@ hi_s32 isp_drv_int_status_process(hi_vi_pipe vi_pipe, hi_s32 vi_dev, isp_drv_ctx
 
     isp_raw_int    = io_rw_fe_address(vi_pipe, ISP_INT_FE);
     isp_int_status = isp_raw_int & io_rw_fe_address(vi_pipe, ISP_INT_FE_MASK);
+
+    /*
+     * openipc_frame_ts: push an ISP_FEND event when the ISP front-end
+     * finished receiving the last row from the sensor. Paired with
+     * MIPI_FS pushed by the MIPI RX driver at frame-start, consumers
+     * see two events per frame and can compute sensor readout duration
+     * as wall_ns[FEND] − wall_ns[FS].
+     */
+    if (isp_int_status & ISP_INT_FE_FEND)
+        openipc_frame_ts_push(vi_pipe, OPENIPC_FT_EVT_ISP_FEND);
 
     int_sch.isp_int_status  = isp_int_status;
     int_sch.port_int_status = port_int_f_start;
