@@ -4,20 +4,19 @@
  * ive_ops.c — HI_MPI_IVE_* ioctl wrappers for libive_neo.
  *
  * Each wrapper builds an ioctl arg buffer matching vendor libive.so's
- * stack layout (verified against IDA decomp at ~/libive/mpi_ive.o.c) and
- * dispatches to /dev/ive. The kernel side (ive_neo.ko) reads the same
- * buffer offsets, so the wire protocol matches byte-for-byte.
+ * stack layout and dispatches to /dev/ive. The kernel side (ive_neo.ko)
+ * reads the same offsets so the wire protocol matches byte-for-byte.
  *
- * Generic arg-buffer layout for "single src + single dst + ctrl + instant":
- *   [+0]   u32 handle (out: kernel writes resulting handle)
- *   [+4]   u32 pad
- *   [+8]   u8  src[72]    (IVE_IMAGE_S)
- *   [+80]  u8  dst[72]    (IVE_IMAGE_S)
- *   [+152] u8  ctrl[N]    (per-op control struct)
- *   [+152+aligned(N,4)] u32 instant
+ * Generic arg buffer for "single src + single dst + ctrl + instant":
+ *   [+0]    u32 handle (out: kernel writes resulting handle)
+ *   [+4]    u32 pad
+ *   [+8]    u8  src[72]    (IVE_IMAGE_S)
+ *   [+80]   u8  dst[72]    (IVE_IMAGE_S)
+ *   [+152]  u8  ctrl[N]    (per-op control struct)
+ *   [+152+aligned(N,4)]  u32 instant
  *
- * The ioctl returns 0 on success, in which case the handle word at +0 is
- * the new IVE handle the caller should pass to HI_MPI_IVE_Query().
+ * The ioctl returns 0 on success; the handle word at +0 is then the
+ * IVE handle the caller passes to HI_MPI_IVE_Query().
  */
 #include "mpi_ive.h"
 #include "ive_internal.h"
@@ -30,7 +29,7 @@
 #include <errno.h>
 #include <math.h>
 
-/* ioctl cmd numbers (authoritative — extracted from libive.so decomp) */
+/* ioctl cmd numbers — match vendor libive.so. */
 #define IVE_CMD_DMA            0xC0684600u
 #define IVE_CMD_FILTER         0xC0B84601u
 #define IVE_CMD_CSC            0xC0A04602u
@@ -788,7 +787,7 @@ HI_S32 HI_MPI_IVE_UpdateBgModel(IVE_HANDLE *h, IVE_SRC_IMAGE_S *cur,
 
 /* cv500 LK Optical Flow Pyramid — multi-level Lucas-Kanade tracker.
  * Arg buffer layout decoded from vendor ive_fill_lk_optical_flow_pyr_task
- * @0x8ec4 (reads at fixed offsets from arg base). 704-byte total —
+ *  (reads at fixed offsets from arg base). 704-byte total —
  * matches the IVE_CMD_LK_OPT_FLOW=0xc2c0461c size encoding. */
 #define LK_OFF_PREV     8
 #define LK_OFF_NEXT     296
@@ -1145,11 +1144,11 @@ HI_S32 HI_MPI_IVE_CNN_GetResult(IVE_SRC_DATA_S *pstSrc, IVE_DST_MEM_INFO_S *pstD
  * follow-up PRs:
  *   - 9 userspace helpers (trig tables, list mgmt, bbox math)
  *   - KCF_Process needs kernel HW dispatch (vendor blob symbol
- *     ive_fill_kcf_task @0x9718 in obj/hi3516cv500/hi_ive.o)
+ *     ive_fill_kcf_task)
  * =================================================================== */
 
 /* Per-object workspace size, decoded from cv500 vendor libive.so
- * HI_MPI_IVE_KCF_GetMemSize @0xd4cc:
+ * HI_MPI_IVE_KCF_GetMemSize:
  *   `*pu32Size = u32MaxObjNum * 0xda10` (= 55824 bytes/obj).
  * Each object's workspace holds its cosine windows, Gaussian peak,
  * HOG features, alpha-FFT state, dst slot, plus a shared FFT scratch
@@ -1184,8 +1183,8 @@ HI_S32 HI_MPI_IVE_KCF_GetMemSize(HI_U32 u32MaxObjNum, HI_U32 *pu32Size)
 #define KCF_STASH_BYTES      24u
 #define KCF_TMP_BUF_BYTES (KCF_STAGE_BYTES + KCF_STASH_BYTES)
 
-/* Mirrors cv500 vendor libive.so HI_MPI_IVE_KCF_CreateObjList @0xd588 +
- * ive_create_obj_list @0x154e8. Initializes the obj list data structure:
+/* Mirrors cv500 vendor libive.so HI_MPI_IVE_KCF_CreateObjList +
+ * ive_create_obj_list. Initializes the obj list data structure:
  *
  *   - 3 list heads (free, train, track) become empty circular sentinels
  *   - pstObjNodeBuf := malloc(184 * N), all N nodes pushed to free list
@@ -1193,7 +1192,7 @@ HI_S32 HI_MPI_IVE_KCF_GetMemSize(HI_U32 u32MaxObjNum, HI_U32 *pu32Size)
  *   - counters: u32FreeObjNum=N, train=track=0, u32MaxObjNum=N
  *   - enListState := CREATE
  *
- * Critical runtime observation (verified via kcf_probe on av300 board):
+ * Critical runtime observation (verified against vendor runtime):
  * pstMem is NOT touched here. Vendor mallocs both pstObjNodeBuf and
  * pu8TmpBuf from the C heap. pstMem usage is deferred to GetTrainObj
  * (which slices it for stHogFeature/stAlpha/stDst per obj).
@@ -1284,8 +1283,8 @@ HI_S32 HI_MPI_IVE_KCF_CreateObjList(IVE_MEM_INFO_S *pstMem, HI_U32 u32MaxObjNum,
     return HI_SUCCESS;
 }
 
-/* Mirrors cv500 vendor libive.so HI_MPI_IVE_KCF_DestroyObjList @0xd668
- * + ive_destroy_obj_list @0x15850: re-inits all 3 list heads as empty
+/* Mirrors cv500 vendor libive.so HI_MPI_IVE_KCF_DestroyObjList
+ * + ive_destroy_obj_list: re-inits all 3 list heads as empty
  * sentinels, zeroes counters and (W,H), free()s pstObjNodeBuf and
  * pu8TmpBuf, sets enListState=DESTORY. Idempotent on already-DESTORY. */
 HI_S32 HI_MPI_IVE_KCF_DestroyObjList(IVE_KCF_OBJ_LIST_S *pstObjList)
@@ -1326,7 +1325,7 @@ HI_S32 HI_MPI_IVE_KCF_DestroyObjList(IVE_KCF_OBJ_LIST_S *pstObjList)
 }
 
 /* CreateGaussPeak constants — decoded from vendor `HI_MPI_IVE_KCF_CreateGaussPeak`
- * @0xd738 + internal cell helper @0x2ca4.
+ *  + internal cell helper.
  *
  * Output buffer layout (455680 B minimum for padding=96):
  *   [0 .. 4055]:    169 × IVE_MEM_INFO_S table (13×13 grid)
@@ -1349,7 +1348,7 @@ HI_S32 HI_MPI_IVE_KCF_DestroyObjList(IVE_KCF_OBJ_LIST_S *pstObjList)
  *   25600 + 81920 + 81920 + 262144 + 4064 = 455648 ≤ 455680  (32 B tail pad)
  *
  * Cell-data contents (the actual Gaussian peak coefficients per cell)
- * come from vendor's second-phase loop @0xd7e0 — VFP sqrt+exp math with
+ * come from vendor's second-phase loop — VFP sqrt+exp math with
  * constants {d8=4096.0, d10=−0.5, s24=1/32, s23=0.1}. Not yet ported.
  * Cells stay zero-initialized; downstream KCF_Process will read zero
  * peaks until the math phase lands in a follow-up stage. The mem-info
@@ -1366,8 +1365,9 @@ HI_S32 HI_MPI_IVE_KCF_CreateGaussPeak(HI_U3Q5 u3q5Padding,
     HI_U64 phys;
     HI_U32 row, col;
 
-    (void)u3q5Padding;  /* placement of the mem-info table doesn't depend on
-                         * padding; only the cell DATA values do (TODO). */
+    /* u3q5Padding affects cell DATA values, not the mem-info table
+     * placement; the cell-value scaling is not yet implemented. */
+    (void)u3q5Padding;
 
     IVE_CHECK_NULL("HI_MPI_IVE_KCF_CreateGaussPeak", pstGaussPeak, "pstGaussPeak");
     if (pstGaussPeak->u32Size < KCF_GP_MIN_SIZE) {
@@ -1422,7 +1422,7 @@ HI_S32 HI_MPI_IVE_KCF_CreateGaussPeak(HI_U3Q5 u3q5Padding,
              * (dy, dx) ∈ buf_w_d range, but clamped to ±half_cell_d before
              * squaring → flat-plateau edges for cells smaller than buf_w_d.
              *
-             * Verified byte-equivalent vs vendor cell-by-cell on av300. */
+             * Verified byte-equivalent vs vendor cell-by-cell. */
             {
                 HI_U32 cell_dim_w = col * 2 + 8;
                 HI_U32 cell_dim_h = row * 2 + 8;
@@ -1473,32 +1473,21 @@ HI_S32 HI_MPI_IVE_KCF_CreateGaussPeak(HI_U3Q5 u3q5Padding,
     return HI_SUCCESS;
 }
 
-/* Hann-window generator, decoded from cv500 vendor libive.so internal
- * helper @0x2e08 and verified against on-target output. Writes a u16
- * cosine-window (Hann shape) into `dst` for size N, padding the result
- * to a fixed buffer width:
+/* Hann-window generator for KCF. Writes a u16 cosine window of N
+ * samples into `dst`, padded to a fixed buffer width:
  *
- *   if (N < 17): buf_width = 16 samples (32 B), step = 8
- *   else      : buf_width = 32 samples (64 B), step = 16
+ *   N < 17: buf_width = 16 samples (32 B), step = 8
+ *   else  : buf_width = 32 samples (64 B), step = 16
  *
- * The window samples at buf index k = clamp(k - step, -N/2, N/2-1) + N/2
- * give the source position; for k outside that range the value is the
- * edge sample (flat padding). The cosine itself is:
+ * The buf index k maps to source position clamp(k - step, -N/2, N/2-1)
+ * + N/2; outside that range the value is the edge sample (flat
+ * padding). The cosine is:
  *
  *   v = (1.0 - cos(2π * idx / (N - 1))) * 0.5 * 16384, cast to u16
  *
- * Constants verified at .rodata vendor offsets:
- *   0x2ec0: 2π (double 0x401921FB54442D18)
- *   0x2ec8: 16384.0 (double 0x40D0000000000000)
- *
- * Denominator is (N - 1), not N — vendor's `vcvt.f64.u32 d8, s16` is
- * fed by `sub r3, r0, #1` at function entry. Easy to miss in static
- * decode; the on-target probe (kcf_probe2) showed u16[5]=0x0c0c=3084
- * for N=8 which matches `(1 - cos(2π*1/7)) * 0.5 * 16384 = 3084.5`
- * exactly, ruling out the prior N-denominator + 65536-scale guess.
- *
- * Float ops use double precision to match vendor's VFP d-register path.
- */
+ * Denominator is (N - 1), not N. Verified against vendor output for
+ * N=8: u16[5]=0x0c0c=3084 matches (1 - cos(2π/7)) * 0.5 * 16384.
+ * Double precision required to match vendor's VFP d-register path. */
 static void ive_kcf_gen_hann_window(HI_U32 u32N, HI_U16 *pu16Dst)
 {
     HI_U32 cap  = (u32N < 17) ? 16 : 32;
@@ -1523,7 +1512,7 @@ static void ive_kcf_gen_hann_window(HI_U32 u32N, HI_U16 *pu16Dst)
     }
 }
 
-/* Mirrors cv500 vendor libive.so HI_MPI_IVE_KCF_CreateCosWin @0xda38.
+/* Mirrors cv500 vendor libive.so HI_MPI_IVE_KCF_CreateCosWin.
  *
  * Generates 13 Hann windows for ROI sizes N ∈ {8, 10, 12, …, 32}, two
  * copies (X and Y) per size. Each size's output occupies a 64-byte
@@ -1560,7 +1549,7 @@ HI_S32 HI_MPI_IVE_KCF_CreateCosWin(IVE_DST_MEM_INFO_S *pstCosWinX,
     return HI_SUCCESS;
 }
 
-/* Per-obj buffer sizes inside pstMem (decoded via kcf_probe4 on av300).
+/* Per-obj buffer sizes inside pstMem (decoded from vendor runtime).
  * pstMem is structure-of-arrays: all N stHogFeature[] first, then all
  * stAlpha[], then all stDst[]. */
 #define KCF_HOG_FEATURE_BYTES 47616u
@@ -1570,7 +1559,7 @@ HI_S32 HI_MPI_IVE_KCF_CreateCosWin(IVE_DST_MEM_INFO_S *pstCosWinX,
 /* CosWin slot is 64 bytes (= 32 u16 elements) regardless of cell_dim. */
 #define KCF_COSWIN_SLOT_BYTES 64u
 
-/* Mirrors cv500 vendor libive.so HI_MPI_IVE_KCF_GetTrainObj @0xdaec.
+/* Mirrors cv500 vendor libive.so HI_MPI_IVE_KCF_GetTrainObj.
  *
  * For each ROI in astRoiInfo[i] (i < u32ObjNum):
  *   1. Pop first node from pstObjList->stFreeObjList.
@@ -1752,8 +1741,8 @@ HI_S32 HI_MPI_IVE_KCF_GetTrainObj(HI_U3Q5 u3q5Padding, IVE_ROI_INFO_S astRoiInfo
 /* KCF_Process — kernel HW dispatch via ioctl 0xc0084633.
  *
  * Userspace marshalling: libive packs pstObjList->pu8TmpBuf with this
- * staging layout (verified by tracing vendor libive @0xdee8 + libive-side
- * memcpy_s offsets and a kprobe trace of ive_fill_kcf_task on av300):
+ * staging layout (verified by tracing vendor libive + libive-side
+ * memcpy_s offsets and a vendor trace of ive_fill_kcf_task):
  *
  *   TmpBuf[   0 ..   71]   IVE_IMAGE_S (pstSrc copy, 72 B)
  *   TmpBuf[  72 ..]        IVE_KCF_OBJ_S array (TRAIN slots,  176 B each)
@@ -1768,7 +1757,7 @@ HI_S32 HI_MPI_IVE_KCF_GetTrainObj(HI_U3Q5 u3q5Padding, IVE_ROI_INFO_S astRoiInfo
  * 8-byte arg goes via copy_from_user; the staging buffer must already be
  * MMZ memory (mmap-shared) so HW DMA can touch it without an extra copy.
  *
- * Kernel HW task node — 208 B, fully decoded via av300 kprobe trace of
+ * Kernel HW task node — 208 B, fully decoded via vendor trace of
  * ive_fill_kcf_task(src=TmpBuf, obj_idx, hog_params, is_track, node).
  * On entry r5 = TmpBuf + obj_idx*176 + (is_track ? 11336 : 72). r6 =
  * 32-byte hog_params (derived from u3q5Padding + ROI by vendor
@@ -1964,7 +1953,7 @@ static void ive_kcf_put_track(IVE_KCF_OBJ_LIST_S *list,
     list->u32TrackObjNum++;
 }
 
-/* Mirrors cv500 vendor libive.so HI_MPI_IVE_KCF_GetObjBbox @0xe2bc.
+/* Mirrors cv500 vendor libive.so HI_MPI_IVE_KCF_GetObjBbox.
  *
  * Two phases:
  *  1. Walk EXISTING track list. For each track node:
@@ -2065,7 +2054,7 @@ free_track:
 }
 
 /* HOG feature-grid dim helper, decoded from cv500 vendor
- * `ive_get_hog_feature_rect` @0x13a7c. Returns the HOG cell-grid
+ * `ive_get_hog_feature_rect` . Returns the HOG cell-grid
  * width/height that a ROI of (w, h) maps to after the u3q5Padding
  * multiplier is applied. Cells are 4x4 pixels, with a clamp at 136
  * pixels per axis and a "minus 2 cells" border subtraction.
@@ -2088,7 +2077,7 @@ static void ive_kcf_hog_grid(const IVE_ROI_INFO_S *pstRoi, HI_U8 u3q5Padding,
 }
 
 /* Mirrors cv500 vendor libive.so HI_MPI_IVE_KCF_JudgeObjBboxTrackState
- * @0xe5d4: a bbox is still tracking the same object iff its HOG cell
+ * : a bbox is still tracking the same object iff its HOG cell
  * grid (after padding) has the same dimensions as the candidate ROI's.
  * Vendor uses `ive_get_hog_feature_rect` for both sides and compares
  * the W,H output. */
@@ -2116,7 +2105,7 @@ HI_S32 HI_MPI_IVE_KCF_JudgeObjBboxTrackState(IVE_ROI_INFO_S *pstRoiInfo,
     return HI_SUCCESS;
 }
 
-/* Mirrors cv500 vendor libive.so HI_MPI_IVE_KCF_ObjUpdate @0xe6f4.
+/* Mirrors cv500 vendor libive.so HI_MPI_IVE_KCF_ObjUpdate.
  *
  * For each bbox in input array:
  *   - if bTrackOk == HI_TRUE:
