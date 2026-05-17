@@ -688,6 +688,135 @@ jobs:
           retention-days: 7
 
   #
+  # qemu-nnie-forward
+  #
+  # Mirrors qemu-ive-ops for the NNIE block: boots an ARM initramfs
+  # under qemu-system-arm with the hisi-nnie machine model
+  # (widgetii/qemu-hisilicon, added alongside hisi-ive) and runs a
+  # register-level smoke test against it.
+  #
+  # The test binary (kernel/nnie_neo/test/qemu/test-nnie-forward.c) is
+  # static-linked, drives the NNIE block via /dev/mem + anonymous-page
+  # MMZ, builds a 64-byte HW task descriptor + tskbuf tail, kicks
+  # START, polls for the finish IRQ, and asserts the dst blob holds
+  # the model's known-good mnist score vector.
+  #
+  # NNIE is cv500-only on the cv500/av300 SoCs — no equivalent on V4,
+  # so the matrix is half the size of the IVE one.
+  #
+  qemu-nnie-forward:
+    name: QEMU NNIE forward regression (${{ matrix.platform.machine }})
+    runs-on: ubuntu-latest
+    needs: libraries-cross-compile
+    strategy:
+      fail-fast: false
+      matrix:
+        platform:
+          - machine: hi3516cv500
+            firmware: hi3516cv500
+          - machine: hi3516av300
+            firmware: hi3516cv500   # av300 uses the cv500 firmware build
+    env:
+      # Bump when widgetii/qemu-hisilicon changes the hisi-nnie model.
+      # Initial NNIE support landed alongside hi3516av300 SoC config.
+      QEMU_HISILICON_SHA: master
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install QEMU build deps + ARM toolchain
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential ninja-build meson pkg-config \
+            libglib2.0-dev libpixman-1-dev libfdt-dev zlib1g-dev libslirp-dev \
+            python3 python3-venv cpio \
+            gcc-arm-linux-gnueabi libc6-dev-armel-cross
+
+      - name: Clone qemu-hisilicon
+        run: |
+          git clone --depth 1 https://github.com/widgetii/qemu-hisilicon.git /tmp/qemu-hisilicon
+          cd /tmp/qemu-hisilicon
+          echo "SHA=$(git rev-parse HEAD)" >> $GITHUB_ENV
+
+      - name: Cache QEMU build
+        id: cache-qemu
+        uses: actions/cache@v4
+        with:
+          path: /tmp/qemu-hisilicon/qemu-src/build/qemu-system-arm
+          key: qemu-hisilicon-${{ env.SHA }}-ubuntu-latest
+
+      - name: Build QEMU (if cache miss)
+        if: steps.cache-qemu.outputs.cache-hit != 'true'
+        run: |
+          cd /tmp/qemu-hisilicon
+          bash qemu/setup.sh
+
+      - name: Verify hisi-nnie machine model exists
+        run: |
+          # If the qemu-hisilicon SHA pinned above predates the NNIE
+          # model, qtree won't list `hisi-nnie` and the test below
+          # would silently read zeros from MMIO. Fail fast here.
+          QEMU=/tmp/qemu-hisilicon/qemu-src/build/qemu-system-arm
+          chmod +x $QEMU
+          if ! strings $QEMU | grep -qx "hisi-nnie"; then
+              echo "FAIL: qemu-system-arm has no hisi-nnie device type — bump QEMU_HISILICON_SHA" >&2
+              exit 1
+          fi
+          echo "ok: hisi-nnie type present in $QEMU"
+
+      - name: Build test-nnie-forward.cpio
+        run: |
+          make -C kernel/nnie_neo/test/qemu CC=arm-linux-gnueabi-gcc
+          ls -la kernel/nnie_neo/test/qemu/test-nnie-forward kernel/nnie_neo/test/qemu/test-nnie-forward.cpio
+
+      - name: Download OpenIPC kernel
+        run: |
+          mkdir -p /tmp/openipc
+          cd /tmp/openipc
+          curl -sSLf -o fw.tgz \
+            https://github.com/OpenIPC/firmware/releases/download/latest/openipc.${{ matrix.platform.firmware }}-nor-lite.tgz
+          tar xzf fw.tgz
+          ls uImage.${{ matrix.platform.firmware }}
+
+      - name: Run NNIE Forward regression under QEMU
+        timeout-minutes: 3
+        run: |
+          QEMU=/tmp/qemu-hisilicon/qemu-src/build/qemu-system-arm
+          timeout 60 $QEMU \
+              -M ${{ matrix.platform.machine }} -m 128M \
+              -kernel /tmp/openipc/uImage.${{ matrix.platform.firmware }} \
+              -initrd kernel/nnie_neo/test/qemu/test-nnie-forward.cpio \
+              -nographic -serial mon:stdio \
+              -append "console=ttyAMA0,115200 mem=96M mmz_allocator=hisi mmz=anonymous,0,0x46000000,32M" \
+              < /dev/zero 2>&1 | tee nnie-output.txt || true
+
+          echo
+          echo "=== Result line ==="
+          grep -E "Result: [0-9]+/[0-9]+ passed" nnie-output.txt || {
+              echo "FAIL: no 'Result: N/N passed' in QEMU output" >&2
+              echo "--- last 30 lines ---"
+              tail -30 nnie-output.txt
+              exit 1
+          }
+
+          # All 4 sub-tests must pass (1 poweron + 3 forwards). A
+          # partial pass means the model regressed somewhere — fail
+          # the job instead of silently accepting a smaller number.
+          if ! grep -qE "Result: 4/4 passed" nnie-output.txt; then
+              echo "FAIL: NNIE regression test reported less than 4/4" >&2
+              tail -30 nnie-output.txt
+              exit 1
+          fi
+
+      - name: Upload QEMU output
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: qemu-nnie-forward-log-${{ matrix.platform.machine }}
+          path: nnie-output.txt
+          retention-days: 7
+
+  #
   # qemu-boot
   #
   # Matrix job that boots OpenIPC firmware for each supported platform
