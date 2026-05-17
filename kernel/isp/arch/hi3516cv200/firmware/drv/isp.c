@@ -52,6 +52,7 @@
 
 #ifdef HI_GPIO_I2C
 #include "gpioi2c_ex.h"
+#include "openipc_frame_ts.h"
 #else
 #include "hi_i2c.h"
 #include "hi_spi.h"
@@ -2625,6 +2626,7 @@ static inline irqreturn_t ISP_ISR(int irq, void *id)
     }
     if (u32PortIntStatus)
     {
+        openipc_frame_ts_push(IspDev);
         HW_REG(IO_ADDRESS_PORT(VI_PT0_INT)) = VI_PT0_INT_FSTART;
     }
     /*When detect vi port's width&height changed,then reset isp*/

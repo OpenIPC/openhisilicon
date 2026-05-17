@@ -50,6 +50,7 @@ endif
 include $(src)/sensor_i2c/Kbuild
 include $(src)/sensor_spi/Kbuild
 include $(src)/mipi_rx/Kbuild
+include $(src)/openipc_frame_ts/Kbuild
 #+user
 
 ifneq ($(filter $(CHIPARCH),hi3516ev200 gk7205v200),)

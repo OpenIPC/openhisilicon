@@ -10,6 +10,7 @@
 #include "type.h"
 #include "hi_mipi.h"
 #include "mipi_rx_reg.h"
+#include "openipc_frame_ts.h"
 
 #ifdef __cplusplus
 #if __cplusplus
@@ -2325,10 +2326,40 @@ static int mipi_rx_interrupt_route(int irq, void *dev_id)
 {
     volatile mipi_rx_sys_regs_t *mipi_rx_sys_regs = get_mipi_rx_sys_regs();
     volatile lvds_ctrl_regs_t *lvds_ctrl_regs = NULL;
+    volatile mipi_ctrl_regs_t *mipi_ctrl_regs;
     int i = 0;
 
     for (i = 0; i < MIPI_RX_MAX_PHY_NUM; i++) {
         mipi_rx_phy_cil_int_statis(i);
+    }
+
+    /*
+     * Frame-start dispatch (openipc_frame_ts). Runs outside the
+     * CHN_INT_RAW gate below because vsync IRQs alone don't set it.
+     * MIPI CSI-2 and LVDS vsync bits are W1C'd independently in case
+     * both are wired up, but openipc_frame_ts_push fires at most once
+     * per device per IRQ so consumers get one event per physical frame.
+     */
+    for (i = 0; i < MIPI_RX_MAX_DEV_NUM; i++) {
+        unsigned int mipi_int, lvds_int;
+        int vsync = 0;
+
+        mipi_ctrl_regs = get_mipi_ctrl_regs(i);
+        lvds_ctrl_regs = get_lvds_ctrl_regs(i);
+
+        mipi_int = mipi_ctrl_regs->MIPI_CTRL_INT.u32;
+        lvds_int = lvds_ctrl_regs->LVDS_CTRL_INT.u32;
+
+        if (mipi_int & MIPI_INT_VSYNC) {
+            vsync = 1;
+            mipi_ctrl_regs->MIPI_CTRL_INT_RAW.u32 = MIPI_INT_VSYNC;
+        }
+        if (lvds_int & LVDS_INT_VSYNC) {
+            vsync = 1;
+            lvds_ctrl_regs->LVDS_CTRL_INT_RAW.u32 = LVDS_INT_VSYNC;
+        }
+        if (vsync)
+            openipc_frame_ts_push(i);
     }
 
     for (i = 0; i < MIPI_RX_MAX_DEV_NUM; i++) {

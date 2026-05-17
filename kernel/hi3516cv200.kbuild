@@ -200,3 +200,7 @@ endif
 
 # --- HWRNG module (source driver) ---
 include $(src)/hisi-hwrng/Kbuild
+
+# --- OpenIPC frame-timestamp chrdev (issue #144) ---
+ccflags-y += -I$(src)/../include
+include $(src)/openipc_frame_ts/Kbuild
