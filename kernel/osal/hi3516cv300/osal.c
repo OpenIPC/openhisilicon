@@ -72,10 +72,10 @@ static int osal_probe(struct platform_device *pdev)
     return 0;
 }
 
-static int osal_remove(struct platform_device *pdev)
+static compat_platform_remove_ret osal_remove(struct platform_device *pdev)
 {
 	osal_exit();
-    return 0;
+	compat_platform_remove_return;
 }
 
 static const struct of_device_id osal_match[] = {

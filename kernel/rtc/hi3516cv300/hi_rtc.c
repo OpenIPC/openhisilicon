@@ -133,7 +133,7 @@ static osal_mutex_t hirtc_lock;
 
 static int alm_itrp;
 
-static int spi_write(char reg, unsigned char val)
+static int rtc_spi_write(char reg, unsigned char val)
 {
     U_SPI_RW w_data, r_data;
 	int cnt = RETRY_CNT;
@@ -175,13 +175,13 @@ static int spi_rtc_write(char reg, unsigned char val)
 {
 	int ret;
     osal_mutex_lock(&hirtc_lock);
-    ret = spi_write(reg, val);
+    ret = rtc_spi_write(reg, val);
     osal_mutex_unlock(&hirtc_lock);
 
     return ret;
 }
 
-static int spi_read(char reg, unsigned char* val)
+static int rtc_spi_read(char reg, unsigned char* val)
 {
     U_SPI_RW w_data, r_data;
 	int cnt = RETRY_CNT;
@@ -222,7 +222,7 @@ static int spi_rtc_read(char reg, unsigned char* val)
 {
 	int ret;
     osal_mutex_lock(&hirtc_lock);
-    ret = spi_read(reg, val);
+    ret = rtc_spi_read(reg, val);
     osal_mutex_unlock(&hirtc_lock);
 
     return ret;
@@ -709,8 +709,8 @@ static int rtc_alm_interrupt(int irq, void *dev_id)
 	int ret = OSAL_IRQ_NONE;
     unsigned char val;
 
-    spi_read(RTC_INT, &val);
-    spi_write(RTC_INT_CLR, 0x1);
+    rtc_spi_read(RTC_INT, &val);
+    rtc_spi_write(RTC_INT_CLR, 0x1);
 
     osal_printk("interrupt %#x\n", val);
 
@@ -722,8 +722,8 @@ static int rtc_alm_interrupt(int irq, void *dev_id)
 	if (val & 0x2)
     {
 		/* close low voltage int */
-		spi_read(RTC_IMSC, &val);
-		spi_write(RTC_IMSC, val & ~(0x2));
+		rtc_spi_read(RTC_IMSC, &val);
+		rtc_spi_write(RTC_IMSC, val & ~(0x2));
     }
 
 	ret = OSAL_IRQ_HANDLED;
@@ -862,3 +862,5 @@ void  rtc_exit(void)
 
     osal_printk("hirtc exit ok.\n");
 }
+
+MODULE_LICENSE("GPL");

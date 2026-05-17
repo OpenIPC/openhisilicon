@@ -212,7 +212,7 @@ static int hi35xx_sensor_probe(struct platform_device *pdev)
 	return 0;
 }
 
-static int hi35xx_sensor_remove(struct platform_device *pdev)
+static compat_platform_remove_ret hi35xx_sensor_remove(struct platform_device *pdev)
 {
 	if (g_sensor_clk) {
 		clk_disable_unprepare(g_sensor_clk);
@@ -221,7 +221,7 @@ static int hi35xx_sensor_remove(struct platform_device *pdev)
 	}
 	g_pctrl = NULL;
 	g_pdev = NULL;
-	return 0;
+	compat_platform_remove_return;
 }
 
 static const struct of_device_id hi35xx_sensor_match[] = {

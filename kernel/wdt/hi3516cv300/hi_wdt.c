@@ -579,3 +579,5 @@ void watchdog_exit(void)
     osal_atomic_destory(&driver_open);
     osal_printk("hiwtdg exit ok.\n");
 }
+
+MODULE_LICENSE("GPL");

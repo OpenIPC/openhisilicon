@@ -501,3 +501,5 @@ HI_VOID ssp_drv_exit(HI_U32 u32BusNum)
 EXPORT_SYMBOL(ssp_drv_init);
 EXPORT_SYMBOL(ssp_drv_exit);
 EXPORT_SYMBOL(ssp_get_ops);
+
+MODULE_LICENSE("GPL");

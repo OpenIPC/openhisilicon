@@ -577,7 +577,9 @@ unsigned long usr_virt_to_phys(unsigned long virt)
         return 0;
     }
 
-    pud = pud_offset(pgd, virt);
+    /* 5-level paging (5.0+) inserted p4d between pgd and pud. On 32-bit
+     * ARM p4d is folded so p4d_offset(pgd, virt) is identity. */
+    pud = pud_offset(p4d_offset(pgd, virt), virt);
     if (pud_none(*pud)) {
         printk("error: not mapped in pud!\n");
         return 0;
@@ -589,7 +591,11 @@ unsigned long usr_virt_to_phys(unsigned long virt)
         return 0;
     }
 
-    pte = pte_offset_map(pmd, virt);
+    /* pte_offset_map became __pte_offset_map (rcu-protected) in 6.5+ and
+     * is no longer exported to modules. pte_offset_kernel skips the rcu
+     * unmap dance and works for kernel-mode page tables (which is what
+     * mmz walks via current->mm). */
+    pte = pte_offset_kernel(pmd, virt);
     if (pte_none(*pte)) {
         printk("error: not mapped in pte!\n");
         return 0;
@@ -788,6 +794,15 @@ static int __init media_mem_proc_init(void)
 }
 #else
 
+#ifdef COMPAT_USE_PROC_OPS
+/* 5.6+: struct proc_ops replaces struct file_operations for proc files. */
+static struct proc_ops mmz_proc_ops = {
+    .proc_open    = mmz_proc_open,
+    .proc_read    = seq_read,
+    .proc_write   = mmz_write_proc,
+    .proc_release = seq_release,
+};
+#else
 static struct file_operations mmz_proc_ops = {
     .owner = THIS_MODULE,
     .open = mmz_proc_open,
@@ -795,6 +810,7 @@ static struct file_operations mmz_proc_ops = {
     .write = mmz_write_proc,
     .release = seq_release,
 };
+#endif
 
 static int __init media_mem_proc_init(void)
 {

@@ -659,7 +659,7 @@ EXPORT_SYMBOL(osal_remap_pfn_range);
 
 int osal_io_remap_pfn_range(osal_vm_t *vm, unsigned long addr, unsigned long pfn, unsigned long size){
     struct vm_area_struct *v = (struct vm_area_struct *)(vm->vm);
-    v->vm_flags |= VM_IO;
+    compat_vm_flags_set(v, VM_IO);
     if(0 == size)
     {
         return -EPERM;

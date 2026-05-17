@@ -96,12 +96,12 @@ static int hi35xx_jpege_probe(struct platform_device *pdev)
     return 0;
 }
 
-static int hi35xx_jpege_remove(struct platform_device *pdev)
+static compat_platform_remove_ret hi35xx_jpege_remove(struct platform_device *pdev)
 {
     //osal_printk("<%s> is called\n",__FUNCTION__);
     JPEGE_ModExit();
 	jpge_hw_exit(pdev);
-    return 0;
+    compat_platform_remove_return;
 }
 
 

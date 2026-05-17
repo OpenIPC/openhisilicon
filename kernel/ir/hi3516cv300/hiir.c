@@ -651,3 +651,5 @@ void hiir_exit(void)
 
 }
 
+
+MODULE_LICENSE("GPL");

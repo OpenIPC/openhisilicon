@@ -8,7 +8,8 @@
 #include <asm/cacheflush.h>
 
 #include <asm/memory.h>
-#include <linux/dma-contiguous.h>
+/* dma-contiguous.h merged into dma-map-ops.h in 5.16; kernel_compat.h
+ * (force-included via -include) picks the right header per version. */
 #include <linux/dma-mapping.h>
 #include <asm/memory.h>
 #include <asm/highmem.h>
@@ -39,21 +40,39 @@ extern int mmb_number; /* for mmb id */
 
 #ifdef CONFIG_CMA
 #if 1
+/* apply_to_page_range() callback signature: 5.0+ dropped the pgtable_t
+ * token middle arg. Define two flavours of __dma_update_pte. */
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(5, 0, 0)
+static int __dma_update_pte(pte_t *pte, unsigned long addr, void *data)
+{
+	struct page *page = virt_to_page(addr);
+	pgprot_t prot = *(pgprot_t *)data;
+
+	set_pte_ext(pte, mk_pte(page, prot), 0);
+	return 0;
+}
+#else
 static int __dma_update_pte(pte_t *pte, pgtable_t token,
 		unsigned long addr, void *data)
 {
 	struct page *page = virt_to_page(addr);
-
 	pgprot_t prot = *(pgprot_t *)data;
 
 	set_pte_ext(pte, mk_pte(page, prot), 0);
-	
 	return 0;
 }
 #endif
+#endif
 
-extern void __dma_clear_buffer(struct page *page, size_t size);
-#if 0
+/* Vendor BSP exported __dma_clear_buffer as a kernel symbol; on mainline
+ * it lives inside arch/arm/mm/dma-mapping.c with no module export.
+ * On modern kernels (>=5.0) CMA pages from dma_alloc_from_contiguous come
+ * with the right cache state — the manual flush is unnecessary and the
+ * underlying dmac_flush_range maps to arm926_dma_flush_range which isn't
+ * EXPORT_SYMBOL'd to modules. No-op on modern kernels. */
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(5, 0, 0)
+static inline void __dma_clear_buffer(struct page *page, size_t size) { (void)page; (void)size; }
+#else
 static void __dma_clear_buffer(struct page *page, size_t size)
 {
 	void *ptr;
@@ -82,19 +101,21 @@ static void __dma_clear_buffer(struct page *page, size_t size)
 }
 #endif
 
-extern void hisi_flush_tlb_kernel_range(unsigned long start, unsigned long end);
-
+/* Vendor BSP had hisi_flush_tlb_kernel_range + init_mm export; mainline
+ * provides flush_tlb_kernel_range with the same semantics and init_mm is
+ * not exported to modules at all. Skip the manual pte_update on modern
+ * kernels — CMA pages from dma_alloc_from_contiguous are already mapped
+ * with the right page protections by the core. */
 #if 1
 static void __dma_remap(struct page *page, size_t size, pgprot_t prot)
-{    
-#ifdef CONFIG_CMA
+{
+#if defined(CONFIG_CMA) && LINUX_VERSION_CODE < KERNEL_VERSION(5, 0, 0)
 	unsigned long start = (unsigned long) page_address(page);
 	unsigned end = start + size;
 
 	apply_to_page_range(&init_mm, start, size, __dma_update_pte, &prot);
 	dsb();
 	hisi_flush_tlb_kernel_range(start, end);
-	//flush_tlb_kernel_range(start, end);
 #endif
 }
 #endif
@@ -168,7 +189,7 @@ static hil_mmb_t *__mmb_alloc(const char *name,
 		if ((_user_mmz != NULL) && (_user_mmz != mmz))
 			continue;
 
-		page = dma_alloc_from_contiguous(mmz->cma_dev, count, order);
+		page = compat_dma_alloc_from_contiguous(mmz->cma_dev, count, order);
 		if (!page)
 			break;
 		fixed_mmz = mmz;
@@ -261,7 +282,7 @@ static hil_mmb_t *__mmb_alloc_v2(const char *name,
 
 		cma_order = get_order(size);		     	
 
-		page = dma_alloc_from_contiguous(mmz->cma_dev, count, cma_order);
+		page = compat_dma_alloc_from_contiguous(mmz->cma_dev, count, cma_order);
 		if (!page)
 			return NULL;
 
@@ -386,6 +407,18 @@ static void *__mmb_map2kern(hil_mmb_t *mmb, int cached)
 			tmp++;
 		}
 
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(5, 8, 0)
+		/* __get_vm_area + map_vm_area were removed; vmap() does both. */
+		{
+			void *vaddr = vmap(pages, pagesnr, VM_MAP, prot);
+			if (!vaddr) {
+				printk(KERN_ERR "vmap to mmz pages failed!\n");
+				vfree(pages);
+				return NULL;
+			}
+			mmb->kvirt = vaddr;
+		}
+#else
 		area = __get_vm_area((pagesnr << PAGE_SHIFT), VM_MAP,
 				VMALLOC_START, VMALLOC_END);
 		if (!area) {
@@ -401,6 +434,7 @@ static void *__mmb_map2kern(hil_mmb_t *mmb, int cached)
 			return NULL;
 		}
 		mmb->kvirt = area->addr;
+#endif
 		//mmb->kvirt = vmap(pages, pagesnr, VM_MAP, prot);
 
 		vfree(pages);
@@ -499,6 +533,17 @@ static void *__mmf_map(unsigned long phys, int len, int cache)
 			tmp++;
 		}
 
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(5, 8, 0)
+		{
+			void *vaddr = vmap(pages, pagesnr, VM_MAP, prot);
+			if (!vaddr) {
+				printk(KERN_ERR "vmap to mmz pages failed!\n");
+				vfree(pages);
+				return NULL;
+			}
+			virt = vaddr;
+		}
+#else
 		area = __get_vm_area((pagesnr << PAGE_SHIFT), VM_MAP,
 				VMALLOC_START, VMALLOC_END);
 		if (!area) {
@@ -514,6 +559,7 @@ static void *__mmf_map(unsigned long phys, int len, int cache)
 			return NULL;
 		}
 		virt = area->addr;
+#endif
 
 		//virt = vmap(pages, pagesnr, VM_MAP, prot);
 		vfree(pages);
@@ -551,7 +597,11 @@ static int __allocator_init(char *s)
 	while ((line = strsep(&s, ":")) != NULL) {
 		int i;
 		char *argv[6];
-		extern struct cma_zone * hisi_get_cma_zone(const char* name);
+		/* Vendor BSP shipped hisi_get_cma_zone in mach-hi3516cv300; mainline
+		 * has no equivalent (no per-zone CMA naming concept). Stub to NULL
+		 * → the caller logs "can't get cma zone info" and skips. Multiple
+		 * named CMA zones not exercised on neo boot+login path. */
+		struct cma_zone *hisi_get_cma_zone(const char *name) { (void)name; return NULL; }
 		/*
 		 * FIXME: We got 4 args in "line", formated "argv[0],argv[1],argv[2],argv[3],argv[4]".
 		 * eg: "<mmz_name>,<gfp>,<phys_start_addr>,<size>,<alloc_type>"

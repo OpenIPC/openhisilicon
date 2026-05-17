@@ -28,10 +28,10 @@ static struct i2c_board_info hi_info[] =
 
 static struct i2c_client *sensor_client[I2C_BUS_NUM] = {0};
 
-#ifdef __HuaweiLite__
-extern int hi_i2c_transfer(struct i2c_adapter *adapter, struct i2c_msg *msgs, int count);
-extern int hi_i2c_master_send(struct i2c_client *client, const char *buf, int count);
-#endif
+/* hi_i2c_transfer / hi_i2c_master_send were vendor BVT wrappers. Mainline
+ * I2C core exposes i2c_transfer / i2c_master_send with the same semantics. */
+#define hi_i2c_transfer    i2c_transfer
+#define hi_i2c_master_send i2c_master_send
 
 static int sensor_i2c_write(HI_U32 client_index, HI_VOID *pSensorData)
 {
@@ -267,7 +267,9 @@ HI_S32 i2c_drv_init(HI_U32 u32BusNum)
 		return -1;
 	}
     i2c_adap = i2c_get_adapter(u32BusNum);
-    sensor_client[u32BusNum] = i2c_new_device(i2c_adap, &hi_info[u32BusNum]);
+    /* i2c_new_device renamed to i2c_new_client_device in 5.x (compat shim
+     * in kernel_compat.h maps the old name forward on legacy kernels). */
+    sensor_client[u32BusNum] = i2c_new_client_device(i2c_adap, &hi_info[u32BusNum]);
 	if (!sensor_client[u32BusNum])
 	{
 		printk("sensor i2c init failed!\n");

@@ -3,6 +3,7 @@
 #include <linux/printk.h>
 #include <linux/version.h>
 #include <linux/of_platform.h>
+#include <linux/of.h>
 
 #include "hi_type.h"
 #include "hi_osal_init.h"
@@ -44,12 +45,16 @@ static struct ctl_table pm_mpp_ctl[] = {
 	{}
 };
 
+#ifndef COMPAT_NO_SYSCTL_PATHS
+/* struct ctl_path + register_sysctl_paths() removed in 6.6; register_sysctl()
+ * takes a path string directly on modern kernels. */
 static struct ctl_path pm_umh_root[] = {
 	{
 		.procname	= "kernel",
 	},
 	{}
 };
+#endif
 
 extern int SYS_ModInit(void);
 extern void SYS_ModExit(void);
@@ -100,13 +105,17 @@ static int hi35xx_sys_probe(struct platform_device *pdev)
         return HI_FAILURE;
     }
     
+#ifdef COMPAT_NO_SYSCTL_PATHS
+    ctl_head = register_sysctl("kernel", pm_mpp_ctl);
+#else
     ctl_head = register_sysctl_paths(pm_umh_root, pm_mpp_ctl);
+#endif
 	
 
     return 0;
 }
 
-static int hi35xx_sys_remove(struct platform_device *pdev)
+static compat_platform_remove_ret hi35xx_sys_remove(struct platform_device *pdev)
 {
     unregister_sysctl_table(ctl_head);
 
@@ -117,7 +126,7 @@ static int hi35xx_sys_remove(struct platform_device *pdev)
     reg_ddr0_base_va = NULL;
     reg_misc_base_va = NULL;
 
-    return 0;
+    compat_platform_remove_return;
 }
 
 static const struct of_device_id hi35xx_sys_match[] = {
