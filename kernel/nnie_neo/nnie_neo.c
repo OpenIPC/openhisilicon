@@ -537,9 +537,6 @@ static int nnie_build_task_tail(struct nnie_tskbuf *tb, const u8 *fwd_arg,
 		u32 chn     = *(u32 *)(blob + NNIE_BLOB_OFF_CHN);
 		u64 batch_size;
 
-		pr_info("nnie_neo: src[%u] enType=%u stride=%u H=%u W=%u C=%u N=%u phys=0x%llx\n",
-			i, en_type, stride, height,
-			*(u32 *)(blob + NNIE_BLOB_OFF_WIDTH), chn, num, phys);
 		switch (en_type) {
 		case 0: batch_size = (u64)stride * height * chn; break;
 		case 1: batch_size = (u64)stride * height;       break;
@@ -572,7 +569,6 @@ static int nnie_build_task_tail(struct nnie_tskbuf *tb, const u8 *fwd_arg,
  * timeout. */
 static long nnie_dispatch_forward(const struct nnie_hw_task *task)
 {
-	hil_mmb_t *mmb;
 	void *task_kvirt;
 	unsigned long task_dma;
 	unsigned long completed;
@@ -586,27 +582,22 @@ static long nnie_dispatch_forward(const struct nnie_hw_task *task)
 		return -ERESTARTSYS;
 
 	if (!g_nnie_desc_kvirt) {
-		pr_warn("nnie_neo: descriptor MMZ not pre-allocated\n");
 		mutex_unlock(&g_nnie_forward_lock);
 		return -ENOMEM;
 	}
 	task_kvirt = g_nnie_desc_kvirt;
 	task_dma   = g_nnie_desc_phys;
-	mmb        = NULL;            /* don't free in cleanup below */
 
 	memcpy(task_kvirt, task, NNIE_HW_TASK_SIZE);
 	wmb();
 
-	/* Vendor's clock/RAM dance captured via kprobe-tracing
-	 * sys_hal_wk_cnn_clk_en + sys_hal_gdc_nnie_set_ram_using during
-	 * a known-good mnist Forward (Phase 14):
-	 *
-	 *   clk_en(1) → reset_sel(0) → clk_en(0) → clk_en(1) →
-	 *   ram(0) → clk_en(1) → ram(1) → ram(0) → clk_en(0)
-	 *
-	 * The clock-toggle (OFF then ON) appears to be an HW init reset
-	 * pulse. Simple clock-on alone doesn't put HW into the state
-	 * needed for inference. */
+	/* Vendor clock/RAM dance, kprobed from a known-good vendor mnist
+	 * Forward (sys_hal_wk_cnn_clk_en + sys_hal_gdc_nnie_set_ram_using).
+	 * The off/on clock toggle is an HW init reset pulse — simple
+	 * clock-on alone doesn't put HW into the state needed for inference.
+	 * The NNIE_RAM bit must stay at 0 from here through START (sets
+	 * SRAM ownership to NNIE); vendor's hal_svp_nnie_enable_ram passes
+	 * `using=0` via SYS ioctl 0xd1. */
 	nnie_crg_set_bit  (NNIE_CRG_REG_NNIE_CLK, NNIE_SYS_BIT_NNIE_CLK_EN);
 	nnie_crg_clear_bit(NNIE_CRG_REG_NNIE_CLK, NNIE_SYS_BIT_NNIE_RESET);
 	nnie_crg_clear_bit(NNIE_CRG_REG_NNIE_CLK, NNIE_SYS_BIT_NNIE_CLK_EN);
@@ -624,71 +615,44 @@ static long nnie_dispatch_forward(const struct nnie_hw_task *task)
 			writel((v & ~0x7u) | 0x6u, g_crg_regs + NNIE_CRG_REG_VEDU_CLK);
 	}
 
-	/* Don't set NNIE_RAM bit back to 1 here — vendor's
-	 * hal_svp_nnie_enable_ram passes `using=0` (normalized to bit-0=0)
-	 * via SYS ioctl 0xd1, and the bit stays 0 from select_ram all the
-	 * way through START. Setting it to 1 was a Phase 8 guess that we
-	 * never validated against vendor's actual sequence. */
-
 	atomic_set(&g_nnie_last_status, 0);
 	reinit_completion(&g_nnie_done);
 
-	/* Boot the NNIE block. The CLK_GATE/OUTSTANDING/IRQ_CFG writes
-	 * are idempotent and survive across Forward calls — we re-issue
-	 * them every time so the block recovers if vendor open_gdc.ko (or
-	 * a stale boot state) left them in a weird state. */
-	/* Init-time register setup (vendor does this once in svp_nnie_init
-	 * @0x10f4; we redo each call for simplicity/idempotence).
-	 *
-	 * IMPORTANT: vendor's hal_svp_nnie_enable_clk_gt @0xbc18 does
-	 * read-modify-write OR'ing 0x80 into CLK_GATE (NOT plain write).
-	 * Live capture on av300 after vendor inference shows CLK_GATE =
-	 * 0x349 — chip-reset bits 0/3/6/8/9 must be preserved or HW
-	 * stays silent. Same RMW pattern for OUTSTANDING. */
+	/* Per-task register setup. All RMW to mirror vendor's hal_svp_nnie_*
+	 * helpers and preserve any HW-set bits in the upper halves. */
 	{
 		u32 v;
+
+		/* enable_clk_gt: OR bit 7 (0x80) into CLK_GATE — chip-reset
+		 * bits 0/3/6/8/9 (= 0x349) must be preserved or HW stays silent. */
 		v = readl(g_nnie_regs + NNIE_REG_CLK_GATE);
 		writel(v | NNIE_CLK_GATE_EN, g_nnie_regs + NNIE_REG_CLK_GATE);
 
-		/* vendor bfi r2, #0xf, #0, #5 → bits[4:0]=0xF; then OR 0xf00.
-		 * Implement as: clear low 5 bits, set 0xf in low 5 bits, OR 0xf00. */
+		/* set_outstanding: vendor bfi r2,#0xf,#0,#5 then OR 0xf00 —
+		 * bits[4:0]=0xF, bits[11:8]=0xF. */
 		v = readl(g_nnie_regs + NNIE_REG_OUTSTANDING);
 		v = (v & ~0x1Fu) | 0x0Fu | 0xF00u;
 		writel(v, g_nnie_regs + NNIE_REG_OUTSTANDING);
-	}
-	/* IRQ_CFG: vendor hal_svp_nnie_cfg_irq @0xbbb4 does 3 separate
-	 * RMW writes OR'ing bits 0/1/2 — match that pattern in one RMW
-	 * to preserve any HW-set status bits in the upper half. */
-	{
-		u32 v = readl(g_nnie_regs + NNIE_REG_IRQ_CFG);
+
+		/* cfg_irq: enable bits 0/1/2 (finish/timeout/cfg_err). */
+		v = readl(g_nnie_regs + NNIE_REG_IRQ_CFG);
 		writel(v | NNIE_IRQ_ALL, g_nnie_regs + NNIE_REG_IRQ_CFG);
 	}
-	/* Vendor sets TIMEOUT to ~2 s at 500 MHz NNIE clock; without it
-	 * (TIMEOUT=0) HW seems to never IRQ — possibly stuck waiting on
-	 * a timeout counter that never advances. */
-	/* Phase 12 reg dump at vendor's TASK_ADDR write: TIMEOUT_LO=0xFFFFFFFF,
-	 * TIMEOUT_HI=0xFF (matches what hal_svp_nnie_set_timeout writes).
-	 * Earlier post-Forward snapshot showed TIMEOUT_HI=0 — that was HW
-	 * clearing after completion, not vendor's set value. */
+
+	/* TIMEOUT: ~2s at 500 MHz NNIE clock. Without it HW stalls waiting
+	 * on a timeout counter that never advances. */
 	writel(0xFFFFFFFFu,              g_nnie_regs + NNIE_REG_TIMEOUT_LO);
 	writel(0x000000FFu,              g_nnie_regs + NNIE_REG_TIMEOUT_HI);
-	/* Vendor disable_check_sum @0xbc74 BFC bit 0 of +0x68 (RMW, NOT
-	 * plain write of 0). Must preserve other bits — chip default 0x1
-	 * suggests other bits encode debug/perf config we mustn't clobber.
-	 * Phase 14: switch from `writel(0)` to RMW to match vendor exactly. */
+
+	/* disable_check_sum: clear bit 0 of CHECK_SUM via BFC (vendor
+	 * matches; plain writel(0) clobbers other config bits). */
 	{
 		u32 v = readl(g_nnie_regs + NNIE_REG_CHECK_SUM);
-		writel(v & ~1u,          g_nnie_regs + NNIE_REG_CHECK_SUM);
+		writel(v & ~1u, g_nnie_regs + NNIE_REG_CHECK_SUM);
 	}
 
-	/* +0x44 = 0x3 in vendor's live capture is HW-set DURING task
-	 * execution (post-task it's 0). hi_nnie.o disasm has NO writes to
-	 * +0x44, confirming it's RO. Don't write it.
-	 *
-	 * Same for +0xb0..+0xb8 — Phase 12 found they're HW status. */
-	/* Clear any leftover IRQ status from a previous failed Forward —
-	 * vendor hal_svp_nnie_clear_irq @0xbb64 also does 3 RMW writes
-	 * to set bits 0/1/2 in IRQ_CLEAR (W1C semantics). */
+	/* Clear any leftover IRQ status from a previous failed Forward
+	 * (vendor hal_svp_nnie_clear_irq also OR-RMWs bits 0/1/2 — W1C). */
 	{
 		u32 v = readl(g_nnie_regs + NNIE_REG_IRQ_CLEAR);
 		writel(v | NNIE_IRQ_ALL, g_nnie_regs + NNIE_REG_IRQ_CLEAR);
@@ -698,38 +662,11 @@ static long nnie_dispatch_forward(const struct nnie_hw_task *task)
 	writel((u32)((u64)task_dma >> 32), g_nnie_regs + NNIE_REG_TASK_ADDR_HI);
 	wmb();
 
-	/* No pre-START register dump: each readl on the NNIE window takes
-	 * ~1us, and our 52-reg dump-loop introduces a >50us gap between
-	 * TASK_ADDR write and START write. HW seems to interpret that gap
-	 * as some kind of timeout / config violation (cfg_err info=0x1 with
-	 * dump enabled, success path without). Vendor's hal_svp_nnie_start
-	 * sequence is just: write_task_addr → dmb → start (no reads in
-	 * between). Match that exact ordering. */
-
-	/* Vendor hal_svp_nnie_start @0xbb2c uses RMW (OR bit 0). On a
-	 * post-reboot run reg+0x30 reads back 0x0, so the RMW is
-	 * equivalent to a plain write of 1 — but match vendor exactly in
-	 * case some later state path leaves non-zero bits there. */
+	/* Vendor hal_svp_nnie_start @0xbb2c uses RMW (OR bit 0); match it
+	 * even though reg+0x30 reads back 0 on a clean run. */
 	{
 		u32 v = readl(g_nnie_regs + NNIE_REG_START);
 		writel(v | NNIE_START_GO, g_nnie_regs + NNIE_REG_START);
-	}
-
-	/* Brief polling diagnostic — if HW fires IRQ in <100 ms we'll
-	 * catch the STATUS transitions; if HW is wedged we'll see
-	 * START stay stuck. */
-	{
-		int p;
-		for (p = 0; p < 20; p++) {
-			u32 s = readl(g_nnie_regs + NNIE_REG_IRQ_STATUS);
-			u32 st = readl(g_nnie_regs + NNIE_REG_START);
-			u32 tid = readl(g_nnie_regs + NNIE_REG_TASK_ID);
-
-			if (s != 0 || tid != 0)
-				pr_info("nnie_neo: poll[%d]: STATUS=0x%x START=0x%x TASK_ID=0x%x\n",
-					p, s, st, tid);
-			udelay(50);
-		}
 	}
 
 	completed = wait_for_completion_timeout(&g_nnie_done, 5 * HZ);
@@ -737,8 +674,6 @@ static long nnie_dispatch_forward(const struct nnie_hw_task *task)
 
 	nnie_sys2_clear_bit(NNIE_SYS2_REG_NNIE_RAM, NNIE_SYS_BIT_NNIE_RAM);
 
-	if (mmb) hil_mmb_free(mmb);
-	(void)task_kvirt; (void)task_dma;
 
 	if (!completed) {
 		u32 live_status, live_start, live_task_id, live_clk;
@@ -755,21 +690,8 @@ static long nnie_dispatch_forward(const struct nnie_hw_task *task)
 	}
 	if (cause & NNIE_IRQ_CFG_ERR) {
 		u32 info = readl(g_nnie_regs + NNIE_REG_CFG_ERR_INFO);
-		u32 r[0x34];
-		int i;
-		for (i = 0; i < 0x34; i++)
-			r[i] = readl(g_nnie_regs + i * 4);
-		pr_warn("nnie_neo: Forward cfg_err (cause=0x%x info=0x%x)\n",
-			cause, info);
-		pr_warn("nnie_neo: post-fail regs 0x00..0x40: %08x %08x %08x %08x  %08x %08x %08x %08x  %08x %08x %08x %08x  %08x %08x %08x %08x  %08x\n",
-			r[0], r[1], r[2], r[3], r[4], r[5], r[6], r[7],
-			r[8], r[9], r[10], r[11], r[12], r[13], r[14], r[15], r[16]);
-		pr_warn("nnie_neo: post-fail regs 0x44..0x84: %08x %08x %08x %08x  %08x %08x %08x %08x  %08x %08x %08x %08x  %08x %08x %08x %08x  %08x\n",
-			r[17], r[18], r[19], r[20], r[21], r[22], r[23], r[24],
-			r[25], r[26], r[27], r[28], r[29], r[30], r[31], r[32], r[33]);
-		pr_warn("nnie_neo: post-fail regs 0x88..0xc8: %08x %08x %08x %08x  %08x %08x %08x %08x  %08x %08x %08x %08x  %08x %08x %08x %08x  %08x\n",
-			r[34], r[35], r[36], r[37], r[38], r[39], r[40], r[41],
-			r[42], r[43], r[44], r[45], r[46], r[47], r[48], r[49], r[50]);
+		pr_warn_ratelimited("nnie_neo: Forward cfg_err (cause=0x%x info=0x%x)\n",
+				    cause, info);
 		ret = -EIO;
 	} else if (cause & NNIE_IRQ_TIMEOUT) {
 		pr_warn("nnie_neo: Forward HW timeout (cause=0x%x)\n", cause);
@@ -785,8 +707,6 @@ static long nnie_dispatch_forward(const struct nnie_hw_task *task)
 
 static long nnie_op_forward(unsigned long arg, int with_bbox)
 {
-	const u32 arg_size = with_bbox ?
-		NNIE_FORWARD_BBOX_ARG_SIZE : NNIE_FORWARD_ARG_SIZE;
 	u8 *buf = (u8 *)arg;
 	u32 src_num, dst_num, net_seg_id, instant, batch_num;
 	u64 tsk_phys, tmp_phys, model_uva;
@@ -810,11 +730,9 @@ static long nnie_op_forward(unsigned long arg, int with_bbox)
 	batch_num  = *(u32 *)(buf + NNIE_FWD_OFF_ASTSRC + NNIE_BLOB_OFF_NUM);
 	model_uva  = *(u64 *)(buf + NNIE_FWD_OFF_PSTMODEL_UVA);
 
-	pr_info_once("nnie_neo: Forward%s arg=%u B  SrcNum=%u DstNum=%u NetSegId=%u  Instant=%u  Batch=%u\n",
+	pr_info_once("nnie_neo: Forward%s SrcNum=%u DstNum=%u NetSegId=%u Batch=%u tsk=0x%llx tmp=0x%llx\n",
 		     with_bbox ? "WithBbox" : "",
-		     arg_size, src_num, dst_num, net_seg_id, instant, batch_num);
-	pr_info_once("nnie_neo:   ctrl.stTskBuf.phys=0x%llx  stTmpBuf.phys=0x%llx  pstModel.uva=0x%llx\n",
-		     tsk_phys, tmp_phys, model_uva);
+		     src_num, dst_num, net_seg_id, batch_num, tsk_phys, tmp_phys);
 
 	if (!model_uva || src_num == 0 || dst_num == 0 || src_num > 16 || dst_num > 16)
 		return -EINVAL;
@@ -882,9 +800,6 @@ static long nnie_op_forward(unsigned long arg, int with_bbox)
 	nnie_fill_task_header(&task, model_phys, inst_off, inst_len,
 			      tsk_phys, tmp_phys, batch_num, !!instant);
 
-	pr_info_once("nnie_neo:   task hdr: model_phys=0x%llx inst_off=%u inst_len=%u tail=%d B\n",
-		     model_phys, inst_off, inst_len, tail_bytes);
-
 	{
 		long disp_ret = nnie_dispatch_forward(&task);
 
@@ -927,7 +842,7 @@ static long nnie_op_add_tskbuf(unsigned long arg)
 	size = *(u32 *)(buf + 16);
 
 	ret = nnie_add_tskbuf(phys, virt, size);
-	pr_info_once("nnie_neo: AddTskBuf phys=0x%llx virt=0x%llx size=%u -> %d\n",
+	pr_debug("nnie_neo: AddTskBuf phys=0x%llx virt=0x%llx size=%u -> %d\n",
 		     phys, virt, size, ret);
 	return ret;
 }
@@ -938,7 +853,7 @@ static long nnie_op_remove_tskbuf(unsigned long arg)
 	u64 phys = buf ? *(u64 *)(buf + 0) : 0;
 	int ret = nnie_remove_tskbuf(phys);
 
-	pr_info_once("nnie_neo: RemoveTskBuf phys=0x%llx -> %d\n", phys, ret);
+	pr_debug("nnie_neo: RemoveTskBuf phys=0x%llx -> %d\n", phys, ret);
 	return ret;
 }
 
@@ -1063,7 +978,7 @@ int nnie_std_mod_init(void)
 		pr_err("nnie_neo: descriptor MMZ pre-alloc failed\n");
 	}
 
-	pr_info("nnie_neo: /dev/nnie ready (Phase 7 — full Forward path wired, IRQF_SHARED)\n");
+	pr_info("nnie_neo: /dev/nnie ready (open-source NNIE CNN driver)\n");
 	return 0;
 }
 
