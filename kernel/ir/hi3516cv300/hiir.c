@@ -21,6 +21,7 @@
  */
 
 
+#include <linux/module.h>
 #include "hi_osal.h"
 
 #include "hiir.h"

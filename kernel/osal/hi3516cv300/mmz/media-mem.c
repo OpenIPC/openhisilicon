@@ -577,9 +577,17 @@ unsigned long usr_virt_to_phys(unsigned long virt)
         return 0;
     }
 
-    /* 5-level paging (5.0+) inserted p4d between pgd and pud. On 32-bit
-     * ARM p4d is folded so p4d_offset(pgd, virt) is identity. */
+    /* 4.11 inserted p4d between pgd and pud. On 32-bit ARM p4d is folded
+     * so p4d_offset(pgd, virt) is identity, but the symbol doesn't exist
+     * on the cv300 lite kernel 3.18 path — gate it. Matches the cv500 /
+     * osal-linux pattern (CLAUDE.md tolerates LINUX_VERSION_CODE for the
+     * page-table walker, which the compat header can't cleanly shim
+     * because pud_offset's first-arg type changes too). */
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(4, 11, 0)
     pud = pud_offset(p4d_offset(pgd, virt), virt);
+#else
+    pud = pud_offset(pgd, virt);
+#endif
     if (pud_none(*pud)) {
         printk("error: not mapped in pud!\n");
         return 0;
