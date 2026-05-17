@@ -1,0 +1,21 @@
+#
+# kernel/nnie_neo — open-source NNIE CNN driver.
+#
+# cv500-family only (cv500, av300, dv300). V4 family has no NNIE.
+#
+# Built alongside (not instead of) the vendor open_nnie.ko module:
+#   kernel/nnie/     → open_nnie.ko      (vendor hi_nnie.o blob)
+#   kernel/nnie_neo/ → open_nnie_neo.ko  (open-source nnie_neo.c)
+#
+# Userspace counterpart: libraries/nnie_neo/.
+#
+
+MOD_NAME := nnie_neo
+OUT      := $(PREFIX)$(MOD_NAME)
+DIR      := nnie_neo
+
+SRCS := $(DIR)/nnie_init.c $(DIR)/nnie_neo.c
+OBJS := $(SRCS:%.c=%.o)
+
+$(OUT)-objs := $(OBJS)
+obj-m += $(OUT).o

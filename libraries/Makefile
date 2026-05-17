@@ -1,9 +1,16 @@
 MAKEFILES = $(shell find . -mindepth 2 -maxdepth 4 -type f -name Makefile)
 SUBDIRS   = $(filter-out ./,$(dir $(MAKEFILES)))
 
-# CV500: build ISP library + sensor drivers from SDK source
+# CV500: build ISP library + sensor drivers from SDK source +
+# nnie_neo userspace (cv500-only — NNIE block doesn't exist on V4).
 ifeq ($(CHIPARCH),hi3516cv500)
-    SUBDIRS := $(filter ./sensor/hi3516cv500/% ./isp/,$(SUBDIRS))
+    SUBDIRS := $(filter ./sensor/hi3516cv500/% ./isp/ ./nnie_neo/,$(SUBDIRS))
+endif
+
+# nnie_neo is cv500-only — exclude from any other chiparch (V4, cv200,
+# etc.) where its cv500-specific MPI headers wouldn't compile.
+ifneq ($(CHIPARCH),hi3516cv500)
+    SUBDIRS := $(filter-out ./nnie_neo/,$(SUBDIRS))
 endif
 
 # CV300: build sensor drivers from SDK source

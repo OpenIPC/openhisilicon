@@ -57,6 +57,7 @@ typedef enum hiMOD_ID_E {
     HI_ID_DCCM     = 36,
     HI_ID_DCCS     = 37,
     HI_ID_GMINFO   = 38,
+    HI_ID_SVP_NNIE = 51,
     HI_ID_BUTT,
 } MOD_ID_E;
 
