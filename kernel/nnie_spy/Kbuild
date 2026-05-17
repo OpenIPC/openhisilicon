@@ -1,5 +1,0 @@
-obj-m += nnie_spy.o
-obj-m += nnie_dump.o
-obj-m += nnie_watch.o
-obj-m += probe_test.o
-obj-m += nnie_trace.o
