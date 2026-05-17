@@ -1,30 +1,16 @@
 /*
  * SPDX-License-Identifier: GPL-2.0
  *
- * libnnie_neo — clean-room replacement for vendor libnnie.so on
- * Hi3516CV500/AV300/DV300. Userspace half of issue #111.
+ * libnnie_neo — open-source replacement for vendor libnnie.so on
+ * cv500/av300/dv300. Exposes the eight HI_MPI_SVP_NNIE_* entry points
+ * vendor userspace expects, talking to /dev/nnie for HW dispatch and
+ * parsing the .wk model file in-process.
  *
- * STATUS: Phase 2 in progress.
- *   - Phase 0 (#111): kernel scaffold in kernel/nnie_neo/ — done.
- *   - Phase 1 (#111): ioctl ABI decoded — done.
- *   - Phase 2 (#111): model loader RE — partial. .wk header layout
- *     scaffolded (libraries/nnie_neo/include/nnie_wk_format.h). The
- *     CRC32 verifier path is wired below; the full layer/quant-table
- *     parser is not yet decoded.
- *
- * Vendor exports (from /usr/lib/libnnie.so, 42 KB, 8 entries):
- *   HI_MPI_SVP_NNIE_LoadModel        @0x1bf4 — size 0x12d8 (biggest)
- *   HI_MPI_SVP_NNIE_UnloadModel      @0x2ecc
- *   HI_MPI_SVP_NNIE_Forward          @0x2f84
- *   HI_MPI_SVP_NNIE_ForwardWithBbox  @0x2f88
- *   HI_MPI_SVP_NNIE_Query            @0x2f94
- *   HI_MPI_SVP_NNIE_GetTskBufSize    @0x1388
- *   HI_MPI_SVP_NNIE_AddTskBuf        @0x3100
- *   HI_MPI_SVP_NNIE_RemoveTskBuf     @0x3250
- *
- * Of these, only Forward, ForwardWithBbox, Query, AddTskBuf, and
- * RemoveTskBuf reach /dev/nnie. The other three (LoadModel,
- * UnloadModel, GetTskBufSize) are pure-userspace and never call ioctl.
+ * Three of the eight functions never touch the kernel:
+ *   HI_MPI_SVP_NNIE_LoadModel    — parses the .wk file
+ *   HI_MPI_SVP_NNIE_UnloadModel  — zeroes the struct
+ *   HI_MPI_SVP_NNIE_GetTskBufSize — currently a stub; needs full
+ *                                   per-segment instruction walk
  */
 #include "hi_type.h"
 #include "hi_common.h"
@@ -43,18 +29,7 @@
 #include <sys/ioctl.h>
 #include <pthread.h>
 
-/* /dev/nnie ioctl numbers — see kernel/nnie_neo/nnie_neo.c. Layouts:
- *
- *   FORWARD              (1624 B I/O):
- *     +0   u32 handle (out)
- *     +8   SVP_BLOB_S astSrc[16]    (48 B each)
- *     +776 u64 pstModel user VA
- *     +784 SVP_BLOB_S astDst[16]
- *     +1552 SVP_NNIE_FORWARD_CTRL_S (64 B)
- *     +1616 u32 bInstant
- *
- *   ADD_TSKBUF / REMOVE_TSKBUF (24 B I/O): SVP_MEM_INFO_S
- */
+/* /dev/nnie ioctl numbers — see kernel/nnie_neo/nnie_neo.c. */
 #define NNIE_IOC_FORWARD              0xc6584d00u
 #define NNIE_IOC_FORWARD_WITH_BBOX    0xc6c04d01u
 #define NNIE_IOC_QUERY                0xc0184d02u
@@ -62,10 +37,9 @@
 #define NNIE_IOC_REMOVE_TSKBUF        0xc0184d04u
 
 #define NNIE_FWD_ARG_SIZE       1624u
-#define NNIE_FWD_BBOX_ARG_SIZE  1728u
 #define NNIE_BLOB_SIZE            48u
 
-static int      g_nnie_fd = -1;
+static int             g_nnie_fd      = -1;
 static pthread_mutex_t g_nnie_fd_lock = PTHREAD_MUTEX_INITIALIZER;
 
 static int nnie_open_dev(void)
@@ -85,7 +59,6 @@ static int nnie_open_dev(void)
 	return g_nnie_fd;
 }
 
-/* Translate Linux errno to vendor HI_ERR codes for upstream callers. */
 static HI_S32 nnie_err_to_hi(int err)
 {
 	if (err >= 0) return HI_SUCCESS;
@@ -104,10 +77,8 @@ static HI_S32 nnie_err_to_hi(int err)
 	}
 }
 
-/* IEEE 802.3 CRC-32 polynomial 0xEDB88320 (reflected), the canonical
- * zlib CRC32. Loader uses a 256-entry table-driven implementation
- * (sequence at libnnie.so 0x1cdc..0x1d0c). For our verify path we
- * compute it directly; performance is fine for one-shot LoadModel use. */
+/* IEEE 802.3 CRC-32 (reflected, poly 0xEDB88320). Vendor uses init=0,
+ * not init=~0 like canonical zlib CRC32 — and final XOR is ~. */
 static uint32_t nnie_wk_crc32_step(uint32_t crc, uint8_t b)
 {
 	int i;
@@ -120,7 +91,7 @@ static uint32_t nnie_wk_crc32_step(uint32_t crc, uint8_t b)
 int nnie_wk_verify_crc(const void *file_buf, uint32_t file_size)
 {
 	const uint8_t *p = (const uint8_t *)file_buf;
-	uint32_t stored, computed = 0;    /* vendor init = 0, not ~0 */
+	uint32_t stored, computed = 0;
 	uint32_t inst_off, inst_len, crc_end;
 	uint32_t i;
 
@@ -130,20 +101,12 @@ int nnie_wk_verify_crc(const void *file_buf, uint32_t file_size)
 	stored = (uint32_t)p[0] | ((uint32_t)p[1] << 8) |
 	         ((uint32_t)p[2] << 16) | ((uint32_t)p[3] << 24);
 
-	/* Vendor LoadModel covers bytes [4..file[52]+file[56]) — the header
-	 * and the instruction-stream region pointed to by header fields
-	 * inst_offset_extra (off 52) + inst_len (off 56). Anything after
-	 * that (weights / quant tables) is *not* CRC-protected; vendor relies
-	 * on the instruction stream itself to address those by file offset.
-	 *
-	 * Polynomial = standard IEEE 802.3 reflected (0xEDB88320), but the
-	 * initial accumulator is 0, not 0xFFFFFFFF. Final XOR is 0xFFFFFFFF
-	 * (the `mvn r0, r0` at libnnie.so 0x1d0c). Verified byte-equivalent
-	 * against vendor mnist.wk: stored 0xa4a25b1a == computed. */
-	inst_off = (uint32_t)p[52] | ((uint32_t)p[53] << 8) |
-	           ((uint32_t)p[54] << 16) | ((uint32_t)p[55] << 24);
-	inst_len = (uint32_t)p[56] | ((uint32_t)p[57] << 8) |
-	           ((uint32_t)p[58] << 16) | ((uint32_t)p[59] << 24);
+	/* CRC covers bytes [4..file[52]+file[56]) — the header and the
+	 * instruction-stream region. Weights/quant tables past that point
+	 * aren't covered; the instruction stream addresses them by file
+	 * offset. */
+	inst_off = *(const uint32_t *)(p + 52);
+	inst_len = *(const uint32_t *)(p + 56);
 	crc_end = inst_off + inst_len;
 	if (crc_end > file_size || crc_end < 4)
 		return -1;
@@ -155,17 +118,30 @@ int nnie_wk_verify_crc(const void *file_buf, uint32_t file_size)
 	return (stored == computed) ? 0 : -1;
 }
 
-/* Parse just enough of the .wk file to satisfy the kernel Forward
- * ioctl: stBase (so kernel can DMA the instruction stream from MMZ),
- * u32NetSegNum, and astSeg[i].{enNetType, u16SrcNum, u16DstNum,
- * u16MaxStep, u32InstOffset, u32InstLen}. Node/ROI tables are left
- * zero-initialised; they're only needed by the userspace post-process
- * paths (vendor's softmax / detect / cluster helpers — not yet
- * implemented here). */
+/*
+ * Parse the .wk file into SVP_NNIE_MODEL_S. The kernel Forward ioctl
+ * reads back stBase / u32NetSegNum / astSeg[seg].u32InstOffset /
+ * astSeg[seg].u32InstLen, so those must be populated. Userspace reads
+ * astSrcNode[0].enType to pick the right SVP_BLOB_TYPE_E for its
+ * MmzAlloc — if that doesn't match what the model expects, HW returns
+ * cfg_err info=0x1.
+ *
+ * Node table layout (immediately after each segment record):
+ *   per node, 48 B total:
+ *     [+0..+11]  u32 height, u32 width, u32 chn
+ *     [+14]      u8 enType
+ *     [+15]      u8 node id
+ *     [+16..+47] szName[32]
+ *
+ * Iteration: SrcNum input nodes, then DstNum output nodes. Output node
+ * enType isn't stored on disk — vendor's libnnie hardcodes
+ * SVP_BLOB_TYPE_S32 (=4) and a (j+1)*8 NodeId pattern.
+ */
 HI_S32 HI_MPI_SVP_NNIE_LoadModel(const SVP_SRC_MEM_INFO_S *pstModelBuf,
                                  SVP_NNIE_MODEL_S *pstModel)
 {
 	const uint8_t *file;
+	const uint8_t *p;
 	uint32_t file_size, inst_off_extra, inst_total_len;
 	uint32_t i;
 	uint8_t  seg_num;
@@ -196,114 +172,68 @@ HI_S32 HI_MPI_SVP_NNIE_LoadModel(const SVP_SRC_MEM_INFO_S *pstModelBuf,
 		return HI_ERR_SVP_NNIE_ILLEGAL_PARAM;
 
 	memset(pstModel, 0, sizeof(*pstModel));
-
-	/* The kernel Forward ioctl DMAs the instruction stream from
-	 * stBase.u64PhyAddr at the offset/length stored in
-	 * astSeg[i].u32InstOffset/u32InstLen. So stBase points at the
-	 * whole .wk file in MMZ — the per-segment offsets are file-
-	 * relative. */
 	pstModel->stBase    = *pstModelBuf;
-	/* Vendor LoadModel adjusts stBase.PhyAddr to skip the .wk header
-	 * — the HW expects task[+16] = stBase.PhyAddr + 0 to land on the
-	 * start of the instruction stream area, NOT the .wk file's CRC/
-	 * version header. inst_offset_extra (file[52..55]) is the byte
-	 * offset where the instruction stream tail begins. Captured live
-	 * from vendor on av300: task[+16] = 0xaa880150 for a .wk loaded
-	 * at phys 0xaa880000 with inst_offset_extra=0x150.
-	 *
-	 * The userspace stBase.u64VirAddr is NOT adjusted here because
-	 * userspace code reads from the start of the file. Only PhyAddr
-	 * is rebased. */
+	/* HW expects task[+16] (= stBase.PhyAddr) to point at the start of
+	 * the instruction stream area, skipping the .wk header. Only
+	 * PhyAddr is rebased; VirAddr stays at the file start because
+	 * userspace reads from there. */
 	pstModel->stBase.u64PhyAddr += inst_off_extra;
-	pstModel->enRunMode = (SVP_NNIE_RUN_MODE_E)file[48];
-	pstModel->u32NetSegNum  = seg_num;
-	/* Vendor reports u32TmpBufSize = 1989888 (~1.9 MB) for mnist; the
-	 * .wk file has no static field that big. Vendor computes it by
-	 * walking the per-segment instruction stream — Phase 9 work.
-	 *
-	 * Heuristic for now: 8 MB. Covers small classification models;
-	 * larger detection models (yolov*, ssd, etc.) may need more. */
+	pstModel->enRunMode    = (SVP_NNIE_RUN_MODE_E)file[48];
+	pstModel->u32NetSegNum = seg_num;
+	/* Vendor computes u32TmpBufSize by walking the per-segment
+	 * instruction stream. We over-provision at 8 MB until that walker
+	 * is implemented — fine for classification-class models; large
+	 * detection models (yolov*, ssd) may need vendor's exact value. */
 	pstModel->u32TmpBufSize = 8 * 1024 * 1024;
 
-	/* Segment table is at file[192]; each on-disk record is 16 B and
-	 * decodes to the SVP_NNIE_SEG_S layout (see nnie_wk_format.h).
-	 * Node tables follow each segment record:
-	 *   [seg_hdr 16 B]
-	 *   [src_node[0] compact 16 B][src_node[0] name 32 B]   = 48 B
-	 *   ...
-	 *   [src_node[SrcNum-1] compact 16 B][name 32 B]
-	 *   [dst_node[0] ...]
-	 *
-	 * Node compact form (decoded from vendor inst_mnist_cycle.wk
-	 * hex dump at file[208]):
-	 *   [+0..+11]  u32 H, u32 W, u32 C   (interpreted by vendor as
-	 *              stWhc — note .wk stores H first, vendor populates
-	 *              SVP_NNIE_NODE_S.unShape.stWhc.{u32Width,u32Height,
-	 *              u32Chn} so Width and Height fields end up swapped
-	 *              vs file order, but for square inputs they're equal)
-	 *   [+14]      u8  enType (= 1 for the input layer of mnist.wk;
-	 *              vendor reports astSrcNode[0].enType=1)
-	 *   [+15]      u8  NodeId
-	 * Phase 14 critical finding: when the user-supplied src blob's
-	 * enType doesn't match astSrcNode[0].enType the HW rejects with
-	 * cfg_err info=0x1. Userspace test reads astSrcNode[0].enType to
-	 * pick the right SVP_BLOB_TYPE for its MmzAlloc, so populating
-	 * this field is load-bearing for HW dispatch correctness.
-	 *
-	 * NOTE: output node enType / NodeId aren't read from the file —
-	 * vendor's libnnie derives them from the model's run mode (outputs
-	 * are always SVP_BLOB_TYPE_S32 = 4, NodeId increments per
-	 * downstream layer). For now we leave astDstNode mostly zero and
-	 * force enType=4 so userspace allocates S32-sized buffers. */
-	{
-		const uint8_t *p = file + 192 + (size_t)seg_num * 16;
+	p = file + NNIE_WK_HEADER_SIZE + (size_t)seg_num * sizeof(nnie_wk_seg_record_t);
 
-		for (i = 0; i < seg_num; i++) {
-			const uint8_t *r = file + 192 + i * 16;
-			uint32_t j;
+	for (i = 0; i < seg_num; i++) {
+		const uint8_t *r = file + NNIE_WK_HEADER_SIZE
+		                   + i * sizeof(nnie_wk_seg_record_t);
+		uint32_t j;
 
-			pstModel->astSeg[i].enNetType     = (SVP_NNIE_NET_TYPE_E)r[0];
-			pstModel->astSeg[i].u16SrcNum     = r[1];
-			pstModel->astSeg[i].u16DstNum     = r[2];
-			pstModel->astSeg[i].u16RoiPoolNum = r[3];
-			pstModel->astSeg[i].u16MaxStep    = *(const uint16_t *)(r + 4);
-			pstModel->astSeg[i].u32InstOffset = *(const uint32_t *)(r + 8);
-			pstModel->astSeg[i].u32InstLen    = *(const uint32_t *)(r + 12);
+		pstModel->astSeg[i].enNetType     = (SVP_NNIE_NET_TYPE_E)r[0];
+		pstModel->astSeg[i].u16SrcNum     = r[1];
+		pstModel->astSeg[i].u16DstNum     = r[2];
+		pstModel->astSeg[i].u16RoiPoolNum = r[3];
+		pstModel->astSeg[i].u16MaxStep    = *(const uint16_t *)(r + 4);
+		pstModel->astSeg[i].u32InstOffset = *(const uint32_t *)(r + 8);
+		pstModel->astSeg[i].u32InstLen    = *(const uint32_t *)(r + 12);
 
-			if (pstModel->astSeg[i].u32InstOffset + pstModel->astSeg[i].u32InstLen
-			    > file_size)
+		if (pstModel->astSeg[i].u32InstOffset +
+		    pstModel->astSeg[i].u32InstLen > file_size)
+			return HI_ERR_SVP_NNIE_ILLEGAL_PARAM;
+
+		for (j = 0; j < pstModel->astSeg[i].u16SrcNum; j++) {
+			SVP_NNIE_NODE_S *n = &pstModel->astSeg[i].astSrcNode[j];
+
+			if ((size_t)(p + NNIE_WK_NODE_SIZE - file) > file_size)
 				return HI_ERR_SVP_NNIE_ILLEGAL_PARAM;
+			n->unShape.stWhc.u32Height = *(const uint32_t *)(p + 0);
+			n->unShape.stWhc.u32Width  = *(const uint32_t *)(p + 4);
+			n->unShape.stWhc.u32Chn    = *(const uint32_t *)(p + 8);
+			n->enType                  = (SVP_BLOB_TYPE_E)p[14];
+			n->u32NodeId               = p[15];
+			memcpy(n->szName, p + 16, SVP_NNIE_NODE_NAME_LEN - 1);
+			n->szName[SVP_NNIE_NODE_NAME_LEN - 1] = 0;
+			p += NNIE_WK_NODE_SIZE;
+		}
+		for (j = 0; j < pstModel->astSeg[i].u16DstNum; j++) {
+			SVP_NNIE_NODE_S *n = &pstModel->astSeg[i].astDstNode[j];
 
-			for (j = 0; j < pstModel->astSeg[i].u16SrcNum; j++) {
-				SVP_NNIE_NODE_S *n = &pstModel->astSeg[i].astSrcNode[j];
-
-				if ((size_t)(p + 48 - file) > file_size)
-					return HI_ERR_SVP_NNIE_ILLEGAL_PARAM;
-				n->unShape.stWhc.u32Height = *(const uint32_t *)(p + 0);
-				n->unShape.stWhc.u32Width  = *(const uint32_t *)(p + 4);
-				n->unShape.stWhc.u32Chn    = *(const uint32_t *)(p + 8);
-				n->enType                  = (SVP_BLOB_TYPE_E)p[14];
-				n->u32NodeId               = p[15];
-				memcpy(n->szName, p + 16, SVP_NNIE_NODE_NAME_LEN - 1);
-				n->szName[SVP_NNIE_NODE_NAME_LEN - 1] = 0;
-				p += 48;
-			}
-			for (j = 0; j < pstModel->astSeg[i].u16DstNum; j++) {
-				SVP_NNIE_NODE_S *n = &pstModel->astSeg[i].astDstNode[j];
-
-				if ((size_t)(p + 48 - file) > file_size)
-					return HI_ERR_SVP_NNIE_ILLEGAL_PARAM;
-				/* Output activation dims — vendor's libnnie swaps so
-				 * that the layer's "feature count" lands in Width. */
-				n->unShape.stWhc.u32Height = *(const uint32_t *)(p + 0);
-				n->unShape.stWhc.u32Chn    = *(const uint32_t *)(p + 4);
-				n->unShape.stWhc.u32Width  = *(const uint32_t *)(p + 8);
-				n->enType                  = SVP_BLOB_TYPE_S32;
-				n->u32NodeId               = (j + 1) * 8; /* vendor pattern */
-				memcpy(n->szName, p + 16, SVP_NNIE_NODE_NAME_LEN - 1);
-				n->szName[SVP_NNIE_NODE_NAME_LEN - 1] = 0;
-				p += 48;
-			}
+			if ((size_t)(p + NNIE_WK_NODE_SIZE - file) > file_size)
+				return HI_ERR_SVP_NNIE_ILLEGAL_PARAM;
+			/* Output activations: vendor's libnnie swaps fields so
+			 * the layer's feature count lands in Width. */
+			n->unShape.stWhc.u32Height = *(const uint32_t *)(p + 0);
+			n->unShape.stWhc.u32Chn    = *(const uint32_t *)(p + 4);
+			n->unShape.stWhc.u32Width  = *(const uint32_t *)(p + 8);
+			n->enType                  = SVP_BLOB_TYPE_S32;
+			n->u32NodeId               = (j + 1) * 8;
+			memcpy(n->szName, p + 16, SVP_NNIE_NODE_NAME_LEN - 1);
+			n->szName[SVP_NNIE_NODE_NAME_LEN - 1] = 0;
+			p += NNIE_WK_NODE_SIZE;
 		}
 	}
 
@@ -323,9 +253,6 @@ HI_S32 HI_MPI_SVP_NNIE_GetTskBufSize(HI_U32 u32MaxInputNum, HI_U32 u32MaxBboxNum
                                      HI_U32 au32TskBufSize[],
                                      HI_U32 u32NetSegNum)
 {
-	/* Phase 2 stub. Vendor walks the parsed model to compute per-core
-	 * task buffer sizes. Without a parsed model (Phase 3+), we can't
-	 * produce a meaningful answer — reject. */
 	(void)u32MaxInputNum; (void)u32MaxBboxNum;
 	(void)pstModel; (void)au32TskBufSize; (void)u32NetSegNum;
 	return HI_ERR_SVP_NNIE_NOT_SURPPORT;
@@ -346,16 +273,16 @@ HI_S32 HI_MPI_SVP_NNIE_Forward(SVP_NNIE_HANDLE *phSvpNnieHandle,
 	    !astDst || !pstForwardCtrl)
 		return HI_ERR_SVP_NNIE_NULL_PTR;
 
-	fd = nnie_open_dev();
-	if (fd < 0)
-		return nnie_err_to_hi(fd);
-
-	memset(buf, 0, sizeof(buf));
 	src_n = (int)pstForwardCtrl->u32SrcNum;
 	dst_n = (int)pstForwardCtrl->u32DstNum;
 	if (src_n < 1 || src_n > 16 || dst_n < 1 || dst_n > 16)
 		return HI_ERR_SVP_NNIE_ILLEGAL_PARAM;
 
+	fd = nnie_open_dev();
+	if (fd < 0)
+		return nnie_err_to_hi(fd);
+
+	memset(buf, 0, sizeof(buf));
 	memcpy(buf +    8, astSrc, NNIE_BLOB_SIZE * src_n);
 	model_uva = (uint64_t)(uintptr_t)pstModel;
 	memcpy(buf +  776, &model_uva, 8);
@@ -388,8 +315,11 @@ HI_S32 HI_MPI_SVP_NNIE_Query(SVP_NNIE_ID_E enNnieId,
                              HI_BOOL *pbFinish, HI_BOOL bBlock)
 {
 	(void)enNnieId; (void)svpNnieHandle; (void)bBlock;
-	if (!pbFinish) return HI_ERR_SVP_NNIE_NULL_PTR;
-	*pbFinish = HI_TRUE;            /* synchronous dispatch (Phase 3+) */
+	if (!pbFinish)
+		return HI_ERR_SVP_NNIE_NULL_PTR;
+	/* Forward dispatch is synchronous; by the time userspace calls
+	 * Query the task is always done. */
+	*pbFinish = HI_TRUE;
 	return HI_SUCCESS;
 }
 
