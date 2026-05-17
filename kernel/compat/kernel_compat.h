@@ -177,13 +177,18 @@ static inline void compat_do_gettimeofday(struct compat_timeval *tv)
 #endif
 
 /*
- * print_symbol() removed in 4.x — was a wrapper around printk("%pS").
- * Define as a transparent macro so legacy OSAL osal_addr.c calls keep
- * working unchanged. fmt is expected to contain "%s" (the old contract);
- * we redirect that single conversion to %pS (kernel symbol lookup).
- * Multi-arg fmt strings are not supported — none of the call sites use them.
+ * print_symbol() removed in 5.15 (commit f74cd6432cb6) — was a wrapper
+ * around printk("%pS"). Define as a transparent macro so legacy OSAL
+ * osal_addr.c calls keep working unchanged. fmt is expected to contain
+ * "%s" (the old contract); we redirect that single conversion to %pS
+ * (kernel symbol lookup). Multi-arg fmt strings are not supported —
+ * none of the call sites use them. Guard at 5.15.0, NOT 4.0.0: the
+ * symbol is still declared in <linux/kallsyms.h> on 4.x and 5.0-5.14,
+ * so redefining as a do-while macro collides with the function prototype
+ * (cv500/cv200 lite builds against 4.9 fail with "expected identifier
+ * or '(' before 'do'").
  */
-#if LINUX_VERSION_CODE >= KERNEL_VERSION(4, 0, 0)
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(5, 15, 0)
 #include <linux/printk.h>
 #define print_symbol(fmt, addr) \
 	do { \
@@ -237,12 +242,14 @@ static inline void compat_do_gettimeofday(struct compat_timeval *tv)
  * DEFINE_SEMAPHORE gained a count parameter in 6.4 (commit 48380368dec).
  * Old: DEFINE_SEMAPHORE(name)  →  count defaults to 1
  * New: DEFINE_SEMAPHORE(name, count)
- * Redirect the 1-arg form transparently so legacy OSAL source stays unchanged.
+ * Provide a helper for the legacy 1-arg form; callers must use the helper
+ * rather than the kernel macro directly so the same source compiles on
+ * both vintages. Do NOT #undef + redefine the kernel macro — that breaks
+ * sources (cv500 / osal-linux mmz) that legitimately call DEFINE_SEMAPHORE
+ * with two args on >= 6.4 kernels.
  */
 #if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 4, 0)
 #define compat_DEFINE_SEMAPHORE(name) DEFINE_SEMAPHORE(name, 1)
-#undef DEFINE_SEMAPHORE
-#define DEFINE_SEMAPHORE(name) struct semaphore name = __SEMAPHORE_INITIALIZER(name, 1)
 #else
 #define compat_DEFINE_SEMAPHORE(name) DEFINE_SEMAPHORE(name)
 #endif

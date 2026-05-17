@@ -20,6 +20,7 @@
  *      2012.11.20 add temp select method  <sunny.liucan@huawei.com>
  */
 
+#include <linux/module.h>
 #include "hi_osal.h"
 #include "hi_rtc.h"
 

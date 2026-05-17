@@ -20,6 +20,7 @@
  *      23-march-2017 move this file to interdrv
  */
 
+#include <linux/module.h>
 #include "hi_osal.h"
 #include "pwm.h"
 
