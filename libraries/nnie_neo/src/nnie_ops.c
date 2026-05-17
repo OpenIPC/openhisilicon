@@ -335,6 +335,10 @@ HI_S32 HI_MPI_SVP_NNIE_GetTskBufSize(HI_U32 u32MaxInputNum, HI_U32 u32MaxBboxNum
 			case SVP_BLOB_TYPE_VEC_S32:
 				per_frame_u64 = 1;
 				break;
+			case SVP_BLOB_TYPE_YVU420SP:
+			case SVP_BLOB_TYPE_YVU422SP:
+				per_frame_u64 = 2;  /* Y plane phys + UV plane phys */
+				break;
 			default:
 				return HI_ERR_SVP_NNIE_NOT_SURPPORT;
 			}
