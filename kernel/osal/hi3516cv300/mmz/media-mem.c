@@ -60,7 +60,7 @@
 
 
 OSAL_LIST_HEAD(mmz_list);
-static DEFINE_SEMAPHORE(mmz_lock);
+static compat_DEFINE_SEMAPHORE(mmz_lock);
 
 int anony = 0;
 module_param(anony, int, S_IRUGO);
