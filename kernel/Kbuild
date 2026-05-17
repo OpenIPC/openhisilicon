@@ -103,7 +103,12 @@ endif
     include $(src)/h264e/Kbuild
     include $(src)/h265e/Kbuild
     include $(src)/ive/Kbuild
-    include $(src)/ive_neo/Kbuild
+    # ive_neo is cv500-targeted experimental work (see hi3516cv500.kbuild).
+    # It compiles for V4 too but nothing on V4 insmods it — load_hisilicon
+    # / load_goke don't reference open_ive_neo.ko on ev200/ev300/gk7205v200.
+    # Shipping it on V4 just consumes ~28 KB of the lite NOR rootfs (and
+    # grows with every cv500 dispatch addition). Skip on V4 until there's
+    # an actual V4 consumer.
     include $(src)/jpege/Kbuild
 ifndef DISABLE_PM
     # it doesn't compile yet
