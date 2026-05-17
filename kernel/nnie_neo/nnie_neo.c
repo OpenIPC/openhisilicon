@@ -572,17 +572,21 @@ static long nnie_dispatch_forward(const struct nnie_hw_task *task)
 	mmb = hil_mmb_alloc("nnie_desc", 64 * 1024, 4096, 0, NULL);
 	if (!mmb)
 		return -ENOMEM;
-	task_kvirt = hil_mmb_map2kern_cached(mmb);
+	/* Phase 14: use NOCACHE mapping for the descriptor so HW reads
+	 * see writes immediately without depending on L1/L2 flush
+	 * propagation. Vendor uses cmpi_mmz_malloc_nocache for its
+	 * pre-allocated task ring at module init (svp_nnie_init @0x11a8). */
+	task_kvirt = hil_mmb_map2kern(mmb);
 	if (!task_kvirt) {
 		hil_mmb_free(mmb);
 		return -ENOMEM;
 	}
 	task_dma = mmb->phys_addr;
-	pr_info("nnie_neo: descriptor mmb: phys=0x%lx kvirt=%p len=%lu\n",
+	pr_info("nnie_neo: descriptor mmb: phys=0x%lx kvirt=%p len=%lu (nocache)\n",
 		(unsigned long)mmb->phys_addr, task_kvirt, mmb->length);
 
 	memcpy(task_kvirt, task, NNIE_HW_TASK_SIZE);
-	__cpuc_flush_dcache_area(task_kvirt, NNIE_HW_TASK_SIZE);
+	wmb();
 
 	/* Vendor's clock/RAM dance captured via kprobe-tracing
 	 * sys_hal_wk_cnn_clk_en + sys_hal_gdc_nnie_set_ram_using during
@@ -643,10 +647,13 @@ static long nnie_dispatch_forward(const struct nnie_hw_task *task)
 		v = (v & ~0x1Fu) | 0x0Fu | 0xF00u;
 		writel(v, g_nnie_regs + NNIE_REG_OUTSTANDING);
 	}
-	/* IRQ_CFG: vendor does 3 separate R-M-W to set bits 0, 1, 2; we
-	 * can write the combined value because all 3 bits enable
-	 * orthogonal IRQ sources. */
-	writel(NNIE_IRQ_ALL,             g_nnie_regs + NNIE_REG_IRQ_CFG);
+	/* IRQ_CFG: vendor hal_svp_nnie_cfg_irq @0xbbb4 does 3 separate
+	 * RMW writes OR'ing bits 0/1/2 — match that pattern in one RMW
+	 * to preserve any HW-set status bits in the upper half. */
+	{
+		u32 v = readl(g_nnie_regs + NNIE_REG_IRQ_CFG);
+		writel(v | NNIE_IRQ_ALL, g_nnie_regs + NNIE_REG_IRQ_CFG);
+	}
 	/* Vendor sets TIMEOUT to ~2 s at 500 MHz NNIE clock; without it
 	 * (TIMEOUT=0) HW seems to never IRQ — possibly stuck waiting on
 	 * a timeout counter that never advances. */
@@ -656,11 +663,14 @@ static long nnie_dispatch_forward(const struct nnie_hw_task *task)
 	 * clearing after completion, not vendor's set value. */
 	writel(0xFFFFFFFFu,              g_nnie_regs + NNIE_REG_TIMEOUT_LO);
 	writel(0x000000FFu,              g_nnie_regs + NNIE_REG_TIMEOUT_HI);
-	/* Vendor disable_check_sum @0xbc74 clears bit 0 of +0x68 to 0
-	 * BEFORE start (confirmed by Phase 12 live capture). Function name
-	 * matches behaviour — bit 0 = 1 IS "checksum enabled" but vendor
-	 * DISABLES it per task. Post-task HW restores chip default 0x1. */
-	writel(0u,                       g_nnie_regs + NNIE_REG_CHECK_SUM);
+	/* Vendor disable_check_sum @0xbc74 BFC bit 0 of +0x68 (RMW, NOT
+	 * plain write of 0). Must preserve other bits — chip default 0x1
+	 * suggests other bits encode debug/perf config we mustn't clobber.
+	 * Phase 14: switch from `writel(0)` to RMW to match vendor exactly. */
+	{
+		u32 v = readl(g_nnie_regs + NNIE_REG_CHECK_SUM);
+		writel(v & ~1u,          g_nnie_regs + NNIE_REG_CHECK_SUM);
+	}
 
 	/* +0x44 = 0x3 in vendor's live capture is HW-set DURING task
 	 * execution (post-task it's 0). hi_nnie.o disasm has NO writes to
@@ -668,9 +678,12 @@ static long nnie_dispatch_forward(const struct nnie_hw_task *task)
 	 *
 	 * Same for +0xb0..+0xb8 — Phase 12 found they're HW status. */
 	/* Clear any leftover IRQ status from a previous failed Forward —
-	 * with cfg_err bit 2 left set in NNIE_REG_IRQ_STATUS the next
-	 * START write might re-fire the IRQ immediately. */
-	writel(NNIE_IRQ_ALL,             g_nnie_regs + NNIE_REG_IRQ_CLEAR);
+	 * vendor hal_svp_nnie_clear_irq @0xbb64 also does 3 RMW writes
+	 * to set bits 0/1/2 in IRQ_CLEAR (W1C semantics). */
+	{
+		u32 v = readl(g_nnie_regs + NNIE_REG_IRQ_CLEAR);
+		writel(v | NNIE_IRQ_ALL, g_nnie_regs + NNIE_REG_IRQ_CLEAR);
+	}
 
 	writel((u32)task_dma,            g_nnie_regs + NNIE_REG_TASK_ADDR_LO);
 	writel((u32)((u64)task_dma >> 32), g_nnie_regs + NNIE_REG_TASK_ADDR_HI);
@@ -700,7 +713,14 @@ static long nnie_dispatch_forward(const struct nnie_hw_task *task)
 			d[8], d[9], d[10], d[11], d[12], d[13], d[14], d[15]);
 	}
 
-	writel(NNIE_START_GO,            g_nnie_regs + NNIE_REG_START);
+	/* Vendor hal_svp_nnie_start @0xbb2c uses RMW (OR bit 0). On a
+	 * post-reboot run reg+0x30 reads back 0x0, so the RMW is
+	 * equivalent to a plain write of 1 — but match vendor exactly in
+	 * case some later state path leaves non-zero bits there. */
+	{
+		u32 v = readl(g_nnie_regs + NNIE_REG_START);
+		writel(v | NNIE_START_GO, g_nnie_regs + NNIE_REG_START);
+	}
 
 	/* Brief polling diagnostic — if HW fires IRQ in <100 ms we'll
 	 * catch the STATUS transitions; if HW is wedged we'll see
