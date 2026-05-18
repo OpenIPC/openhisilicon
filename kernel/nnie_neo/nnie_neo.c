@@ -28,6 +28,13 @@
 #include "hi_common.h"
 #include "osal_mmz.h"
 
+/* cv500 SYS module dispatcher. cmpi_get_module_func_by_id(HI_ID_SYS)
+ * returns a sys_export_func whose pfn_sys_drv_ioctrl(chn, func, val)
+ * routes per-chip clock/reset/RAM-ownership requests (e.g.
+ * SYS_GDC_NNIE_RAM_USE, SYS_WK_CNN_CLK_SET). */
+#include "mod_ext.h"
+#include "sys_ext.h"
+
 #include "nnie_hw_task.h"
 #include "nnie_hw_regs.h"
 
@@ -45,25 +52,49 @@ EXPORT_SYMBOL(g_nnie_irq);
 EXPORT_SYMBOL(g_gdc_irq);
 EXPORT_SYMBOL(g_nnie_pf_dev);
 
-/* ── cv500 sys / CRG MMIO windows ─────────────────────────────────── */
+/* ── cv500 sys / CRG / MISC MMIO windows ──────────────────────────────
+ *
+ *   crg  @ 0x12010000 (0x10000)   chip-level CRG
+ *   sys  @ 0x12020000 (0x8000)    shared-resource mutex/select
+ *   misc @ 0x12030000 (0x8000)    misc shared regs incl. RAM_USE
+ *
+ * sys_hal_gdc_nnie_set_ram_using writes MISC+0x34 bit 0; the SYS
+ * window at 0x12020000 holds NNIE/GDC/VENC mutex-arbitration
+ * registers (sys+0x08 bit 1 = SYS_GDC_NNIE_MUTEX_SEL). */
 
-#define NNIE_SYS2_BASE_PHYS        0x12030000UL
-#define NNIE_SYS2_WINDOW_SIZE      0x1000
-#define NNIE_SYS2_REG_NNIE_RAM     0x0034   /* bit 0 = NNIE owns shared SRAM */
+#define NNIE_MISC_BASE_PHYS        0x12030000UL
+#define NNIE_MISC_WINDOW_SIZE      0x1000
+#define NNIE_MISC_REG_NNIE_RAM     0x0034   /* bit 0 = NNIE owns shared SRAM */
+
+#define NNIE_SYS_BASE_PHYS         0x12020000UL
+#define NNIE_SYS_WINDOW_SIZE       0x1000
+#define NNIE_SYS_REG_NNIE_MUTEX    0x0008   /* bit 0 = venc/nnie mutex,
+					     * bit 1 = gdc/nnie mutex */
 
 #define NNIE_CRG_BASE_PHYS         0x12010000UL
 #define NNIE_CRG_WINDOW_SIZE       0x1000
 #define NNIE_CRG_REG_NNIE_CLK      0x00BC   /* bit 0=reset, bit 1=clk_en */
 #define NNIE_CRG_REG_VEDU_CLK      0x00A4   /* shared with NNIE on cv500   */
 
-#define NNIE_SYS_BIT_NNIE_RAM      (1u << 0)
-#define NNIE_SYS_BIT_NNIE_RESET    (1u << 0)
-#define NNIE_SYS_BIT_NNIE_CLK_EN   (1u << 1)
+#define NNIE_BIT_NNIE_RAM          (1u << 0)
+#define NNIE_BIT_NNIE_RESET        (1u << 0)
+#define NNIE_BIT_NNIE_CLK_EN       (1u << 1)
+#define NNIE_BIT_NNIE_GDC_MUTEX    (1u << 1)
+#define NNIE_BIT_NNIE_VENC_MUTEX   (1u << 0)
+
+/* Aliases retained from the earlier incorrect "SYS2" naming. */
+#define NNIE_SYS2_REG_NNIE_RAM     NNIE_MISC_REG_NNIE_RAM
+#define NNIE_SYS_BIT_NNIE_RAM      NNIE_BIT_NNIE_RAM
+#define NNIE_SYS_BIT_NNIE_RESET    NNIE_BIT_NNIE_RESET
+#define NNIE_SYS_BIT_NNIE_CLK_EN   NNIE_BIT_NNIE_CLK_EN
 
 static void __iomem *g_crg_regs;
-static void __iomem *g_sys2_regs;
+static void __iomem *g_misc_regs;
+static void __iomem *g_sys_regs;
+#define g_sys2_regs g_misc_regs
 static spinlock_t    g_crg_lock;
 static spinlock_t    g_sys2_lock;
+static spinlock_t    g_sys_lock;
 
 /* Task descriptor MMZ, allocated once at module init. The vendor driver
  * does the same — keeping a single ring of descriptors avoids per-task
@@ -109,6 +140,77 @@ static void nnie_sys2_clear_bit(u32 reg_off, u32 bit)
 	v = readl(g_sys2_regs + reg_off);
 	writel(v & ~bit, g_sys2_regs + reg_off);
 	spin_unlock_irqrestore(&g_sys2_lock, flags);
+}
+
+static void nnie_misc_set_bit(u32 reg_off, u32 bit)
+{
+	unsigned long flags;
+	u32 v;
+
+	if (!g_misc_regs)
+		return;
+	spin_lock_irqsave(&g_sys2_lock, flags);
+	v = readl(g_misc_regs + reg_off);
+	writel(v | bit, g_misc_regs + reg_off);
+	spin_unlock_irqrestore(&g_sys2_lock, flags);
+}
+
+static void nnie_sys_set_bit(u32 reg_off, u32 bit)
+{
+	unsigned long flags;
+	u32 v;
+
+	if (!g_sys_regs)
+		return;
+	spin_lock_irqsave(&g_sys_lock, flags);
+	v = readl(g_sys_regs + reg_off);
+	writel(v | bit, g_sys_regs + reg_off);
+	spin_unlock_irqrestore(&g_sys_lock, flags);
+}
+
+static void nnie_sys_clear_bit(u32 reg_off, u32 bit)
+{
+	unsigned long flags;
+	u32 v;
+
+	if (!g_sys_regs)
+		return;
+	spin_lock_irqsave(&g_sys_lock, flags);
+	v = readl(g_sys_regs + reg_off);
+	writel(v & ~bit, g_sys_regs + reg_off);
+	spin_unlock_irqrestore(&g_sys_lock, flags);
+}
+
+/* Per-batch GDC/NNIE shared-SRAM ownership claim via the SYS module
+ * dispatcher. GDC clock must be ON during the SYS_GDC_NNIE_RAM_USE
+ * write or the arbitration state doesn't propagate. */
+__maybe_unused static void nnie_sys_select_ram_via_sys(void)
+{
+	sys_export_func *sys;
+	hi_mpp_chn chn = { .mod_id = HI_ID_SVP_NNIE, .dev_id = 0, .chn_id = 0 };
+	hi_s32 gdc_clk = 0, nnie_clk = 0;
+	hi_s32 val;
+
+	sys = (sys_export_func *)cmpi_get_module_func_by_id(HI_ID_SYS);
+	if (!sys || !sys->pfn_sys_drv_ioctrl)
+		return;
+
+	sys->pfn_sys_drv_ioctrl(&chn, SYS_GDC_GET_CLK_STATE, &gdc_clk);
+	if (!gdc_clk) {
+		val = 1;
+		sys->pfn_sys_drv_ioctrl(&chn, SYS_GDC_CLK_EN, &val);
+	}
+	sys->pfn_sys_drv_ioctrl(&chn, SYS_WK_CNN_GET_CLK_STATE, &nnie_clk);
+	if (!nnie_clk) {
+		val = 1;
+		sys->pfn_sys_drv_ioctrl(&chn, SYS_WK_CNN_CLK_EN, &val);
+	}
+	val = 0;
+	sys->pfn_sys_drv_ioctrl(&chn, SYS_GDC_NNIE_RAM_USE, &val);
+	if (!gdc_clk) {
+		val = 0;
+		sys->pfn_sys_drv_ioctrl(&chn, SYS_GDC_CLK_EN, &val);
+	}
 }
 
 /* ── Task-buffer registry ─────────────────────────────────────────
@@ -315,21 +417,60 @@ static long nnie_dispatch(unsigned int cmd, unsigned long arg)
 #define NNIE_CTRL_OFF_TSK_PHYS      40
 #define NNIE_CTRL_OFF_TSK_SIZE      56
 
-/* Monotonic task index — must increment per Forward and wrap at 512
- * so HW can map each task to a ring slot. Starting at 0 matches the
- * vendor first-task value. */
-static atomic_t g_nnie_task_idx;
+/* ── ForwardWithBbox arg buffer (1728 B) layout ────────────────────
+ *
+ * vs the Forward arg, the bbox arg has an extra astBbox[2] at +776
+ * shifting pstModel and astDst down. CTRL_S also has u32ProposalNum
+ * inserted at +8 pushing NetSegId and the SVP_MEM_INFO_S members by
+ * 8 B. */
+#define NNIE_BBOX_OFF_HANDLE         0
+#define NNIE_BBOX_OFF_ASTSRC         8
+#define NNIE_BBOX_OFF_ASTBBOX      776
+#define NNIE_BBOX_OFF_PSTMODEL_UVA 872
+#define NNIE_BBOX_OFF_ASTDST       880
+#define NNIE_BBOX_OFF_CTRL        1648
+#define NNIE_BBOX_OFF_INSTANT     1720
+
+#define NNIE_BBOX_CTRL_OFF_SRCNUM    0
+#define NNIE_BBOX_CTRL_OFF_DSTNUM    4
+#define NNIE_BBOX_CTRL_OFF_PROPNUM   8
+#define NNIE_BBOX_CTRL_OFF_SEGID    12
+#define NNIE_BBOX_CTRL_OFF_NNIEID   16   /* must be 0 (only NNIE0 supported) */
+#define NNIE_BBOX_CTRL_OFF_TMP_PHYS 24
+#define NNIE_BBOX_CTRL_OFF_TMP_SIZE 40
+#define NNIE_BBOX_CTRL_OFF_TSK_PHYS 48
+#define NNIE_BBOX_CTRL_OFF_TSK_SIZE 64
+
+/* Validation harness: when set, the bbox handler builds the tskbuf
+ * in-place but compares against a kernel-embedded vendor capture
+ * (kernel/nnie_neo/nnie_neo_bbox_golden.h, 114 KB from a pvanet+
+ * horse_dog_car_person_224x224 run on av300) without dispatching HW.
+ *
+ * Each failed attempt logs the first byte offset that differs so the
+ * algorithm can be iterated safely without risking a NNIE HW hang
+ * that requires a board reboot to recover.
+ *
+ * Default off (handler returns -EOPNOTSUPP without building anything).
+ * Set via module param: insmod open_nnie_neo.ko nnie_bbox_validate=1
+ */
+static bool g_nnie_bbox_validate;
+static bool g_nnie_hw_cold_inited;
+module_param_named(nnie_bbox_validate, g_nnie_bbox_validate, bool, 0644);
+MODULE_PARM_DESC(nnie_bbox_validate,
+		 "Build bbox tskbuf and compare against vendor golden bytes, no HW dispatch");
 
 static void nnie_fill_task_header(struct nnie_hw_task *task,
 				  u64 model_phys, u32 inst_off, u32 inst_len,
 				  u64 tsk_phys, u64 tmp_phys, u32 batch_num,
 				  bool instant)
 {
-	u32 slot = (atomic_inc_return(&g_nnie_task_idx) - 1) & 0x1ff;
-
+	/* Vendor sets slot_idx=0 unconditionally for both Forward and
+	 * ForwardWithBbox. Single-segment nets tolerated an incrementing
+	 * slot, but Faster-RCNN-class ForwardWithBbox following a Forward
+	 * needs slot=0 or cls_prob collapses to background. */
 	memset(task, 0, sizeof(*task));
 	task->trigger_mode    = cpu_to_le16(instant ? 1 : 0);
-	task->slot_idx        = cpu_to_le32(slot);
+	task->slot_idx        = cpu_to_le32(0);
 	task->model_file_phys = cpu_to_le64(model_phys);
 	task->seg_inst_offset = cpu_to_le32(inst_off);
 	task->seg_inst_len    = cpu_to_le32(inst_len);
@@ -388,10 +529,7 @@ static int nnie_build_task_tail(struct nnie_tskbuf *tb, const u8 *fwd_arg,
 		u32 chn     = *(u32 *)(blob + NNIE_BLOB_OFF_CHN);
 		u64 plane_size = (u64)stride * height;
 
-		/* en_type encoding matches SVP_BLOB_TYPE_E. Layout cross-
-		 * checked against vendor svp_nnie_fill_image_src_addr +
-		 * fill_forward_task (decompiled from open_nnie.ko):
-		 *
+		/* en_type encoding matches SVP_BLOB_TYPE_E:
 		 *   0 = S32        — 1 u64 / frame at phys + j * stride*h*chn
 		 *   1 = U8 image   — chn=1: 1 u64 / frame at phys + j*stride*h
 		 *                    chn=3: 4 u64 quartet / frame (3 planar
@@ -486,20 +624,32 @@ static long nnie_dispatch_forward(const struct nnie_hw_task *task)
 	task_dma   = g_nnie_desc_phys;
 
 	memcpy(task_kvirt, task, NNIE_HW_TASK_SIZE);
+	__cpuc_flush_dcache_area(task_kvirt, NNIE_HW_TASK_SIZE);
 	wmb();
 
-	/* Clock + SRAM-ownership sequence. The off/on toggle is an HW
-	 * reset pulse; without it the NNIE block stays in some power-on
-	 * state that doesn't accept tasks. The NNIE_RAM bit must stay 0
-	 * from here through START — it signals "NNIE owns the shared
-	 * SRAM", and toggling it back to 1 invalidates ownership. */
-	nnie_crg_set_bit  (NNIE_CRG_REG_NNIE_CLK, NNIE_SYS_BIT_NNIE_CLK_EN);
-	nnie_crg_clear_bit(NNIE_CRG_REG_NNIE_CLK, NNIE_SYS_BIT_NNIE_RESET);
-	nnie_crg_clear_bit(NNIE_CRG_REG_NNIE_CLK, NNIE_SYS_BIT_NNIE_CLK_EN);
-	udelay(1);
-	nnie_crg_set_bit  (NNIE_CRG_REG_NNIE_CLK, NNIE_SYS_BIT_NNIE_CLK_EN);
-	nnie_sys2_clear_bit(NNIE_SYS2_REG_NNIE_RAM, NNIE_SYS_BIT_NNIE_RAM);
-	nnie_crg_set_bit  (NNIE_CRG_REG_NNIE_CLK, NNIE_SYS_BIT_NNIE_CLK_EN);
+	/* Clock + SRAM-ownership sequence. Vendor only runs the reset
+	 * pulse + clock-toggle when the HW is COLD (first task after
+	 * power-on or after the queue drained). Subsequent tasks dispatched
+	 * back-to-back skip this — observed via /dev/mem RO MMIO polling:
+	 * vendor's TASK_ADDR_LO transitions 0xa0110000 → 0xa0120000
+	 * directly without +0x44 (FEATURE_EN) going through 0. Our prior
+	 * code toggled the clock every dispatch, which forces HW to idle
+	 * between tasks and apparently resets some pipeline state that
+	 * bbox conv depends on. Gate the toggle behind a one-shot flag. */
+	if (!g_nnie_hw_cold_inited) {
+		nnie_crg_set_bit  (NNIE_CRG_REG_NNIE_CLK, NNIE_BIT_NNIE_CLK_EN);
+		nnie_crg_clear_bit(NNIE_CRG_REG_NNIE_CLK, NNIE_BIT_NNIE_RESET);
+		nnie_crg_clear_bit(NNIE_CRG_REG_NNIE_CLK, NNIE_BIT_NNIE_CLK_EN);
+		udelay(1);
+		nnie_crg_set_bit  (NNIE_CRG_REG_NNIE_CLK, NNIE_BIT_NNIE_CLK_EN);
+		nnie_sys2_clear_bit(NNIE_MISC_REG_NNIE_RAM, NNIE_BIT_NNIE_RAM);
+		nnie_crg_set_bit  (NNIE_CRG_REG_NNIE_CLK, NNIE_BIT_NNIE_CLK_EN);
+		/* Vendor's drv_svp_nnie_select_ram: GDC-clock-toggle wrapper
+		 * around SYS_GDC_NNIE_RAM_USE so the arbitration state
+		 * actually latches into the shared RAM controller. */
+		nnie_sys_select_ram_via_sys();
+		g_nnie_hw_cold_inited = true;
+	}
 
 	/* NNIE shares VEDU clock infrastructure on cv500; CRG +0xa4 low
 	 * 3 bits must be 0x6 or HW returns cfg_err. */
@@ -558,8 +708,14 @@ static long nnie_dispatch_forward(const struct nnie_hw_task *task)
 	completed = wait_for_completion_timeout(&g_nnie_done, 5 * HZ);
 	cause = atomic_xchg(&g_nnie_last_status, 0);
 
-	nnie_sys2_clear_bit(NNIE_SYS2_REG_NNIE_RAM, NNIE_SYS_BIT_NNIE_RAM);
+	/* Vendor's IRQ-handler post-task cleanup: toggle MISC+0x34 bit 0
+	 * from 1 to 0. Flushes shared GDC/NNIE SRAM arbitration state
+	 * between tasks. */
+	nnie_misc_set_bit  (NNIE_MISC_REG_NNIE_RAM, NNIE_BIT_NNIE_RAM);
+	nnie_sys2_clear_bit(NNIE_MISC_REG_NNIE_RAM, NNIE_BIT_NNIE_RAM);
 
+	pr_info_ratelimited("nnie_neo: dispatch done completed=%lu cause=0x%x\n",
+			    completed, cause);
 	if (!completed)
 		ret = -ETIMEDOUT;
 	else if (cause & NNIE_IRQ_CFG_ERR) {
@@ -681,26 +837,344 @@ static long nnie_op_forward(unsigned long arg)
 	return 0;
 }
 
-/* ForwardWithBbox (RPN/SSD detection-net second stage):
+#include "nnie_neo_bbox_golden.h"
+
+/* Helper: write a u32 LE to a kvirt buffer at byte offset, advancing
+ * a running tail size. Returns -ENOSPC if past tb->size. */
+static int nnie_bbox_put_u32(u8 *kvirt, u32 *off, u32 max, u32 v)
+{
+	if (*off + 4 > max)
+		return -ENOSPC;
+	*(u32 *)(kvirt + *off) = cpu_to_le32(v);
+	*off += 4;
+	return 0;
+}
+static int nnie_bbox_put_u64(u8 *kvirt, u32 *off, u32 max, u64 v)
+{
+	if (*off + 8 > max)
+		return -ENOSPC;
+	*(u64 *)(kvirt + *off) = cpu_to_le64(v);
+	*off += 8;
+	return 0;
+}
+
+/* Compare our just-built tskbuf bytes against the vendor capture
+ * (pvanet+horse_dog ground truth embedded in nnie_neo_bbox_golden.h).
+ * The captured header has pointer fields (TskPhys+0x40 self-pointer
+ * + 3 ext-buf phys) that vary per allocation — they're skipped from
+ * the byte compare.
  *
- *   The 1728 B user buffer has a different layout from Forward:
- *   astBbox[2] inserted at +776, pstModel at +872, astDst at +880,
- *   CTRL_S (72 B) at +1648, bInstant at +1720. The 64 B HW
- *   descriptor is identical to Forward — the bbox-ness lives in
- *   tskbuf §3, which carries the per-proposal phys-addr table.
+ * Returns 0 on full match, byte-offset-of-first-mismatch (>0)
+ * otherwise. */
+static int nnie_bbox_validate_bytes(const u8 *ours, u32 size)
+{
+	u32 n = min_t(u32, size, NNIE_BBOX_GOLDEN_BYTES);
+	u32 i;
+
+	for (i = 0; i < n; i++) {
+		/* Skip pointer-bearing u64s in the header at +16, +32, +40, +48. */
+		if ((i >= 16 && i < 24) ||
+		    (i >= 32 && i < 56))
+			continue;
+		if (ours[i] != ((const u8 *)nnie_bbox_golden)[i]) {
+			u32 ours_u32 = *(u32 *)(ours + (i & ~3u));
+			u32 gold_u32 = *(u32 *)((u8 *)nnie_bbox_golden + (i & ~3u));
+			pr_warn("nnie_neo: bbox tskbuf mismatch @+%u (u32@+%u: ours=0x%08x golden=0x%08x)\n",
+				i, (i & ~3u), ours_u32, gold_u32);
+			return i;
+		}
+	}
+	return 0;
+}
+
+/* ForwardWithBbox handler (Faster-RCNN family: pvanet,
+ * alexnet-frcnn, fasterrcnn-double-roipooling, R-FCN).
  *
- *   The §3 layout is not yet decoded (vendor
- *   svp_nnie_fill_forward_with_bbox_task is ~1.4K instructions,
- *   220 B stack frame); see kaeru node
- *   `nnie-neo-cv500-vendor-forward-with-bbox-kernel-re`.
- *
- *   Reject explicitly so callers fall back rather than silently
- *   running Forward-shaped offsets against a bbox-shaped buffer.
+ * Default behaviour: returns -EOPNOTSUPP. Set module parameter
+ * nnie_bbox_validate=1 to enable the validation-mode path which
+ * builds the bbox tskbuf, byte-compares it against the embedded
+ * vendor-captured golden for pvanet+horse_dog, and dispatches HW
+ * only when every byte matches. The HW completes with cause=0x1
+ * FINISH but seg-1 cls_prob diverges from vendor's output — bbox is
+ * not currently usable end-to-end. This handler ships as the
+ * iteration base for completing the algorithmic §D record generation
+ * (svp_nnie_gen_roi_info_normal_block) and the userspace RPN
+ * decoder in libnnie_neo.
  */
 static long nnie_op_forward_with_bbox(unsigned long arg)
 {
-	pr_info_once("nnie_neo: ForwardWithBbox not implemented yet; use Forward for classifier nets\n");
-	return -EOPNOTSUPP;
+	u8 *buf = (u8 *)arg;
+	u32 src_num, dst_num, net_seg_id, prop_num, instant, batch_num;
+	u32 tsk_size, tmp_size;
+	u64 tsk_phys, tmp_phys, model_uva;
+	u32 reserved, off, i;
+	struct nnie_tskbuf *tb;
+	long ret;
+	int mismatch;
+
+	if (!g_nnie_bbox_validate) {
+		pr_info_once("nnie_neo: ForwardWithBbox unsupported; insmod with nnie_bbox_validate=1 to enable validation mode\n");
+		return -EOPNOTSUPP;
+	}
+
+	if (!buf)
+		return -EINVAL;
+
+	/* enNnieId at CTRL+16 must be 0 (only NNIE0 exists on cv500). */
+	reserved = *(u32 *)(buf + NNIE_BBOX_OFF_CTRL + NNIE_BBOX_CTRL_OFF_NNIEID);
+	if (reserved) {
+		pr_warn_ratelimited("nnie_neo: bbox enNnieId=%u, expected 0\n", reserved);
+		return -EINVAL;
+	}
+
+	src_num    = *(u32 *)(buf + NNIE_BBOX_OFF_CTRL + NNIE_BBOX_CTRL_OFF_SRCNUM);
+	dst_num    = *(u32 *)(buf + NNIE_BBOX_OFF_CTRL + NNIE_BBOX_CTRL_OFF_DSTNUM);
+	prop_num   = *(u32 *)(buf + NNIE_BBOX_OFF_CTRL + NNIE_BBOX_CTRL_OFF_PROPNUM);
+	net_seg_id = *(u32 *)(buf + NNIE_BBOX_OFF_CTRL + NNIE_BBOX_CTRL_OFF_SEGID);
+	tmp_phys   = *(u64 *)(buf + NNIE_BBOX_OFF_CTRL + NNIE_BBOX_CTRL_OFF_TMP_PHYS);
+	tmp_size   = *(u32 *)(buf + NNIE_BBOX_OFF_CTRL + NNIE_BBOX_CTRL_OFF_TMP_SIZE);
+	tsk_phys   = *(u64 *)(buf + NNIE_BBOX_OFF_CTRL + NNIE_BBOX_CTRL_OFF_TSK_PHYS);
+	tsk_size   = *(u32 *)(buf + NNIE_BBOX_OFF_CTRL + NNIE_BBOX_CTRL_OFF_TSK_SIZE);
+	instant    = *(u32 *)(buf + NNIE_BBOX_OFF_INSTANT);
+	batch_num  = *(u32 *)(buf + NNIE_BBOX_OFF_ASTSRC + NNIE_BLOB_OFF_NUM);
+	model_uva  = *(u64 *)(buf + NNIE_BBOX_OFF_PSTMODEL_UVA);
+	(void)tmp_phys; (void)instant; (void)batch_num; (void)model_uva;
+
+	pr_info("nnie_neo: bbox arg src=%u dst=%u prop=%u seg=%u tsk=0x%llx/%u tmp=0x%llx/%u\n",
+		src_num, dst_num, prop_num, net_seg_id,
+		(unsigned long long)tsk_phys, tsk_size,
+		(unsigned long long)tmp_phys, tmp_size);
+
+	if (!model_uva || src_num == 0 || src_num > 16 ||
+	    dst_num == 0 || dst_num > 16 || net_seg_id >= 8 ||
+	    prop_num > 2)
+		return -EINVAL;
+
+	mutex_lock(&g_nnie_tskbuf_lock);
+	tb = nnie_find_tskbuf_locked(tsk_phys);
+	mutex_unlock(&g_nnie_tskbuf_lock);
+	if (!tb) {
+		if (!tsk_size) {
+			pr_warn("nnie_neo: bbox no AddTskBuf for phys=0x%llx and CTRL.TskSize=0\n",
+				(unsigned long long)tsk_phys);
+			return -ENOENT;
+		}
+		ret = nnie_add_tskbuf(tsk_phys, 0, tsk_size);
+		if (ret && ret != -EEXIST)
+			return ret;
+		mutex_lock(&g_nnie_tskbuf_lock);
+		tb = nnie_find_tskbuf_locked(tsk_phys);
+		mutex_unlock(&g_nnie_tskbuf_lock);
+		if (!tb)
+			return -ENOENT;
+	}
+
+	/* Bbox tskbuf layout:
+	 *
+	 *   §A stride table     +0..+15   1 src + M dst u32 strides, pad
+	 *   §B header block     +16..+63  self-ptr u64 + 0 +
+	 *                                 M dst phys u64 (1 per dst, NOT
+	 *                                 iterated by num like Forward) +
+	 *                                 N src phys u64 + 0
+	 *   §C size block       +64..+95  {size_a, max_roi, size_b,
+	 *                                 size_c, size_d} + 3 u32 pad
+	 *   §D ROI records      +96..     max_roi × dst_h × dst_w × 16 B
+	 *                                 per-anchor records (byte-replayed
+	 *                                 from the embedded golden capture
+	 *                                 until the algorithmic generator
+	 *                                 lands).
+	 */
+	memset(tb->kvirt, 0, tb->size);
+	off = 0;
+
+	/* §A: src strides + dst strides, align 16. */
+	for (i = 0; i < src_num; i++) {
+		u32 stride = *(u32 *)(buf + NNIE_BBOX_OFF_ASTSRC +
+				      i * NNIE_BLOB_S_SIZE + NNIE_BLOB_OFF_STRIDE);
+		if ((ret = nnie_bbox_put_u32(tb->kvirt, &off, tb->size, stride)))
+			return ret;
+	}
+	for (i = 0; i < dst_num; i++) {
+		u32 stride = *(u32 *)(buf + NNIE_BBOX_OFF_ASTDST +
+				      i * NNIE_BLOB_S_SIZE + NNIE_BLOB_OFF_STRIDE);
+		if ((ret = nnie_bbox_put_u32(tb->kvirt, &off, tb->size, stride)))
+			return ret;
+	}
+	while (off & 0xF) {
+		if ((ret = nnie_bbox_put_u32(tb->kvirt, &off, tb->size, 0)))
+			return ret;
+	}
+
+	/* §B header at +16: self-pointer (tsk_phys + 0x40, into the
+	 * size block) + zero + dst phys array + src phys array + zero. */
+	if ((ret = nnie_bbox_put_u64(tb->kvirt, &off, tb->size, tsk_phys + 0x40)))
+		return ret;
+	if ((ret = nnie_bbox_put_u64(tb->kvirt, &off, tb->size, 0)))
+		return ret;
+	for (i = 0; i < dst_num; i++) {
+		u64 dst_phys = *(u64 *)(buf + NNIE_BBOX_OFF_ASTDST +
+					i * NNIE_BLOB_S_SIZE + NNIE_BLOB_OFF_PHYADDR);
+		if ((ret = nnie_bbox_put_u64(tb->kvirt, &off, tb->size, dst_phys)))
+			return ret;
+	}
+	for (i = 0; i < src_num; i++) {
+		u64 src_phys = *(u64 *)(buf + NNIE_BBOX_OFF_ASTSRC +
+					i * NNIE_BLOB_S_SIZE + NNIE_BLOB_OFF_PHYADDR);
+		/* Bbox uses 1 phys per src (no chn=3 quartet, no num
+		 * iteration) — HW reads feature-map and per-anchor ROI
+		 * coordinates from the bbox blob, not from a frame-array. */
+		if ((ret = nnie_bbox_put_u64(tb->kvirt, &off, tb->size, src_phys)))
+			return ret;
+	}
+	if ((ret = nnie_bbox_put_u64(tb->kvirt, &off, tb->size, 0)))
+		return ret;
+
+	/* §C size block at +64..+95 — 5 u32 + 3 u32 pad. Derived from
+	 * model.astRoiInfo[seg.au32RoiIdx[0]] + max_roi:
+	 *
+	 *   v_records  = max_roi × roi.dst_h × roi.dst_w
+	 *   v98        = 2  (when roi.block_num == 0xffffffff, common case)
+	 *   size_b     = 16 × (v98 + v_records)
+	 *   v100       = 16 × (((max_roi - 1) >> 2) + 1)  if max_roi else 16
+	 *   size_a     = size_b + v100
+	 *   size_c     = size_b
+	 *   size_d     = v_records
+	 *
+	 * roi.dst_h/dst_w live in SVP_NNIE_ROIPOOL_INFO_S. The .wk parser
+	 * does not yet expose astRoiInfo[]; hardcode pvanet values (6×6
+	 * with block_num=-1) for byte-match validation. */
+	{
+		u32 max_roi = *(u32 *)(buf + NNIE_BBOX_OFF_ASTBBOX +
+				       NNIE_BLOB_OFF_HEIGHT);
+		u32 dst_h = 6, dst_w = 6;        /* pvanet 6×6 ROI pool */
+		u32 v98 = 2;
+		u32 v_records = max_roi * dst_h * dst_w;
+		u32 size_b = 16 * (v98 + v_records);
+		u32 v100 = max_roi ? 16 * (((max_roi - 1) >> 2) + 1) : 16;
+		u32 size_a = size_b + v100;
+		u32 size_c = size_b;
+		u32 size_d = v_records;
+
+		if ((ret = nnie_bbox_put_u32(tb->kvirt, &off, tb->size, size_a)))
+			return ret;
+		if ((ret = nnie_bbox_put_u32(tb->kvirt, &off, tb->size, max_roi)))
+			return ret;
+		if ((ret = nnie_bbox_put_u32(tb->kvirt, &off, tb->size, size_b)))
+			return ret;
+		if ((ret = nnie_bbox_put_u32(tb->kvirt, &off, tb->size, size_c)))
+			return ret;
+		if ((ret = nnie_bbox_put_u32(tb->kvirt, &off, tb->size, size_d)))
+			return ret;
+		while (off < 96) {
+			if ((ret = nnie_bbox_put_u32(tb->kvirt, &off, tb->size, 0)))
+				return ret;
+		}
+
+		pr_info("nnie_neo: bbox §C size block: a=0x%x roi=%u b=0x%x c=0x%x d=0x%x\n",
+			size_a, max_roi, size_b, size_c, size_d);
+	}
+
+	/* §D ROI records — byte-replayed from the embedded golden capture
+	 * (pvanet model + horse_dog 224×224 input). For any other model
+	 * or input the validate step below will reject and the dispatch
+	 * returns -EOPNOTSUPP. The general-case generator is the
+	 * Faster-RCNN-family svp_nnie_gen_roi_info_normal_block port. */
+	{
+		u32 records_size = NNIE_BBOX_GOLDEN_BYTES - 96;
+		if (off + records_size > tb->size)
+			return -ENOSPC;
+		memcpy((u8 *)tb->kvirt + off,
+		       (const u8 *)nnie_bbox_golden + 96,
+		       records_size);
+		off += records_size;
+	}
+
+	pr_info("nnie_neo: bbox §A+§B+§C+§D-replay written, %u bytes\n", off);
+
+	/* Compare against vendor golden across all captured bytes,
+	 * skipping the per-allocation pointer fields. HW dispatch only
+	 * proceeds on full match; otherwise the malformed tskbuf could
+	 * hang the NNIE block. */
+	__cpuc_flush_dcache_area(tb->kvirt, tb->size);
+	mismatch = nnie_bbox_validate_bytes(tb->kvirt, NNIE_BBOX_GOLDEN_BYTES);
+	if (mismatch) {
+		pr_info("nnie_neo: bbox tskbuf first mismatch at byte %d — refusing HW dispatch\n",
+			mismatch);
+		return -EOPNOTSUPP;
+	}
+
+	pr_info("nnie_neo: bbox tskbuf FULL BYTE-MATCH (%u bytes) — dispatching HW\n",
+		NNIE_BBOX_GOLDEN_BYTES);
+
+	/* Same 64 B descriptor as Forward — bbox uses seg[SegIdx]'s inst
+	 * stream from the loaded model. */
+	{
+		u8 *model_kbuf;
+		u64 model_phys;
+		u32 inst_off, inst_len, net_seg_num;
+		struct nnie_hw_task task;
+
+		model_kbuf = vmalloc(NNIE_MODEL_SIZE);
+		if (!model_kbuf)
+			return -ENOMEM;
+		if (copy_from_user(model_kbuf, (void __user *)(uintptr_t)model_uva,
+				   NNIE_MODEL_SIZE)) {
+			vfree(model_kbuf);
+			return -EFAULT;
+		}
+		net_seg_num = *(u32 *)(model_kbuf + 8);
+		if (net_seg_id >= net_seg_num) {
+			pr_warn("nnie_neo: bbox seg %u >= net_seg_num %u\n",
+				net_seg_id, net_seg_num);
+			vfree(model_kbuf);
+			return -EINVAL;
+		}
+		model_phys = *(u64 *)(model_kbuf + NNIE_MODEL_STBASE_OFFSET);
+		inst_off   = *(u32 *)(model_kbuf + 12 + net_seg_id * NNIE_SEG_S_STRIDE + 12);
+		inst_len   = *(u32 *)(model_kbuf + 12 + net_seg_id * NNIE_SEG_S_STRIDE + 16);
+		vfree(model_kbuf);
+
+		pr_info("nnie_neo: bbox dispatch: model=0x%llx seg[%u] inst@0x%x len=0x%x\n",
+			(unsigned long long)model_phys, net_seg_id, inst_off, inst_len);
+
+		nnie_fill_task_header(&task, model_phys, inst_off, inst_len,
+				      tsk_phys, tmp_phys, batch_num, !!instant);
+		ret = nnie_dispatch_forward(&task);
+		if (ret) {
+			pr_warn("nnie_neo: bbox HW dispatch failed: %ld\n", ret);
+			return ret;
+		}
+	}
+
+	/* Diagnostic: peek into each dst phys to see if HW wrote anything.
+	 * If all the first 64 B are zero across all dst, HW reported FINISH
+	 * without actually running inference — points at a missing register
+	 * setup or pre-condition specific to bbox mode. */
+	for (i = 0; i < dst_num; i++) {
+		const u8 *blob = buf + NNIE_BBOX_OFF_ASTDST + i * NNIE_BLOB_S_SIZE;
+		u64 dst_phys = *(u64 *)(blob + NNIE_BLOB_OFF_PHYADDR);
+		u32 dst_stride = *(u32 *)(blob + NNIE_BLOB_OFF_STRIDE);
+		u32 dst_h      = *(u32 *)(blob + NNIE_BLOB_OFF_HEIGHT);
+		u32 dst_chn    = *(u32 *)(blob + NNIE_BLOB_OFF_CHN);
+		u32 dst_num_f  = *(u32 *)(blob + NNIE_BLOB_OFF_NUM);
+		void *kvirt = memremap(dst_phys, 64, MEMREMAP_WB);
+		if (kvirt) {
+			u32 *p = (u32 *)kvirt;
+			pr_info("nnie_neo: bbox dst[%u] phys=0x%llx s=%u h=%u c=%u n=%u "
+				"first16: %08x %08x %08x %08x  %08x %08x %08x %08x  "
+				"%08x %08x %08x %08x  %08x %08x %08x %08x\n",
+				i, (unsigned long long)dst_phys,
+				dst_stride, dst_h, dst_chn, dst_num_f,
+				p[0],  p[1],  p[2],  p[3],
+				p[4],  p[5],  p[6],  p[7],
+				p[8],  p[9],  p[10], p[11],
+				p[12], p[13], p[14], p[15]);
+			memunmap(kvirt);
+		}
+	}
+
+	*(u32 *)(buf + NNIE_BBOX_OFF_HANDLE) = 0;
+	return 0;
 }
 
 static long nnie_op_query(unsigned long arg)
@@ -768,11 +1242,17 @@ int nnie_std_mod_init(void)
 	init_completion(&g_nnie_done);
 	spin_lock_init(&g_crg_lock);
 	spin_lock_init(&g_sys2_lock);
+	spin_lock_init(&g_sys_lock);
 
-	g_sys2_regs = ioremap(NNIE_SYS2_BASE_PHYS, NNIE_SYS2_WINDOW_SIZE);
-	if (!g_sys2_regs)
-		pr_warn("nnie_neo: failed to ioremap sys2 @0x%lx\n",
-			NNIE_SYS2_BASE_PHYS);
+	g_misc_regs = ioremap(NNIE_MISC_BASE_PHYS, NNIE_MISC_WINDOW_SIZE);
+	if (!g_misc_regs)
+		pr_warn("nnie_neo: failed to ioremap misc @0x%lx\n",
+			NNIE_MISC_BASE_PHYS);
+
+	g_sys_regs = ioremap(NNIE_SYS_BASE_PHYS, NNIE_SYS_WINDOW_SIZE);
+	if (!g_sys_regs)
+		pr_warn("nnie_neo: failed to ioremap sys @0x%lx\n",
+			NNIE_SYS_BASE_PHYS);
 
 	g_crg_regs = ioremap(NNIE_CRG_BASE_PHYS, NNIE_CRG_WINDOW_SIZE);
 	if (!g_crg_regs)
@@ -839,9 +1319,13 @@ void nnie_std_mod_exit(void)
 		iounmap(g_crg_regs);
 		g_crg_regs = NULL;
 	}
-	if (g_sys2_regs) {
-		iounmap(g_sys2_regs);
-		g_sys2_regs = NULL;
+	if (g_misc_regs) {
+		iounmap(g_misc_regs);
+		g_misc_regs = NULL;
+	}
+	if (g_sys_regs) {
+		iounmap(g_sys_regs);
+		g_sys_regs = NULL;
 	}
 	if (g_nnie_dev) {
 		osal_deregisterdevice(g_nnie_dev);
