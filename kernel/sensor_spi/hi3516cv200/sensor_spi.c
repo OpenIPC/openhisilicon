@@ -1,3 +1,4 @@
+#include <linux/version.h>
 /*
  * Simple synchronous userspace interface to SPI devices
  *
@@ -54,7 +55,15 @@ MODULE_PARM_DESC(sensor, "sensor name");
 
 struct spi_master* hi_master;
 struct spi_device* hi_spi;
+/* spi_bus_type became `const struct bus_type` in 6.x.
+ * compat_spi_busnum_to_controller (in kernel_compat.h) replaces
+ * spi_busnum_to_master after 6.4. */
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 4, 0)
+#include <linux/spi/spi.h>
+#define spi_busnum_to_master(num) compat_spi_busnum_to_controller(num)
+#else
 extern struct bus_type   spi_bus_type;
+#endif
 
 
 #define SPI_MSG_NUM		20

@@ -22,11 +22,11 @@
 #include <linux/delay.h>
 #include <linux/io.h>
 #include <linux/module.h>
+#include <linux/of.h>
 #include <linux/of_device.h>
 #include <linux/platform_device.h>
 #include <linux/kernel.h>
 #include <linux/slab.h>
-#include <linux/of_device.h>
 
 
 #define PIN_CTRL_NAME "pinctrl-single,pins"
@@ -676,10 +676,10 @@ static int __init hibvt_pinctrl_probe(struct platform_device *pdev)
 
 }
 
-static int hibvt_pinctrl_remove(struct platform_device *pdev)
+static compat_platform_remove_ret hibvt_pinctrl_remove(struct platform_device *pdev)
 {
     printk("sys config deinit ok!\n");
-	return 0;
+	compat_platform_remove_return;
 }
 
 static struct platform_driver hibvt_pinctrl_driver = {

@@ -389,5 +389,15 @@ static inline struct spi_controller *compat_spi_busnum_to_controller(u16 bus_num
 #define COMPAT_NEEDS_PRINTK_SHIM 1
 #endif
 
+/*
+ * no_llseek() helper removed in 6.12 (commit 868941b14441). It was a
+ * fops->llseek slot used to declare "this fd doesn't support llseek" —
+ * modern code just leaves .llseek = NULL (or doesn't set it), which has
+ * the same behaviour. Map to NULL so legacy source compiles unchanged.
+ */
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 12, 0)
+#define no_llseek NULL
+#endif
+
 #endif /* KERNEL_COMPAT_H */
 

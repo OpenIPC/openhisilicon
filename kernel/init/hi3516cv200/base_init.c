@@ -99,9 +99,14 @@ static struct ctl_table comm_eproc_table[] = {
 	  .maxlen = sizeof(g_proc_enable),
 	  .mode = 0644,
 	  .proc_handler = proc_dointvec },
+#ifndef COMPAT_NO_SYSCTL_TABLE
 	{}
+#endif
 };
 
+#ifndef COMPAT_NO_SYSCTL_TABLE
+/* Pre-6.6: build nested ctl_table tree via .child. Removed in 6.6 —
+ * register_sysctl() takes the path string directly. */
 static struct ctl_table comm_dir_table[] = {
 	{ .procname = "debug", .mode = 0555, .child = comm_eproc_table },
 	{}
@@ -111,6 +116,7 @@ static struct ctl_table comm_parent_tbl[] = {
 	{ .procname = "dev", .mode = 0555, .child = comm_dir_table },
 	{}
 };
+#endif
 
 static struct ctl_table_header *comm_eproc_tbl_head;
 
@@ -122,7 +128,11 @@ static int __init base_mod_init(void)
 	if (ret)
 		return ret;
 
+#ifdef COMPAT_NO_SYSCTL_TABLE
+	comm_eproc_tbl_head = compat_register_sysctl("dev/debug", comm_eproc_table);
+#else
 	comm_eproc_tbl_head = register_sysctl_table(comm_parent_tbl);
+#endif
 	if (!comm_eproc_tbl_head) {
 		_cv200_hi3518e_base_exit();
 		return -ENOMEM;
