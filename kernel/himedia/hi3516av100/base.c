@@ -1,3 +1,4 @@
+#include <linux/version.h>
 #include <linux/module.h>
 #include <linux/init.h>
 #include <linux/dma-mapping.h>
@@ -41,21 +42,36 @@ static ssize_t modalias_show(struct device *dev, struct device_attribute *a,
 }
 
 
-static struct device_attribute himedia_dev_attrs[] = {
-	__ATTR_RO(modalias),
-	__ATTR_NULL,
+/* 3.12+ deprecated dev_attrs in favour of dev_groups; the field itself
+ * was removed in a later version (commit 5f0163a559bb). Mirror the
+ * dev_groups pattern. */
+static DEVICE_ATTR_RO(modalias);
+static struct attribute *himedia_dev_attrs[] = {
+	&dev_attr_modalias.attr,
+	NULL,
 };
+ATTRIBUTE_GROUPS(himedia_dev);
 
 
 /*bus match & uevent*/
+/* 6.x added const to the device_driver / device args of bus_type
+ * callbacks. */
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 3, 0)
+static int himedia_match(struct device *dev, const struct device_driver *drv)
+#else
 static int himedia_match(struct device *dev, struct device_driver *drv)
+#endif
 {
 	struct himedia_device *pdev = to_himedia_device(dev);
 	return (strncmp(pdev->devfs_name, drv->name, sizeof(pdev->devfs_name)) == 0);
 }
 
 
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 3, 0)
+static int himedia_uevent(const struct device *dev, struct kobj_uevent_env *env)
+#else
 static int himedia_uevent(struct device *dev, struct kobj_uevent_env *env)
+#endif
 {
 	struct himedia_device	*pdev = to_himedia_device(dev);
 	add_uevent_var(env, "MODALIAS=himedia:%s", pdev->devfs_name);
@@ -304,7 +320,7 @@ static struct dev_pm_ops himedia_bus_pm_ops = {
 
 struct bus_type himedia_bus_type = {
 	.name		= "himedia",
-	.dev_attrs	= himedia_dev_attrs,
+	.dev_groups	= himedia_dev_groups,
 	.match		= himedia_match,
 	.uevent		= himedia_uevent,
 	.pm		    = &himedia_bus_pm_ops,

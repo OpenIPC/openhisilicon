@@ -178,7 +178,7 @@ module_param(t_second, int, 0);
 static int rtc_irq = -1;
 static int rtc_temp_irq = -1;
 
-static int spi_write(char reg, char val)
+static int hi_spi_write(char reg, char val)
 {
     U_SPI_RW w_data, r_data;
 
@@ -212,13 +212,13 @@ static int spi_write(char reg, char val)
 static int spi_rtc_write(char reg, char val)
 {
     mutex_lock(&hirtc_lock);
-    spi_write(reg, val);
+    hi_spi_write(reg, val);
     mutex_unlock(&hirtc_lock);
 
     return 0;
 }
 
-static int spi_read(char reg, char* val)
+static int hi_spi_read(char reg, char* val)
 {
     U_SPI_RW w_data, r_data;
 
@@ -251,7 +251,7 @@ static int spi_read(char reg, char* val)
 static int spi_rtc_read(char reg, char* val)
 {
     mutex_lock(&hirtc_lock);
-    spi_read(reg, val);
+    hi_spi_read(reg, val);
     mutex_unlock(&hirtc_lock);
 
     return 0;
@@ -696,7 +696,11 @@ static long hi_rtc_ioctl(struct file* file,
 
 
 
+#ifdef COMPAT_TIMER_SETUP
+static void temperature_detection(struct timer_list *t)
+#else
 static void temperature_detection(unsigned long arg)
+#endif
 {
     int ret;
     int cnt = 0;
@@ -731,14 +735,14 @@ static void temperature_detection(unsigned long arg)
     {
         char temp = TEMP_TO_RTC(25);
 
-        spi_read(INTERNAL_TEMP, &temp);
+        hi_spi_read(INTERNAL_TEMP, &temp);
 
         HI_MSG("internal temp is %d\n", temp);
 
         /*FIXME: sub offset to get enviroment temperature*/
         //temp -= 38;  /*38=27c*255/180*/
         temp -= TEMP_OFFSET_TO_RTC(TEMP_ENV_OFFSET);
-        spi_write(OUTSIDE_TEMP, temp);
+        hi_spi_write(OUTSIDE_TEMP, temp);
     }
     else
     {
@@ -784,7 +788,7 @@ static void set_temperature(void)
 
     HI_MSG("WRITE RTC temperature value 0x%02x", temp);
 
-    spi_write(OUTSIDE_TEMP, temp);
+    hi_spi_write(OUTSIDE_TEMP, temp);
 }
 
 static irqreturn_t rtc_temperature_interrupt(int irq, void* dev_id)
@@ -839,7 +843,7 @@ static irqreturn_t rtc_alm_interrupt(int irq, void* dev_id)
     printk(KERN_WARNING "RTC alarm interrupt!!!\n");
 
     //spi_rtc_write(RTC_IMSC, 0x0);
-    spi_write(RTC_INT_CLR, 0x1);
+    hi_spi_write(RTC_INT_CLR, 0x1);
     //spi_rtc_write(RTC_IMSC, 0x1);
 
     /*FIXME: do what you want here. such as wake up a pending thread.*/
@@ -907,8 +911,12 @@ static int __init rtc_init(void)
 
     rtc_crg_base_addr = (unsigned int)ioremap_nocache(0x20030000, 0x100);
 
+#ifdef COMPAT_TIMER_SETUP
+    timer_setup(&temperature_timer, temperature_detection, 0);
+#else
     init_timer(&temperature_timer);
     temperature_timer.function = temperature_detection;
+#endif
     temperature_timer.expires = jiffies + msecs_to_jiffies(1000) * t_second;
 
     /* clk div value = (apb_clk/spi_clk)/2-1, for asic ,
@@ -993,10 +1001,10 @@ static int hi35xx_rtc_probe(struct platform_device *pdev)
     return 0;
 }
 
-static int hi35xx_rtc_remove(struct platform_device *pdev)
+static compat_platform_remove_ret hi35xx_rtc_remove(struct platform_device *pdev)
 {
     rtc_exit();
-    return 0;
+    compat_platform_remove_return;
 }
 
 static const struct of_device_id hi35xx_rtc_match[] = {
