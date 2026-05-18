@@ -1,0 +1,121 @@
+# hi3520dv200 SoC family build configuration
+#
+# V2 era (ARMv7 Cortex-A9, kernel 3.0.8), 4-channel analog DVR SoC.
+# Sources mirrored verbatim from vendor Hi3520D_SDK_V2.0.5.1 (Apr 2015):
+#
+#   drv/   (package/drv/<mod>/)            → kernel/<mod>/hi3520dv200/
+#     mmz, hiuser, rtc, hisi-irda, wtdg, cipher
+#
+#   extdrv/ (package/mpp/extdrv/<mod>/)    → kernel/<mod>/hi3520dv200/
+#     gpio_i2c, tw2865, tw2868, tw2960, cx26828, tlv320aic31, ssp-GV7601
+#
+#   SDK headers (package/mpp/include/)     → kernel/include/hi3520dv200/
+#     54 mpi_*.h / hi_comm_*.h + mkp/mod_ext.h
+#
+# NVP6114 analog video decoder reuses the existing kernel/nvp6134c/ driver
+# (covers both NVP6114 and NVP6134C via SUPPORT_HI3520D).
+#
+# This first cut MIRRORS source only — many of these drivers still use
+# kernel 3.0.x APIs (mach/hardware.h, IO_ADDRESS macros, ioremap_nocache)
+# that need porting before they will compile against a modern kernel.
+# The MPP video pipeline (base, sys, vi, vpss, vo, venc, …) stays as
+# pre-built blobs in hisilicon-osdrv-hi3520dv200 until upstream releases
+# matching source. Pattern follows hi3516cv200.kbuild (V2 sibling).
+
+# SDK include paths
+ccflags-y += -I$(src)/include/hi3520dv200
+ccflags-y += -I$(src)/include/hi3520dv200/mkp
+
+# Analog video decoder family uses bit-banged GPIO I2C, not hardware I2C
+ccflags-y += -DHI_GPIO_I2C
+
+# --- MMZ module (media memory zone allocator) ---
+DV200_MMZ_DIR = mmz/hi3520dv200
+$(PREFIX)mmz-objs := \
+	$(DV200_MMZ_DIR)/media-mem.o \
+	$(DV200_MMZ_DIR)/mmz-userdev.o \
+	$(DV200_MMZ_DIR)/kcom.o
+ccflags-y += -I$(src)/$(DV200_MMZ_DIR)
+obj-m += $(PREFIX)mmz.o
+
+# --- hiuser module (user-space MMZ buffer mmap interface) ---
+DV200_HIUSER_DIR = hiuser/hi3520dv200
+$(PREFIX)hi_user-objs := \
+	$(DV200_HIUSER_DIR)/hi_user.o \
+	$(DV200_HIUSER_DIR)/cache-l1.o
+obj-m += $(PREFIX)hi_user.o
+
+# --- RTC module ---
+$(PREFIX)hi_rtc-objs := rtc/hi3520dv200/hi_rtc.o
+obj-m += $(PREFIX)hi_rtc.o
+
+# --- IR receiver module (vendor names the ko hi_ir.ko) ---
+$(PREFIX)hi_ir-objs := ir/hi3520dv200/hiir.o
+obj-m += $(PREFIX)hi_ir.o
+
+# --- Watchdog module ---
+$(PREFIX)wdt-objs := wdt/hi3520dv200/hi_wdt.o
+ccflags-y += -I$(src)/wdt/hi3520dv200
+obj-m += $(PREFIX)wdt.o
+
+# --- Cipher module (hi_cipher.ko) ---
+DV200_CIPHER_DIR = cipher/hi3520dv200
+$(PREFIX)hi_cipher-objs := \
+	$(DV200_CIPHER_DIR)/drv_cipher.o \
+	$(DV200_CIPHER_DIR)/hal_cipher.o \
+	$(DV200_CIPHER_DIR)/cipher_intf.o
+ccflags-y += -I$(src)/$(DV200_CIPHER_DIR)
+ccflags-y += -I$(src)/$(DV200_CIPHER_DIR)/include
+ccflags-y += -I$(src)/$(DV200_MMZ_DIR)
+obj-m += $(PREFIX)hi_cipher.o
+
+# --- GPIO bit-banged I2C (gpioi2c.ko) ---
+$(PREFIX)gpioi2c-objs := gpio_i2c/hi3520dv200/gpio_i2c.o
+obj-m += $(PREFIX)gpioi2c.o
+
+# --- Analog video decoders (single-source modules) ---
+# Each header dir is added so tw*/cx*/tlv* .c files find their local
+# headers (gpio_i2c.h, foo_def.h). Vendor Makefiles add -I$(PWD)/ —
+# kbuild does the same automatically for in-tree modules, so no extra
+# include flag is needed.
+
+$(PREFIX)tw2865-objs := tw2865/hi3520dv200/tw2865.o
+obj-m += $(PREFIX)tw2865.o
+
+$(PREFIX)tw2868-objs := tw2868/hi3520dv200/tw2868.o
+obj-m += $(PREFIX)tw2868.o
+
+$(PREFIX)tw2960-objs := tw2960/hi3520dv200/tw2960.o
+obj-m += $(PREFIX)tw2960.o
+
+$(PREFIX)cx26828-objs := cx26828/hi3520dv200/cx26828.o
+obj-m += $(PREFIX)cx26828.o
+
+# Vendor module name is tlv_320aic31.ko (note the underscore).
+$(PREFIX)tlv_320aic31-objs := tlv320aic31/hi3520dv200/tlv320aic31.o
+obj-m += $(PREFIX)tlv_320aic31.o
+
+# --- SSP bus driver for GV7601 (vendor module name: ssp.ko) ---
+$(PREFIX)ssp-objs := ssp_gv7601/hi3520dv200/hi_ssp.o
+obj-m += $(PREFIX)ssp.o
+
+# --- NVP6114 / NVP6134C analog video decoder ---
+# Reuses the existing kernel/nvp6134c/ driver (top-level, no per-SoC
+# subdir) — the driver covers both chips via SUPPORT_HI3520D. The
+# nvp6134c/Kbuild file is only used by an out-of-tree standalone build;
+# we declare the objs inline here so kbuild emits open_nvp6134_ex.ko
+# alongside the rest of the hi3520dv200 module set.
+DV200_NVP_DIR = nvp6134c
+$(PREFIX)nvp6134_ex-objs := \
+	$(DV200_NVP_DIR)/nvp6134_drv.o \
+	$(DV200_NVP_DIR)/coax.o \
+	$(DV200_NVP_DIR)/eq.o \
+	$(DV200_NVP_DIR)/eq_recovery.o \
+	$(DV200_NVP_DIR)/eq_common.o \
+	$(DV200_NVP_DIR)/acp.o \
+	$(DV200_NVP_DIR)/acp_firmup.o \
+	$(DV200_NVP_DIR)/video.o \
+	$(DV200_NVP_DIR)/motion.o \
+	$(DV200_NVP_DIR)/audio.o
+ccflags-y += -I$(src)/$(DV200_NVP_DIR) -DSUPPORT_HI3520D
+obj-m += $(PREFIX)nvp6134_ex.o
