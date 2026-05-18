@@ -1,0 +1,27 @@
+# Hisilicon Hi3520D sample Makefile.param
+
+ifeq ($(PARAM_FILE), )
+     PARAM_FILE:=../../Makefile.param
+     include $(PARAM_FILE)
+endif
+
+#demo or socket, just useful for hi3520D
+HI3520D_BOARD=DEMO
+#HI3520D_BOARD=SOCKET
+
+
+COMMON_DIR:=$(PWD)/../common
+
+INC_FLAGS := -I$(REL_INC) 
+INC_FLAGS += -I$(COMMON_DIR) 
+INC_FLAGS += -I$(SDK_PATH)/mpp/$(EXTDRV)/tw2865 
+INC_FLAGS += -I$(SDK_PATH)/mpp/$(EXTDRV)/tw2960 
+INC_FLAGS += -I$(SDK_PATH)/mpp/$(EXTDRV)/tlv320aic31 
+INC_FLAGS += -I$(SDK_PATH)/mpp/$(EXTDRV)/cx26828
+INC_FLAGS += -I$(SDK_PATH)/mpp/$(EXTDRV)/nvp6114
+
+CFLAGS := -Wall -g $(INC_FLAGS) -D$(HIARCH) -DHICHIP=$(HICHIP) -D$(HIDBG) -D$(HI_FPGA) -D$(HI3520D_BOARD) -lpthread -lm
+
+CFLAGS += -Wl,-gc-sections
+COMM_SRC := $(wildcard $(COMMON_DIR)/*.c)
+COMM_OBJ := $(COMM_SRC:%.c=%.o)
