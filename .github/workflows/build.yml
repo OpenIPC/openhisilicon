@@ -715,11 +715,8 @@ jobs:
         platform:
           - machine: hi3516cv500
             firmware: hi3516cv500
-          - machine: hi3516av300
-            firmware: hi3516cv500   # av300 uses the cv500 firmware build
     env:
       # Bump when widgetii/qemu-hisilicon changes the hisi-nnie model.
-      # Initial NNIE support landed alongside hi3516av300 SoC config.
       QEMU_HISILICON_SHA: master
     steps:
       - uses: actions/checkout@v4
