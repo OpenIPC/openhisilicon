@@ -118,4 +118,8 @@ $(PREFIX)nvp6134_ex-objs := \
 	$(DV200_NVP_DIR)/motion.o \
 	$(DV200_NVP_DIR)/audio.o
 ccflags-y += -I$(src)/$(DV200_NVP_DIR) -DSUPPORT_HI3520D
+# nvp6134c/common.h includes "gpio_i2c.h" when HI_GPIO_I2C is set
+# (family default). The header lives in the gpio_i2c source dir, not
+# under nvp6134c/. Make it findable.
+ccflags-y += -I$(src)/gpio_i2c/hi3520dv200
 obj-m += $(PREFIX)nvp6134_ex.o
