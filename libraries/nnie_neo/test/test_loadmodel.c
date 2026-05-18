@@ -56,12 +56,15 @@ static uint32_t crc32_range(const uint8_t *buf, size_t off, size_t end)
 	return ~crc;
 }
 
-/* Layout of the synthesised file:
+/* Layout of the synthesised file — matches real vendor .wk layout
+ * (each node body is followed by a 16 B inter-node separator):
  *   [0..191]     header (192 B)
  *   [192..207]   segment record (16 B)
- *   [208..255]   src node compact (16 B) + name (32 B)
- *   [256..303]   dst node compact (16 B) + name (32 B)
- *   [304..0x150) header-tail filler (zeros)
+ *   [208..255]   src node body (48 B): WHC + enType/id + name
+ *   [256..271]   16 B separator
+ *   [272..319]   dst node body (48 B)
+ *   [320..335]   16 B separator
+ *   [336..0x150) header-tail filler (zeros)
  *   [0x150..]    instruction stream region (header_extra to end of inst)
  *   then weights / quant tables follow (not CRC'd)
  *
@@ -113,7 +116,7 @@ static void synth_wk(uint8_t *buf, size_t buf_size)
 	put_le32(seg + 8,  WK_HEADER_EXTRA);  /* u32InstOffset */
 	put_le32(seg + 12, WK_INST_LEN);      /* u32InstLen */
 
-	/* Src node (48 B): mnist-style 28×28×1 with enType=1, name "data". */
+	/* Src node body (48 B at +208): mnist-style 28×28×1, name "data". */
 	src_node = buf + 208;
 	put_le32(src_node + 0,  28);    /* height */
 	put_le32(src_node + 4,  28);    /* width */
@@ -122,14 +125,19 @@ static void synth_wk(uint8_t *buf, size_t buf_size)
 	src_node[15] = 0;               /* NodeId */
 	memcpy(src_node + 16, "data", 4);
 
-	/* Dst node (48 B): mnist-style 10-class output, name "prob". */
-	dst_node = buf + 256;
+	/* Inter-node separator (16 B at +256), all zeros. */
+
+	/* Dst node body (48 B at +272): mnist-style 10-class output,
+	 * name "prob". Field order matches vendor's on-disk layout —
+	 * libnnie remaps so Width holds the feature count. */
+	dst_node = buf + 272;
 	put_le32(dst_node + 0,   1);    /* height */
-	put_le32(dst_node + 4,   1);    /* (chn in file order) */
-	put_le32(dst_node + 8,  10);    /* (width in file order — vendor's
-	                                   libnnie remaps so Width holds the
-	                                   layer's feature count) */
+	put_le32(dst_node + 4,   1);    /* chn (in file order) */
+	put_le32(dst_node + 8,  10);    /* width = feature count */
 	memcpy(dst_node + 16, "prob", 4);
+
+	/* Trailing inter-node separator at +320 (16 B zeros), then
+	 * +336..+0x150 is header-tail filler. */
 
 	/* Fill the instruction stream region with a deterministic pattern
 	 * so the CRC isn't trivially zero. */
@@ -241,5 +249,115 @@ int main(void)
 	}
 
 	printf("ok: NNIE LoadModel sanity (synth .wk + negative cases)\n");
+
+	/* === Multi-segment test (pvanet-shaped) ===
+	 *
+	 * Two segments interleaved with their node tables. Validates that
+	 * the parser correctly walks past seg[0]'s nodes + separators to
+	 * find seg[1]'s record, instead of reading 16 B into seg[0]'s src
+	 * node body. This was a real bug: a 48 B node-stride (no separator)
+	 * had seg[1] of any 2-seg model decode garbage (netType=224 etc).
+	 */
+	{
+		/* Layout (instructions placed after the seg+node region):
+		 *   [0..191]    header
+		 *   [192..207]  seg[0] record (netType=0 CNN, src=1 dst=1)
+		 *   [208..271]  seg[0].src_node "input0" body+sep (64 B)
+		 *   [272..335]  seg[0].dst_node "out0"   body+sep (64 B)
+		 *   [336..351]  seg[1] record (netType=1 ROI, src=1 dst=1)
+		 *   [352..415]  seg[1].src_node "input1" body+sep
+		 *   [416..479]  seg[1].dst_node "out1"   body+sep
+		 *   [480..]      filler then instruction stream
+		 */
+		#define MM_INST_EXTRA  512u    /* >= end of seg+node region (480) */
+		#define MM_INST_LEN    256u
+		#define MM_BUF_SIZE    (MM_INST_EXTRA + MM_INST_LEN + 16u)
+		uint8_t mbuf[MM_BUF_SIZE];
+		SVP_SRC_MEM_INFO_S mmem = { 0 };
+		SVP_NNIE_MODEL_S mm;
+		uint32_t crc;
+		uint8_t *seg0, *seg1;
+
+		memset(mbuf, 0, sizeof(mbuf));
+		mbuf[16] = NNIE_WK_VER_MAJ;
+		mbuf[17] = NNIE_WK_VER_MIN;
+		mbuf[18] = NNIE_WK_VER_3;
+		mbuf[19] = NNIE_WK_VER_4;
+		mbuf[49] = 2;                                 /* net_seg_num = 2 */
+		put_le32(mbuf + 52, MM_INST_EXTRA);
+		put_le32(mbuf + 56, MM_INST_LEN);
+
+		seg0 = mbuf + 192;
+		seg0[0] = 0;  seg0[1] = 1; seg0[2] = 1; seg0[3] = 0;
+		put_le32(seg0 + 8,  MM_INST_EXTRA);
+		put_le32(seg0 + 12, MM_INST_LEN / 2);
+
+		/* seg[0].src + sep at +208, dst + sep at +272. */
+		put_le32(mbuf + 208 + 0, 100);
+		put_le32(mbuf + 208 + 4, 100);
+		put_le32(mbuf + 208 + 8,   3);
+		mbuf[208 + 14] = 1;       /* enType U8 */
+		mbuf[208 + 15] = 0;
+		memcpy(mbuf + 208 + 16, "input0", 6);
+		put_le32(mbuf + 272 + 0,  50);
+		put_le32(mbuf + 272 + 4,   1);
+		put_le32(mbuf + 272 + 8,  10);
+		memcpy(mbuf + 272 + 16, "out0", 4);
+
+		/* seg[1] record at +336. ROI seg (FasterRCNN-class). */
+		seg1 = mbuf + 336;
+		seg1[0] = 1;  seg1[1] = 1; seg1[2] = 1; seg1[3] = 1;
+		put_le32(seg1 + 8,  MM_INST_EXTRA + MM_INST_LEN / 2);
+		put_le32(seg1 + 12, MM_INST_LEN / 2);
+
+		put_le32(mbuf + 352 + 0,  14);
+		put_le32(mbuf + 352 + 4,  14);
+		put_le32(mbuf + 352 + 8, 512);
+		mbuf[352 + 14] = 0;       /* enType S32 — RPN feature map input */
+		mbuf[352 + 15] = 1;
+		memcpy(mbuf + 352 + 16, "input1", 6);
+		put_le32(mbuf + 416 + 0,   7);
+		put_le32(mbuf + 416 + 4,   1);
+		put_le32(mbuf + 416 + 8,  84);
+		memcpy(mbuf + 416 + 16, "out1", 4);
+
+		for (size_t k = MM_INST_EXTRA;
+		     k < MM_INST_EXTRA + MM_INST_LEN; k++)
+			mbuf[k] = (uint8_t)(k * 0x9e + 0x37);
+		crc = crc32_range(mbuf, 4, MM_INST_EXTRA + MM_INST_LEN);
+		put_le32(mbuf + 0, crc);
+
+		mmem.u64VirAddr = (uintptr_t)mbuf;
+		mmem.u64PhyAddr = 0xBB880000ULL;
+		mmem.u32Size    = sizeof(mbuf);
+
+		ret = HI_MPI_SVP_NNIE_LoadModel(&mmem, &mm);
+		CHECK(ret == HI_SUCCESS, "multi-seg LoadModel ret=0x%x", ret);
+		CHECK(mm.u32NetSegNum == 2, "got %u", mm.u32NetSegNum);
+
+		/* seg[0]: CNN */
+		CHECK(mm.astSeg[0].enNetType == 0, "seg[0] netType=%u", mm.astSeg[0].enNetType);
+		CHECK(mm.astSeg[0].u16SrcNum == 1, "seg[0] src=%u", mm.astSeg[0].u16SrcNum);
+		CHECK(mm.astSeg[0].u16DstNum == 1, "seg[0] dst=%u", mm.astSeg[0].u16DstNum);
+		CHECK(strcmp(mm.astSeg[0].astSrcNode[0].szName, "input0") == 0,
+		      "seg[0].src.name='%s'", mm.astSeg[0].astSrcNode[0].szName);
+
+		/* seg[1]: ROI — this is what the old 48-stride parser would
+		 * mis-decode as netType=??? srcNum=0 dstNum=0. */
+		CHECK(mm.astSeg[1].enNetType == 1, "seg[1] netType=%u (expected 1=ROI)",
+		      mm.astSeg[1].enNetType);
+		CHECK(mm.astSeg[1].u16SrcNum == 1, "seg[1] src=%u", mm.astSeg[1].u16SrcNum);
+		CHECK(mm.astSeg[1].u16DstNum == 1, "seg[1] dst=%u", mm.astSeg[1].u16DstNum);
+		CHECK(mm.astSeg[1].u16RoiPoolNum == 1, "seg[1] roi=%u",
+		      mm.astSeg[1].u16RoiPoolNum);
+		CHECK(strcmp(mm.astSeg[1].astSrcNode[0].szName, "input1") == 0,
+		      "seg[1].src.name='%s'", mm.astSeg[1].astSrcNode[0].szName);
+		CHECK(strcmp(mm.astSeg[1].astDstNode[0].szName, "out1") == 0,
+		      "seg[1].dst.name='%s'", mm.astSeg[1].astDstNode[0].szName);
+
+		HI_MPI_SVP_NNIE_UnloadModel(&mm);
+		printf("ok: multi-seg LoadModel (ROI seg[1] decoded correctly)\n");
+	}
+
 	return 0;
 }
