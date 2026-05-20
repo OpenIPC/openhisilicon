@@ -52,11 +52,12 @@
 
 #ifdef HI_GPIO_I2C
 #include "gpioi2c_ex.h"
-#include "openipc_frame_ts.h"
 #else
 #include "hi_i2c.h"
 #include "hi_spi.h"
 #endif
+
+#include "openipc_frame_ts.h"
 
 #ifdef __cplusplus
 #if __cplusplus
