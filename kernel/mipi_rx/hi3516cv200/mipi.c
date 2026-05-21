@@ -1440,6 +1440,15 @@ static int mipi_proc_open(struct inode* inode, struct file* file)
     return single_open(file, mipi_proc_show, NULL);
 }
 
+#ifdef COMPAT_USE_PROC_OPS
+static const struct proc_ops mipi_proc_fops =
+{
+    .proc_open	= mipi_proc_open,
+    .proc_read	= seq_read,
+    .proc_lseek	= seq_lseek,
+    .proc_release	= single_release,
+};
+#else
 static const struct file_operations mipi_proc_fops =
 {
     .owner		= THIS_MODULE,
@@ -1448,6 +1457,7 @@ static const struct file_operations mipi_proc_fops =
     .llseek		= seq_lseek,
     .release	= single_release,
 };
+#endif
 #endif
 
 static int __init mipi_init(void)
@@ -1543,10 +1553,10 @@ static int hi35xx_mipi_probe(struct platform_device *pdev)
     return 0;
 }
 
-static int hi35xx_mipi_remove(struct platform_device *pdev)
+static compat_platform_remove_ret hi35xx_mipi_remove(struct platform_device *pdev)
 {
     mipi_exit();
-    return 0;
+    compat_platform_remove_return;
 }
 
 static const struct of_device_id hi35xx_mipi_match[] = {

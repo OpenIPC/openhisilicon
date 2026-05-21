@@ -124,7 +124,7 @@ static unsigned long _strtoul_ex(const char *s, char **ep, unsigned int base)
 
 
 static LIST_HEAD(mmz_list);
-static DEFINE_SEMAPHORE(mmz_lock);
+static compat_DEFINE_SEMAPHORE(mmz_lock);
 
 static int anony = 0;
 module_param(anony, int, S_IRUGO);
@@ -1216,6 +1216,15 @@ static int __init media_mem_proc_init(void)
 }
 #else
 
+#ifdef COMPAT_USE_PROC_OPS
+static struct proc_ops mmz_proc_ops = {
+	.proc_open = mmz_proc_open,
+	.proc_read = seq_read,
+	.proc_write = mmz_write_proc,
+	.proc_release = seq_release,
+	.proc_lseek = seq_lseek,
+};
+#else
 static struct file_operations mmz_proc_ops = {
 	.owner = THIS_MODULE,
 	.open = mmz_proc_open,
@@ -1223,6 +1232,7 @@ static struct file_operations mmz_proc_ops = {
 	.write = mmz_write_proc,
 	.release = seq_release,
 };
+#endif
 
 static int __init media_mem_proc_init(void)
 {

@@ -489,7 +489,14 @@ static unsigned long usr_virt_to_phys(unsigned long virt)
 		return 0;
 	}
 
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(4, 11, 0)
+	/* 4.11 inserted p4d between pgd and pud. On 32-bit ARM p4d is folded
+	 * so p4d_offset(pgd, virt) is identity, but the symbol doesn't exist
+	 * on 4.9-and-older. Same pattern as cv500 / osal-linux / cv300 mmz. */
+	pud = pud_offset(p4d_offset(pgd, virt), virt);
+#else
 	pud = pud_offset(pgd, virt);
+#endif
 	if (pud_none(*pud)) {
 		error("error: not mapped in pud!\n");
 		return 0;

@@ -291,11 +291,11 @@ static long piris_ioctl(struct file* file, unsigned int cmd, unsigned long arg)
 
     if (_IOC_DIR(cmd) & _IOC_READ)
     {
-        err = !access_ok(VERIFY_WRITE, (void __user*)arg, _IOC_SIZE(cmd));
+        err = !compat_access_ok(VERIFY_WRITE, (void __user*)arg, _IOC_SIZE(cmd));
     }
     else if (_IOC_DIR(cmd) & _IOC_WRITE)
     {
-        err =  !access_ok(VERIFY_READ, (void __user*)arg, _IOC_SIZE(cmd));
+        err =  !compat_access_ok(VERIFY_READ, (void __user*)arg, _IOC_SIZE(cmd));
     }
 
     if (err)
@@ -379,13 +379,21 @@ static struct miscdevice gstPirisDev =
     .fops    = &piris_fops,
 };
 
+#ifdef COMPAT_TIMER_SETUP
+void piris_timer_cb(struct timer_list *t)
+#else
 void piris_timer_cb(unsigned long arg)
+#endif
 {
     int sign = 1;
     unsigned char bits;
     unsigned long u32Flags;
 
+#ifdef COMPAT_TIMER_SETUP
+    PIRIS_DEV* pstPirisDev = from_timer(pstPirisDev, t, timer);
+#else
     PIRIS_DEV* pstPirisDev = (PIRIS_DEV*)arg;
+#endif
 
     spin_lock_irqsave(&pstPirisDev->lock, u32Flags);
     if (pstPirisDev->src_pos == pstPirisDev->dest_pos)
@@ -485,9 +493,13 @@ static int __init piris_init(void)
     init_completion(&piris_comp);
 
     // init timer
+#ifdef COMPAT_TIMER_SETUP
+    timer_setup(&p_piris_dev->timer, piris_timer_cb, 0);
+#else
     init_timer(&p_piris_dev->timer);
     p_piris_dev->timer.function = piris_timer_cb;
     p_piris_dev->timer.data = (unsigned long)p_piris_dev;
+#endif
     p_piris_dev->timer.expires = jiffies + HZ; /* one second */
     p_piris_dev->phase_tbl = motor_phase_tbl;
 

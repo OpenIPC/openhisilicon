@@ -35,6 +35,12 @@ ccflags-y += -I$(src)/isp/arch/hi3516cv200/include
 ccflags-y += -I$(src)/isp/arch/hi3516cv200/firmware/vreg
 ccflags-y += -I$(src)/isp/arch/hi3516cv200/firmware/vreg/arch/hi3518e
 
+# --- V2 OSAL shim (source) — re-exports removed-since-4.9 kernel APIs
+# so cv200 blobs (which were compiled against 4.9) load against modern
+# kernels. Must be inserted BEFORE any blob module by load_hisilicon.
+$(PREFIX)v2_shim-objs := osal_v2_shim/cv200_shim.o
+obj-m += $(PREFIX)v2_shim.o
+
 # --- MMZ module (source, STANDALONE) ---
 $(PREFIX)mmz-objs := \
 	mmz/hi3516cv200/media-mem.o \
