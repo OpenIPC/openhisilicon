@@ -399,5 +399,18 @@ static inline struct spi_controller *compat_spi_busnum_to_controller(u16 bus_num
 #define no_llseek NULL
 #endif
 
+/*
+ * pte_offset_map() became an inline that calls __pte_offset_map() which
+ * is NOT EXPORT_SYMBOL'd, so modules can't link it. Source walks of
+ * user page tables (cv200/av100 mmz-userdev usr_virt_to_phys) need to
+ * use an exported equivalent. pte_offset_kernel() is a static inline
+ * over pmd_page_vaddr() + pte_index() — same lookup, no RCU section,
+ * no exported symbol dependency. Matches the (unlocked) semantics of
+ * the legacy code, which already did no locking.
+ */
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 5, 0)
+#define pte_offset_map(pmd, addr) pte_offset_kernel((pmd), (addr))
+#endif
+
 #endif /* KERNEL_COMPAT_H */
 
