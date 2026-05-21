@@ -150,8 +150,13 @@ typedef struct
 
 static hiir_dev_struct hiir_dev;
 
+#ifdef COMPAT_TIMER_SETUP
+static void repkey_timeout_handler(struct timer_list *t);
+static DEFINE_TIMER(repkey_timeout_timer, repkey_timeout_handler);
+#else
 static void repkey_timeout_handler(unsigned long data);
 static DEFINE_TIMER(repkey_timeout_timer, repkey_timeout_handler, 0, 0);
+#endif
 
 static void hiir_config(void)
 {
@@ -203,7 +208,11 @@ static void hiir_config(void)
     //hiir_show_reg();
 }
 
+#ifdef COMPAT_TIMER_SETUP
+static void repkey_timeout_handler(struct timer_list *t)
+#else
 static void repkey_timeout_handler(unsigned long data)
+#endif
 {
     del_timer(&repkey_timeout_timer);
     hiir_dev.repkey_checkflag = 0;
@@ -589,10 +598,10 @@ static int hi35xx_ir_probe(struct platform_device *pdev)
     return 0;
 }
 
-static int hi35xx_ir_remove(struct platform_device *pdev)
+static compat_platform_remove_ret hi35xx_ir_remove(struct platform_device *pdev)
 {
     hiir_exit();
-    return 0;
+    compat_platform_remove_return;
 }
 
 static const struct of_device_id hi35xx_ir_match[] = {

@@ -5,9 +5,26 @@
 #include <linux/io.h>
 #include <linux/i2c.h>
 #include <linux/hardirq.h>
+#include <linux/version.h>
 
 #include <linux/delay.h>
 #include "isp_ext.h"
+
+/* HiSi vendor i2c flags don't exist in mainline. Fall back to 0 — sensors
+ * that require 16-bit register addressing will be broken at runtime
+ * (not at build); needs follow-up for true 16-bit support. */
+#ifndef I2C_M_16BIT_REG
+#define I2C_M_16BIT_REG 0
+#endif
+#ifndef I2C_M_16BIT_DATA
+#define I2C_M_16BIT_DATA 0
+#endif
+
+/* i2c_new_device() removed in 5.x — replaced by i2c_new_client_device()
+ * which returns ERR_PTR on failure (vs NULL). */
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(5, 8, 0)
+#define i2c_new_device(adap, info) i2c_new_client_device((adap), (info))
+#endif
 
 static struct i2c_board_info hi_info =
 {
