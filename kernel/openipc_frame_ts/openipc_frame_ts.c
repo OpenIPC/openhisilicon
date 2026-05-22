@@ -2,8 +2,19 @@
 /*
  * OpenIPC frame-timestamp capture (issue #144).
  *
- * Per-channel ring of (pts_us, wall_ns) tuples sampled from per-SoC IRQ
- * handlers at sensor frame-start. Exposed via /dev/openipc-frame-ts.
+ * Per-channel ring of (pts_us, wall_ns, event_type) tuples sampled
+ * from per-SoC IRQ handlers at well-defined pipeline points. Exposed
+ * via /dev/openipc-frame-ts.
+ *
+ * Today the chrdev emits two event types per frame:
+ *   OPENIPC_FT_EVT_MIPI_FS   — MIPI RX driver, on FS short packet
+ *                              (≈ sensor begins streaming row 0)
+ *   OPENIPC_FT_EVT_ISP_FEND  — ISP front-end IRQ, on FEND bit set
+ *                              (≈ ISP FE finished receiving last row)
+ *
+ * Their delta on the same physical frame is dominated by sensor
+ * readout duration (HMAX × VMAX / pixel_clock), so consumers can
+ * decompose latency budgets without an external probe.
  */
 #include <linux/module.h>
 #include <linux/kernel.h>
@@ -22,33 +33,63 @@
 
 #define OPENIPC_FT_NAME           "openipc-frame-ts"
 #define OPENIPC_FT_MAX_CHN        8
-#define OPENIPC_FT_DEPTH          64        /* power of 2 */
+#define OPENIPC_FT_MAX_EVT_TYPE   2   /* MIPI_FS + ISP_FEND so far */
 /*
- * Drop double-pushes that arrive less than this far apart. Level-triggered
- * IRQ retrigger or per-SoC quirks (e.g. cv500 firing the vsync IRQ twice
- * ~30-80 us apart on ~4 % of frames) otherwise leak into userspace as
- * spurious extra events. 1 ms is safely below any plausible sensor frame
- * interval (1000 fps).
+ * Per-channel ring depth (power of 2). 256 events ≈ 0.5 s of buffer at
+ * 240 fps × 2 event types — covers high-fps modes (imx335 800x480 240 fps)
+ * with margin for reader-side jitter (scheduler latency, printf-to-disk).
+ * At 32 B/event the per-channel cost is 8 KiB.
  */
-#define OPENIPC_FT_MIN_INTERVAL_NS  1000000
+#define OPENIPC_FT_DEPTH          256
+/*
+ * Drop double-pushes of the SAME event type within these intervals.
+ *
+ * MIPI_FS (1 ms): MIPI RX vsync IRQ on cv500 fires twice ~30–80 µs apart
+ *   on ~4 % of frames. 1 ms is safely below any plausible sensor frame
+ *   interval (1000 fps) yet catches the duplicate.
+ *
+ * ISP_FEND (25 ms): the ISP_INT_FE.FEND bit is a level signal — hardware
+ *   holds it asserted across the entire inter-frame gap and re-sets it
+ *   after the ISR's W1C clear while the underlying condition still
+ *   holds. The ISR fires far more often than the sensor frame rate
+ *   (other ISP bits), so without a long dedup we'd emit ~IRQ-rate worth
+ *   of FEND events. 25 ms caps at 40 Hz — adequate for every supported
+ *   sensor (max 30 fps single-stream on these SoCs) and still leaves
+ *   margin for jitter.
+ *
+ * NB: dedup is per (chn, event_type). MIPI_FS and ISP_FEND for the
+ * same frame can be tens of ms apart (= readout duration) — that's
+ * the whole point — so dedup deliberately does NOT cross event types.
+ */
+#define OPENIPC_FT_MIN_INTERVAL_NS_FS    1000000
+#define OPENIPC_FT_MIN_INTERVAL_NS_FEND  25000000
+
+static const u64 openipc_ft_min_interval_ns[OPENIPC_FT_MAX_EVT_TYPE] = {
+	[OPENIPC_FT_EVT_MIPI_FS]  = OPENIPC_FT_MIN_INTERVAL_NS_FS,
+	[OPENIPC_FT_EVT_ISP_FEND] = OPENIPC_FT_MIN_INTERVAL_NS_FEND,
+};
 
 struct openipc_ft_chn {
 	struct openipc_frame_ts_event ring[OPENIPC_FT_DEPTH];
 	unsigned int head;
 	unsigned int tail;
-	u32 seq;
-	u64 dropped;
-	u64 last_push_ns;
-	spinlock_t lock;
+	u32          seq[OPENIPC_FT_MAX_EVT_TYPE];
+	u64          last_push_ns[OPENIPC_FT_MAX_EVT_TYPE];
+	u64          dropped;          /* ring-overflow drops only (data loss) */
+	u64          coalesced;        /* dedupe rejections (intentional) */
+	spinlock_t   lock;
 };
 
 struct openipc_ft_file {
 	u32 chn_mask;
+	u32 evt_mask;
 };
 
 static struct openipc_ft_chn g_chn[OPENIPC_FT_MAX_CHN];
 static wait_queue_head_t g_wait;
-static unsigned int g_default_chn_mask = (1U << OPENIPC_FT_MAX_CHN) - 1;
+static const unsigned int g_default_chn_mask =
+	(1U << OPENIPC_FT_MAX_CHN) - 1;
+static const unsigned int g_default_evt_mask = ~0U;
 
 static struct miscdevice g_miscdev;
 
@@ -67,7 +108,7 @@ static inline bool ring_empty(const struct openipc_ft_chn *c)
 	return c->head == c->tail;
 }
 
-void openipc_frame_ts_push(unsigned int vi_chn)
+void openipc_frame_ts_push(unsigned int vi_chn, unsigned int event_type)
 {
 	struct openipc_ft_chn *c;
 	struct openipc_frame_ts_event *e;
@@ -76,18 +117,27 @@ void openipc_frame_ts_push(unsigned int vi_chn)
 
 	if (vi_chn >= OPENIPC_FT_MAX_CHN)
 		return;
+	if (event_type >= OPENIPC_FT_MAX_EVT_TYPE)
+		return;
 
 	now_ns = sched_clock();
 	c = &g_chn[vi_chn];
 
 	spin_lock_irqsave(&c->lock, flags);
-	if (c->last_push_ns &&
-	    now_ns - c->last_push_ns < OPENIPC_FT_MIN_INTERVAL_NS) {
-		c->dropped++;
+	if (c->last_push_ns[event_type] &&
+	    now_ns - c->last_push_ns[event_type] <
+		    openipc_ft_min_interval_ns[event_type]) {
+		/*
+		 * Intentional rejection — the level-held vsync / FEND bits
+		 * over-fire at high sensor IRQ rates and the dedupe window
+		 * collapses them into one event per real frame. Not data
+		 * loss; tracked separately from ring-overflow drops.
+		 */
+		c->coalesced++;
 		spin_unlock_irqrestore(&c->lock, flags);
 		return;
 	}
-	c->last_push_ns = now_ns;
+	c->last_push_ns[event_type] = now_ns;
 
 	if (ring_full(c)) {
 		/* drop oldest */
@@ -95,10 +145,12 @@ void openipc_frame_ts_push(unsigned int vi_chn)
 		c->dropped++;
 	}
 	e = &c->ring[c->head];
-	e->pts_us = div_u64(now_ns, 1000);
-	e->wall_ns = ktime_get_real_ns();
-	e->vi_chn = vi_chn;
-	e->seq = c->seq++;
+	e->pts_us     = div_u64(now_ns, 1000);
+	e->wall_ns    = ktime_get_real_ns();
+	e->vi_chn     = vi_chn;
+	e->seq        = c->seq[event_type]++;
+	e->event_type = event_type;
+	e->reserved   = 0;
 	c->head = (c->head + 1) & (OPENIPC_FT_DEPTH - 1);
 	spin_unlock_irqrestore(&c->lock, flags);
 
@@ -115,6 +167,7 @@ static int ft_open(struct inode *inode, struct file *file)
 		return -ENOMEM;
 
 	priv->chn_mask = g_default_chn_mask;
+	priv->evt_mask = g_default_evt_mask;
 	file->private_data = priv;
 	return 0;
 }
@@ -125,18 +178,47 @@ static int ft_release(struct inode *inode, struct file *file)
 	return 0;
 }
 
-static bool any_pending(u32 mask)
+static bool event_passes(const struct openipc_frame_ts_event *e,
+			 u32 chn_mask, u32 evt_mask)
+{
+	if (!(chn_mask & (1U << e->vi_chn)))
+		return false;
+	if (e->event_type < 32 && !(evt_mask & (1U << e->event_type)))
+		return false;
+	return true;
+}
+
+static bool any_pending(u32 chn_mask, u32 evt_mask)
 {
 	unsigned int i;
+	unsigned long flags;
 
 	for (i = 0; i < OPENIPC_FT_MAX_CHN; i++) {
-		if ((mask & (1U << i)) && !ring_empty(&g_chn[i]))
+		struct openipc_ft_chn *c = &g_chn[i];
+		bool hit = false;
+
+		if (!(chn_mask & (1U << i)))
+			continue;
+
+		spin_lock_irqsave(&c->lock, flags);
+		if (!ring_empty(c)) {
+			/* Cheap heuristic: any unread events on a permitted
+			 * channel ⇒ pending. The fd may later discard some
+			 * after a per-event evt_mask check in pop_one; that's
+			 * fine — read() handles the empty-after-filter case
+			 * by sleeping again. */
+			hit = true;
+		}
+		spin_unlock_irqrestore(&c->lock, flags);
+
+		if (hit)
 			return true;
 	}
 	return false;
 }
 
-static bool pop_one(u32 mask, struct openipc_frame_ts_event *out)
+static bool pop_one(u32 chn_mask, u32 evt_mask,
+		    struct openipc_frame_ts_event *out)
 {
 	unsigned int i;
 	unsigned long flags;
@@ -145,14 +227,22 @@ static bool pop_one(u32 mask, struct openipc_frame_ts_event *out)
 	for (i = 0; i < OPENIPC_FT_MAX_CHN; i++) {
 		struct openipc_ft_chn *c = &g_chn[i];
 
-		if (!(mask & (1U << i)))
+		if (!(chn_mask & (1U << i)))
 			continue;
 
 		spin_lock_irqsave(&c->lock, flags);
-		if (!ring_empty(c)) {
-			*out = c->ring[c->tail];
+		while (!ring_empty(c)) {
+			struct openipc_frame_ts_event *cand =
+				&c->ring[c->tail];
+
 			c->tail = (c->tail + 1) & (OPENIPC_FT_DEPTH - 1);
-			got = true;
+			if (event_passes(cand, chn_mask, evt_mask)) {
+				*out = *cand;
+				got = true;
+				break;
+			}
+			/* Drop events that don't match this fd's evt_mask;
+			 * they were consumed from the ring already. */
 		}
 		spin_unlock_irqrestore(&c->lock, flags);
 
@@ -173,13 +263,14 @@ static ssize_t ft_read(struct file *file, char __user *buf, size_t count,
 		return -EINVAL;
 
 	while (copied + sizeof(ev) <= count) {
-		if (!pop_one(priv->chn_mask, &ev)) {
+		if (!pop_one(priv->chn_mask, priv->evt_mask, &ev)) {
 			if (copied)
 				break;
 			if (file->f_flags & O_NONBLOCK)
 				return -EAGAIN;
-			if (wait_event_interruptible(g_wait,
-						     any_pending(priv->chn_mask)))
+			if (wait_event_interruptible(
+				    g_wait, any_pending(priv->chn_mask,
+							priv->evt_mask)))
 				return -ERESTARTSYS;
 			continue;
 		}
@@ -196,25 +287,11 @@ static unsigned int ft_poll(struct file *file, poll_table *table)
 {
 	struct openipc_ft_file *priv = file->private_data;
 	unsigned int mask = 0;
-	unsigned int i;
-	unsigned long flags;
 
 	poll_wait(file, &g_wait, table);
 
-	for (i = 0; i < OPENIPC_FT_MAX_CHN; i++) {
-		struct openipc_ft_chn *c = &g_chn[i];
-
-		if (!(priv->chn_mask & (1U << i)))
-			continue;
-
-		spin_lock_irqsave(&c->lock, flags);
-		if (!ring_empty(c))
-			mask |= POLLIN | POLLRDNORM;
-		spin_unlock_irqrestore(&c->lock, flags);
-
-		if (mask)
-			break;
-	}
+	if (any_pending(priv->chn_mask, priv->evt_mask))
+		mask |= POLLIN | POLLRDNORM;
 
 	return mask;
 }
@@ -233,6 +310,14 @@ static long ft_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
 		priv->chn_mask = m;
 		return 0;
 	}
+	case OPENIPC_FT_IOC_SET_EVENT_MASK: {
+		u32 m;
+
+		if (copy_from_user(&m, uarg, sizeof(m)))
+			return -EFAULT;
+		priv->evt_mask = m;
+		return 0;
+	}
 	case OPENIPC_FT_IOC_GET_DROPPED: {
 		u64 total = 0;
 		unsigned int i;
@@ -241,6 +326,20 @@ static long ft_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
 		for (i = 0; i < OPENIPC_FT_MAX_CHN; i++) {
 			spin_lock_irqsave(&g_chn[i].lock, flags);
 			total += g_chn[i].dropped;
+			spin_unlock_irqrestore(&g_chn[i].lock, flags);
+		}
+		if (copy_to_user(uarg, &total, sizeof(total)))
+			return -EFAULT;
+		return 0;
+	}
+	case OPENIPC_FT_IOC_GET_COALESCED: {
+		u64 total = 0;
+		unsigned int i;
+		unsigned long flags;
+
+		for (i = 0; i < OPENIPC_FT_MAX_CHN; i++) {
+			spin_lock_irqsave(&g_chn[i].lock, flags);
+			total += g_chn[i].coalesced;
 			spin_unlock_irqrestore(&g_chn[i].lock, flags);
 		}
 		if (copy_to_user(uarg, &total, sizeof(total)))
@@ -281,8 +380,8 @@ static int __init openipc_ft_init(void)
 		return ret;
 	}
 
-	pr_info("openipc_frame_ts: /dev/%s minor=%d\n",
-		OPENIPC_FT_NAME, g_miscdev.minor);
+	pr_info("openipc_frame_ts: /dev/%s minor=%d, event types=%u\n",
+		OPENIPC_FT_NAME, g_miscdev.minor, OPENIPC_FT_MAX_EVT_TYPE);
 	return 0;
 }
 
@@ -295,4 +394,4 @@ module_init(openipc_ft_init);
 module_exit(openipc_ft_exit);
 
 MODULE_LICENSE("GPL");
-MODULE_DESCRIPTION("OpenIPC sensor frame-start (PTS, CLOCK_REALTIME) capture");
+MODULE_DESCRIPTION("OpenIPC sensor frame-event (PTS, CLOCK_REALTIME) capture");

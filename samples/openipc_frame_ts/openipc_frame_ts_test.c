@@ -26,6 +26,7 @@
 
 #define DEV_PATH      "/dev/openipc-frame-ts"
 #define MAX_CHN       8
+#define BATCH         64   /* events drained per read() syscall */
 
 struct chn_state {
 	uint64_t last_wall_ns;
@@ -87,24 +88,39 @@ static void print_summary(const struct chn_state *st)
 	}
 }
 
+static const char *evt_name(uint32_t t)
+{
+	switch (t) {
+	case OPENIPC_FT_EVT_MIPI_FS:  return "MIPI_FS";
+	case OPENIPC_FT_EVT_ISP_FEND: return "ISP_FEND";
+	default:                      return "?";
+	}
+}
+
 int main(int argc, char **argv)
 {
 	int opt, fd;
 	int summary_only = 0;
 	int seconds = 0;
 	uint32_t mask = 0xFFFFFFFFu;
+	uint32_t event_mask = 1u << OPENIPC_FT_EVT_MIPI_FS;  /* FS only by default */
 	struct chn_state st[MAX_CHN] = {0};
 	time_t last_print = 0;
 	struct pollfd pfd;
 	uint64_t dropped = 0;
+	uint64_t coalesced = 0;
 
-	while ((opt = getopt(argc, argv, "sc:t:")) != -1) {
+	while ((opt = getopt(argc, argv, "sc:t:e:")) != -1) {
 		switch (opt) {
 		case 's': summary_only = 1; break;
 		case 'c': mask = strtoul(optarg, NULL, 0); break;
 		case 't': seconds = atoi(optarg); break;
+		case 'e': event_mask = strtoul(optarg, NULL, 0); break;
 		default:
-			fprintf(stderr, "usage: %s [-s] [-t seconds] [-c <mask>]\n", argv[0]);
+			fprintf(stderr,
+			        "usage: %s [-s] [-t seconds] [-c <chn_mask>] [-e <evt_mask>]\n"
+			        "  -e default 0x1 (FS only); 0x3 = FS+FEND\n",
+			        argv[0]);
 			return 1;
 		}
 	}
@@ -114,7 +130,7 @@ int main(int argc, char **argv)
 
 	time_t deadline = seconds > 0 ? time(NULL) + seconds : 0;
 
-	fd = open(DEV_PATH, O_RDONLY);
+	fd = open(DEV_PATH, O_RDONLY | O_NONBLOCK);
 	if (fd < 0) {
 		fprintf(stderr, "open %s: %s\n", DEV_PATH, strerror(errno));
 		return 1;
@@ -126,11 +142,17 @@ int main(int argc, char **argv)
 		return 1;
 	}
 
+	if (ioctl(fd, OPENIPC_FT_IOC_SET_EVENT_MASK, &event_mask) < 0) {
+		fprintf(stderr,
+		        "ioctl SET_EVENT_MASK not supported (%s) — v1 kernel?\n",
+		        strerror(errno));
+	}
+
 	pfd.fd = fd;
 	pfd.events = POLLIN;
 
 	while (!g_stop) {
-		struct openipc_frame_ts_event ev;
+		struct openipc_frame_ts_event evbuf[BATCH];
 		ssize_t n;
 		int pr;
 
@@ -146,16 +168,33 @@ int main(int argc, char **argv)
 			break;
 		}
 
-		while ((n = read(fd, &ev, sizeof(ev))) == sizeof(ev)) {
-			if (ev.vi_chn < MAX_CHN)
-				update_chn(&st[ev.vi_chn], ev.wall_ns);
-			if (!summary_only)
-				printf("chn%u seq=%u pts=%llu wall_ns=%llu\n",
-				       ev.vi_chn, ev.seq,
-				       (unsigned long long)ev.pts_us,
-				       (unsigned long long)ev.wall_ns);
-		}
-		if (n < 0 && errno != EAGAIN && errno != EINTR) {
+		/*
+		 * Drain one batch then loop back to the outer while so the
+		 * deadline check actually fires at high event rates — at
+		 * 240 fps × 2 event types a tight read() loop never returns.
+		 * O_NONBLOCK gives EAGAIN when the ring is dry; treat partial
+		 * batches the same as a full drain.
+		 */
+		n = read(fd, evbuf, sizeof(evbuf));
+		if (n > 0) {
+			ssize_t i, nev = n / (ssize_t)sizeof(evbuf[0]);
+
+			for (i = 0; i < nev; i++) {
+				struct openipc_frame_ts_event *ev = &evbuf[i];
+
+				/* Jitter stats only on FS — otherwise FS/FEND
+				 * interleave skews inter-arrival deltas. */
+				if (ev->vi_chn < MAX_CHN &&
+				    ev->event_type == OPENIPC_FT_EVT_MIPI_FS)
+					update_chn(&st[ev->vi_chn], ev->wall_ns);
+				if (!summary_only)
+					printf("chn%u %-8s seq=%u pts=%llu wall_ns=%llu\n",
+					       ev->vi_chn, evt_name(ev->event_type),
+					       ev->seq,
+					       (unsigned long long)ev->pts_us,
+					       (unsigned long long)ev->wall_ns);
+			}
+		} else if (n < 0 && errno != EAGAIN && errno != EINTR) {
 			fprintf(stderr, "read: %s\n", strerror(errno));
 			break;
 		}
@@ -175,8 +214,11 @@ int main(int argc, char **argv)
 	print_summary(st);
 
 	if (ioctl(fd, OPENIPC_FT_IOC_GET_DROPPED, &dropped) == 0)
-		printf("dropped (all channels, all time): %llu\n",
+		printf("dropped     (ring overflow, data loss) : %llu\n",
 		       (unsigned long long)dropped);
+	if (ioctl(fd, OPENIPC_FT_IOC_GET_COALESCED, &coalesced) == 0)
+		printf("coalesced   (dedupe rejects, expected) : %llu\n",
+		       (unsigned long long)coalesced);
 
 	close(fd);
 	return 0;

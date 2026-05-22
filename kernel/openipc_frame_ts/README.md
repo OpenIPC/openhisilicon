@@ -40,9 +40,16 @@ struct openipc_frame_ts_event {
 `read()` blocks (or returns `-EAGAIN` if `O_NONBLOCK`) until at least one
 event is available, then drains as many full events as fit in the supplied
 buffer. `poll()`/`select()` supported. `OPENIPC_FT_IOC_SET_CHANNEL_MASK`
-narrows the per-fd channel set. `OPENIPC_FT_IOC_GET_DROPPED` returns total
-drops across all channels (the ring drops oldest on overflow at depth 64
-per channel).
+narrows the per-fd channel set. `OPENIPC_FT_IOC_GET_DROPPED` returns total **ring-overflow** drops across
+all channels (genuine data loss — events arrived but no reader drained
+the ring in time). The ring is depth 256 per channel (≈ 0.5 s of buffer
+at 240 fps × 2 event types). `OPENIPC_FT_IOC_GET_COALESCED` returns
+total **dedupe rejections** — duplicate events the level-held vsync /
+FEND bits emitted within the dedupe window of a previously-pushed event.
+Coalesced events are *not* data loss; they're the over-fired duplicates
+the dedupe is there to absorb. A nonzero `dropped` means reader can't
+keep up; a nonzero `coalesced` is expected steady-state at high IRQ
+rates and means the dedupe is doing its job.
 
 ## Module loading
 

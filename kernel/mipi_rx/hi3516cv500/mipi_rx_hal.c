@@ -2340,9 +2340,17 @@ static int mipi_rx_interrupt_route(int irq, void *dev_id)
      * both are wired up, but openipc_frame_ts_push fires at most once
      * per device per IRQ so consumers get one event per physical frame.
      */
+    /*
+     * Edge-detect on the raw vsync bits per device — see the
+     * matching comment in kernel/mipi_rx/mipi_rx_hal.c for the
+     * level-held-bit reasoning. cv500 also has the ~30–80 µs
+     * double-vsync quirk that the 1 ms openipc_frame_ts dedupe
+     * absorbs as a second line of defence.
+     */
     for (i = 0; i < MIPI_RX_MAX_DEV_NUM; i++) {
+        static bool s_vsync_was_set[MIPI_RX_MAX_DEV_NUM];
         unsigned int mipi_int, lvds_int;
-        int vsync = 0;
+        bool vsync_now = false;
 
         mipi_ctrl_regs = get_mipi_ctrl_regs(i);
         lvds_ctrl_regs = get_lvds_ctrl_regs(i);
@@ -2351,15 +2359,16 @@ static int mipi_rx_interrupt_route(int irq, void *dev_id)
         lvds_int = lvds_ctrl_regs->LVDS_CTRL_INT.u32;
 
         if (mipi_int & MIPI_INT_VSYNC) {
-            vsync = 1;
+            vsync_now = true;
             mipi_ctrl_regs->MIPI_CTRL_INT_RAW.u32 = MIPI_INT_VSYNC;
         }
         if (lvds_int & LVDS_INT_VSYNC) {
-            vsync = 1;
+            vsync_now = true;
             lvds_ctrl_regs->LVDS_CTRL_INT_RAW.u32 = LVDS_INT_VSYNC;
         }
-        if (vsync)
-            openipc_frame_ts_push(i);
+        if (vsync_now && !s_vsync_was_set[i])
+            openipc_frame_ts_push(i, OPENIPC_FT_EVT_MIPI_FS);
+        s_vsync_was_set[i] = vsync_now;
     }
 
     for (i = 0; i < MIPI_RX_MAX_DEV_NUM; i++) {

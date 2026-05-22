@@ -6,6 +6,7 @@
 #include "common.h"
 #include "comm_isp.h"
 #include "isp_drv_defines.h"
+#include "openipc_frame_ts.h"
 #include "mkp_isp.h"
 #include "isp.h"
 #include "isp_drv.h"
@@ -7906,6 +7907,36 @@ static inline int ISP_ISR(int irq, void *id)
 			u32IspIntStatus =
 				u32IspRawIntStatus &
 				IO_RW_FE_ADDRESS(ViPipe, ISP_INT_FE_MASK);
+
+			/*
+			 * openipc_frame_ts: push an ISP_FEND event when the
+			 * ISP front-end finished receiving the last row from
+			 * the sensor. Combined with MIPI_FS pushed by the
+			 * MIPI RX driver at frame-start, consumers see two
+			 * events per frame and can compute sensor readout
+			 * duration as wall_ns[FEND] − wall_ns[FS].
+			 *
+			 * Edge-detect on the raw status: the vendor HAL leaves
+			 * ISP_INT_FE_MASK at 0 by default (only the unused
+			 * ISP_SET_INT_ENABLE ioctl flips it on), so the masked
+			 * status reads zero. The raw FEND bit is level-held
+			 * across the inter-frame gap — W1C clears it for the
+			 * instant the writeback happens, but hardware re-asserts
+			 * while the underlying frame-finished condition holds,
+			 * so every ISR call during that window would otherwise
+			 * fire. Track the previous raw state per pipe and emit
+			 * only on the 0→1 transition.
+			 */
+			{
+				static bool s_fend_was_set[ISP_MAX_PHY_PIPE_NUM];
+				bool fend_now =
+					!!(u32IspRawIntStatus & ISP_INT_FE_FEND);
+
+				if (fend_now && !s_fend_was_set[ViPipe])
+					openipc_frame_ts_push(ViPipe,
+							      OPENIPC_FT_EVT_ISP_FEND);
+				s_fend_was_set[ViPipe] = fend_now;
+			}
 
 			pstDrvCtx->stIntSch.u32IspIntStatus = u32IspIntStatus;
 			pstDrvCtx->stIntSch.u32PortIntStatus = u32PortIntFStart;

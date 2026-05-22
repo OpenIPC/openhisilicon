@@ -1987,13 +1987,20 @@ static int mipi_rx_interrupt_route(int irq, void *dev_id)
 	/*
 	 * Frame-start dispatch (openipc_frame_ts). Runs outside the
 	 * CHN_INT_RAW gate below because vsync IRQs alone don't set it.
-	 * MIPI CSI-2 and LVDS vsync bits are W1C'd independently in case
-	 * both are wired up, but openipc_frame_ts_push fires at most once
-	 * per device per IRQ so consumers get one event per physical frame.
+	 *
+	 * Edge-detect on the raw vsync bits per device: MIPI_CTRL_INT.vsync
+	 * and LVDS_CTRL_INT.lvds_vsync are level-held across the inter-frame
+	 * gap (hardware re-asserts after each W1C while the underlying
+	 * vsync window is open). Without edge detection FS would fire on
+	 * every IRQ during that window — measured ~185 Hz on a 37 fps
+	 * IMX335 (capped by the openipc_frame_ts 1 ms dedupe). Emit only on
+	 * the 0→1 transition; the per-event-type 1 ms dedupe in
+	 * openipc_frame_ts still backstops cv500's double-vsync quirk.
 	 */
 	for (i = 0; i < MIPI_RX_MAX_DEV_NUM; i++) {
+		static bool s_vsync_was_set[MIPI_RX_MAX_DEV_NUM];
 		unsigned int mipi_int, lvds_int;
-		int vsync = 0;
+		bool vsync_now = false;
 
 		mipi_ctrl_regs = get_mipi_ctrl_regs(i);
 		lvds_ctrl_regs = get_lvds_ctrl_regs(i);
@@ -2002,15 +2009,16 @@ static int mipi_rx_interrupt_route(int irq, void *dev_id)
 		lvds_int = lvds_ctrl_regs->LVDS_CTRL_INT.u32;
 
 		if (mipi_int & MIPI_INT_VSYNC) {
-			vsync = 1;
+			vsync_now = true;
 			mipi_ctrl_regs->MIPI_CTRL_INT_RAW.u32 = MIPI_INT_VSYNC;
 		}
 		if (lvds_int & LVDS_INT_VSYNC) {
-			vsync = 1;
+			vsync_now = true;
 			lvds_ctrl_regs->LVDS_CTRL_INT_RAW.u32 = LVDS_INT_VSYNC;
 		}
-		if (vsync)
-			openipc_frame_ts_push(i);
+		if (vsync_now && !s_vsync_was_set[i])
+			openipc_frame_ts_push(i, OPENIPC_FT_EVT_MIPI_FS);
+		s_vsync_was_set[i] = vsync_now;
 	}
 
 	for (i = 0; i < MIPI_RX_MAX_DEV_NUM; i++) {

@@ -2627,7 +2627,13 @@ static inline irqreturn_t ISP_ISR(int irq, void *id)
     }
     if (u32PortIntStatus)
     {
-        openipc_frame_ts_push(IspDev);
+        /* cv200's MIPI RX hardware doesn't expose a usable vsync bit,
+         * so we report this ISP-port FSTART IRQ as MIPI_FS-equivalent.
+         * It fires at the same pipeline point (frame start) as the
+         * MIPI_FS path on V4 SoCs. cv200 doesn't have an FEND IRQ
+         * source we can hook today — see kernel/isp/arch/hi3516cv200
+         * for the ISP register map. */
+        openipc_frame_ts_push(IspDev, OPENIPC_FT_EVT_MIPI_FS);
         HW_REG(IO_ADDRESS_PORT(VI_PT0_INT)) = VI_PT0_INT_FSTART;
     }
     /*When detect vi port's width&height changed,then reset isp*/
