@@ -26,6 +26,7 @@
 
 #define DEV_PATH      "/dev/openipc-frame-ts"
 #define MAX_CHN       8
+#define BATCH         64   /* events drained per read() syscall */
 
 struct chn_state {
 	uint64_t last_wall_ns;
@@ -128,7 +129,7 @@ int main(int argc, char **argv)
 
 	time_t deadline = seconds > 0 ? time(NULL) + seconds : 0;
 
-	fd = open(DEV_PATH, O_RDONLY);
+	fd = open(DEV_PATH, O_RDONLY | O_NONBLOCK);
 	if (fd < 0) {
 		fprintf(stderr, "open %s: %s\n", DEV_PATH, strerror(errno));
 		return 1;
@@ -150,7 +151,7 @@ int main(int argc, char **argv)
 	pfd.events = POLLIN;
 
 	while (!g_stop) {
-		struct openipc_frame_ts_event ev;
+		struct openipc_frame_ts_event evbuf[BATCH];
 		ssize_t n;
 		int pr;
 
@@ -166,19 +167,33 @@ int main(int argc, char **argv)
 			break;
 		}
 
-		while ((n = read(fd, &ev, sizeof(ev))) == sizeof(ev)) {
-			/* Jitter stats only on FS — otherwise FS/FEND
-			 * interleave skews inter-arrival deltas. */
-			if (ev.vi_chn < MAX_CHN &&
-			    ev.event_type == OPENIPC_FT_EVT_MIPI_FS)
-				update_chn(&st[ev.vi_chn], ev.wall_ns);
-			if (!summary_only)
-				printf("chn%u %-8s seq=%u pts=%llu wall_ns=%llu\n",
-				       ev.vi_chn, evt_name(ev.event_type), ev.seq,
-				       (unsigned long long)ev.pts_us,
-				       (unsigned long long)ev.wall_ns);
-		}
-		if (n < 0 && errno != EAGAIN && errno != EINTR) {
+		/*
+		 * Drain one batch then loop back to the outer while so the
+		 * deadline check actually fires at high event rates — at
+		 * 240 fps × 2 event types a tight read() loop never returns.
+		 * O_NONBLOCK gives EAGAIN when the ring is dry; treat partial
+		 * batches the same as a full drain.
+		 */
+		n = read(fd, evbuf, sizeof(evbuf));
+		if (n > 0) {
+			ssize_t i, nev = n / (ssize_t)sizeof(evbuf[0]);
+
+			for (i = 0; i < nev; i++) {
+				struct openipc_frame_ts_event *ev = &evbuf[i];
+
+				/* Jitter stats only on FS — otherwise FS/FEND
+				 * interleave skews inter-arrival deltas. */
+				if (ev->vi_chn < MAX_CHN &&
+				    ev->event_type == OPENIPC_FT_EVT_MIPI_FS)
+					update_chn(&st[ev->vi_chn], ev->wall_ns);
+				if (!summary_only)
+					printf("chn%u %-8s seq=%u pts=%llu wall_ns=%llu\n",
+					       ev->vi_chn, evt_name(ev->event_type),
+					       ev->seq,
+					       (unsigned long long)ev->pts_us,
+					       (unsigned long long)ev->wall_ns);
+			}
+		} else if (n < 0 && errno != EAGAIN && errno != EINTR) {
 			fprintf(stderr, "read: %s\n", strerror(errno));
 			break;
 		}

@@ -41,8 +41,8 @@ struct openipc_frame_ts_event {
 event is available, then drains as many full events as fit in the supplied
 buffer. `poll()`/`select()` supported. `OPENIPC_FT_IOC_SET_CHANNEL_MASK`
 narrows the per-fd channel set. `OPENIPC_FT_IOC_GET_DROPPED` returns total
-drops across all channels (the ring drops oldest on overflow at depth 64
-per channel).
+drops across all channels (the ring drops oldest on overflow at depth 256
+per channel — ≈ 0.5 s of buffer at 240 fps × 2 event types).
 
 ## Module loading
 

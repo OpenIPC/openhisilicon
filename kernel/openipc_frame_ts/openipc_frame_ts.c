@@ -34,7 +34,13 @@
 #define OPENIPC_FT_NAME           "openipc-frame-ts"
 #define OPENIPC_FT_MAX_CHN        8
 #define OPENIPC_FT_MAX_EVT_TYPE   2   /* MIPI_FS + ISP_FEND so far */
-#define OPENIPC_FT_DEPTH          64  /* power of 2 */
+/*
+ * Per-channel ring depth (power of 2). 256 events ≈ 0.5 s of buffer at
+ * 240 fps × 2 event types — covers high-fps modes (imx335 800x480 240 fps)
+ * with margin for reader-side jitter (scheduler latency, printf-to-disk).
+ * At 32 B/event the per-channel cost is 8 KiB.
+ */
+#define OPENIPC_FT_DEPTH          256
 /*
  * Drop double-pushes of the SAME event type within these intervals.
  *
