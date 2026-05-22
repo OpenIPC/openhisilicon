@@ -36,6 +36,12 @@ ccflags-y += -I$(src)/isp/arch/hi3516av100/firmware/vreg/arch/hi3516a
 # --- V2A OSAL shim (source) — re-exports removed-since-4.9 kernel APIs
 # so av100 blobs (which were compiled against 4.9) load against modern
 # kernels. Must be inserted BEFORE any blob module by load_hisilicon.
+# Suppress static-inline definitions of _cond_resched and
+# jiffies_to_msecs via macro rename BEFORE kernel headers are
+# processed. See cv200_shim block.
+CFLAGS_osal_v2a_shim/av100_shim.o := \
+	-D_cond_resched=__v2a_shim_cond_resched_unused_inline \
+	-Djiffies_to_msecs=__v2a_shim_jiffies_to_msecs_unused_inline
 $(PREFIX)v2a_shim-objs := osal_v2a_shim/av100_shim.o
 obj-m += $(PREFIX)v2a_shim.o
 
