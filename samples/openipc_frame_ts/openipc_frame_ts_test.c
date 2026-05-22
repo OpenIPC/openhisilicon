@@ -108,6 +108,7 @@ int main(int argc, char **argv)
 	time_t last_print = 0;
 	struct pollfd pfd;
 	uint64_t dropped = 0;
+	uint64_t coalesced = 0;
 
 	while ((opt = getopt(argc, argv, "sc:t:e:")) != -1) {
 		switch (opt) {
@@ -213,8 +214,11 @@ int main(int argc, char **argv)
 	print_summary(st);
 
 	if (ioctl(fd, OPENIPC_FT_IOC_GET_DROPPED, &dropped) == 0)
-		printf("dropped (all channels, all time): %llu\n",
+		printf("dropped     (ring overflow, data loss) : %llu\n",
 		       (unsigned long long)dropped);
+	if (ioctl(fd, OPENIPC_FT_IOC_GET_COALESCED, &coalesced) == 0)
+		printf("coalesced   (dedupe rejects, expected) : %llu\n",
+		       (unsigned long long)coalesced);
 
 	close(fd);
 	return 0;

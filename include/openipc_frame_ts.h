@@ -46,12 +46,28 @@ struct openipc_frame_ts_event {
 
 #define OPENIPC_FT_IOC_MAGIC            'o'
 #define OPENIPC_FT_IOC_SET_CHANNEL_MASK _IOW(OPENIPC_FT_IOC_MAGIC, 1, __u32)
+/*
+ * Ring-overflow drops only — events that arrived but couldn't be queued
+ * because no reader drained the chrdev in time. This is genuine data
+ * loss. Distinct from coalesced (below), which is intentional rejection
+ * of within-dedupe-window duplicates from the level-held vsync / FEND
+ * bits over-firing at high sensor IRQ rates.
+ */
 #define OPENIPC_FT_IOC_GET_DROPPED      _IOR(OPENIPC_FT_IOC_MAGIC, 2, __u64)
 /*
  * Filter which event_types this fd receives. Bit n set ↔ events with
  * event_type == n pass through. Default is all bits set (every type).
  */
 #define OPENIPC_FT_IOC_SET_EVENT_MASK   _IOW(OPENIPC_FT_IOC_MAGIC, 3, __u32)
+/*
+ * Dedupe-coalesced events — incremented when openipc_frame_ts_push is
+ * called for an event_type within its dedupe window of the previous
+ * push. These are NOT data loss: they're the level-held-bit duplicates
+ * the dedupe is there to absorb. Compare against GET_DROPPED: drops →
+ * size the ring or pace the reader; coalesced → tune the dedupe window
+ * if it's rejecting real frames you wanted.
+ */
+#define OPENIPC_FT_IOC_GET_COALESCED    _IOR(OPENIPC_FT_IOC_MAGIC, 4, __u64)
 
 #ifdef __KERNEL__
 /*

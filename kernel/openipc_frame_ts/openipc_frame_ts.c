@@ -75,7 +75,8 @@ struct openipc_ft_chn {
 	unsigned int tail;
 	u32          seq[OPENIPC_FT_MAX_EVT_TYPE];
 	u64          last_push_ns[OPENIPC_FT_MAX_EVT_TYPE];
-	u64          dropped;
+	u64          dropped;          /* ring-overflow drops only (data loss) */
+	u64          coalesced;        /* dedupe rejections (intentional) */
 	spinlock_t   lock;
 };
 
@@ -126,7 +127,13 @@ void openipc_frame_ts_push(unsigned int vi_chn, unsigned int event_type)
 	if (c->last_push_ns[event_type] &&
 	    now_ns - c->last_push_ns[event_type] <
 		    openipc_ft_min_interval_ns[event_type]) {
-		c->dropped++;
+		/*
+		 * Intentional rejection — the level-held vsync / FEND bits
+		 * over-fire at high sensor IRQ rates and the dedupe window
+		 * collapses them into one event per real frame. Not data
+		 * loss; tracked separately from ring-overflow drops.
+		 */
+		c->coalesced++;
 		spin_unlock_irqrestore(&c->lock, flags);
 		return;
 	}
@@ -319,6 +326,20 @@ static long ft_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
 		for (i = 0; i < OPENIPC_FT_MAX_CHN; i++) {
 			spin_lock_irqsave(&g_chn[i].lock, flags);
 			total += g_chn[i].dropped;
+			spin_unlock_irqrestore(&g_chn[i].lock, flags);
+		}
+		if (copy_to_user(uarg, &total, sizeof(total)))
+			return -EFAULT;
+		return 0;
+	}
+	case OPENIPC_FT_IOC_GET_COALESCED: {
+		u64 total = 0;
+		unsigned int i;
+		unsigned long flags;
+
+		for (i = 0; i < OPENIPC_FT_MAX_CHN; i++) {
+			spin_lock_irqsave(&g_chn[i].lock, flags);
+			total += g_chn[i].coalesced;
 			spin_unlock_irqrestore(&g_chn[i].lock, flags);
 		}
 		if (copy_to_user(uarg, &total, sizeof(total)))
