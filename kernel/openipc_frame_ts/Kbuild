@@ -1,0 +1,12 @@
+MOD_NAME := openipc_frame_ts
+OUT := $(PREFIX)$(MOD_NAME)
+
+DIR=$(MOD_NAME)
+
+SRCS := $(DIR)/openipc_frame_ts.c
+
+OBJS := $(SRCS:%.c=%.o)
+
+$(OUT)-objs := $(OBJS)
+
+obj-m += $(OUT).o

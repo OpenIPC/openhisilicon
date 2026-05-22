@@ -35,6 +35,9 @@ ccflags-y += -I$(src)/isp/arch/hi3516cv200/include
 ccflags-y += -I$(src)/isp/arch/hi3516cv200/firmware/vreg
 ccflags-y += -I$(src)/isp/arch/hi3516cv200/firmware/vreg/arch/hi3518e
 
+# Top-level include/ for openipc_frame_ts.h (issue #144)
+ccflags-y += -I$(src)/../include
+
 # --- V2 OSAL shim (source) — re-exports removed-since-4.9 kernel APIs
 # so cv200 blobs (which were compiled against 4.9) load against modern
 # kernels. Must be inserted BEFORE any blob module by load_hisilicon.
@@ -200,3 +203,6 @@ endif
 
 # --- HWRNG module (source driver) ---
 include $(src)/hisi-hwrng/Kbuild
+
+# --- OpenIPC frame-timestamp chrdev (issue #144) ---
+include $(src)/openipc_frame_ts/Kbuild

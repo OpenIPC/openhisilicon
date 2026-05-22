@@ -57,6 +57,8 @@
 #include "hi_spi.h"
 #endif
 
+#include "openipc_frame_ts.h"
+
 #ifdef __cplusplus
 #if __cplusplus
 extern "C"{
@@ -2625,6 +2627,7 @@ static inline irqreturn_t ISP_ISR(int irq, void *id)
     }
     if (u32PortIntStatus)
     {
+        openipc_frame_ts_push(IspDev);
         HW_REG(IO_ADDRESS_PORT(VI_PT0_INT)) = VI_PT0_INT_FSTART;
     }
     /*When detect vi port's width&height changed,then reset isp*/
