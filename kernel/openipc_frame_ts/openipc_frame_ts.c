@@ -36,17 +36,32 @@
 #define OPENIPC_FT_MAX_EVT_TYPE   2   /* MIPI_FS + ISP_FEND so far */
 #define OPENIPC_FT_DEPTH          64  /* power of 2 */
 /*
- * Drop double-pushes of the SAME event type within this interval.
- * Level-triggered IRQ retrigger or per-SoC quirks (e.g. cv500 firing
- * the MIPI vsync IRQ twice ~30–80 µs apart on ~4 % of frames)
- * otherwise leak into userspace as spurious extra events. 1 ms is
- * safely below any plausible sensor frame interval (1000 fps).
+ * Drop double-pushes of the SAME event type within these intervals.
+ *
+ * MIPI_FS (1 ms): MIPI RX vsync IRQ on cv500 fires twice ~30–80 µs apart
+ *   on ~4 % of frames. 1 ms is safely below any plausible sensor frame
+ *   interval (1000 fps) yet catches the duplicate.
+ *
+ * ISP_FEND (25 ms): the ISP_INT_FE.FEND bit is a level signal — hardware
+ *   holds it asserted across the entire inter-frame gap and re-sets it
+ *   after the ISR's W1C clear while the underlying condition still
+ *   holds. The ISR fires far more often than the sensor frame rate
+ *   (other ISP bits), so without a long dedup we'd emit ~IRQ-rate worth
+ *   of FEND events. 25 ms caps at 40 Hz — adequate for every supported
+ *   sensor (max 30 fps single-stream on these SoCs) and still leaves
+ *   margin for jitter.
  *
  * NB: dedup is per (chn, event_type). MIPI_FS and ISP_FEND for the
  * same frame can be tens of ms apart (= readout duration) — that's
  * the whole point — so dedup deliberately does NOT cross event types.
  */
-#define OPENIPC_FT_MIN_INTERVAL_NS  1000000
+#define OPENIPC_FT_MIN_INTERVAL_NS_FS    1000000
+#define OPENIPC_FT_MIN_INTERVAL_NS_FEND  25000000
+
+static const u64 openipc_ft_min_interval_ns[OPENIPC_FT_MAX_EVT_TYPE] = {
+	[OPENIPC_FT_EVT_MIPI_FS]  = OPENIPC_FT_MIN_INTERVAL_NS_FS,
+	[OPENIPC_FT_EVT_ISP_FEND] = OPENIPC_FT_MIN_INTERVAL_NS_FEND,
+};
 
 struct openipc_ft_chn {
 	struct openipc_frame_ts_event ring[OPENIPC_FT_DEPTH];
@@ -103,7 +118,8 @@ void openipc_frame_ts_push(unsigned int vi_chn, unsigned int event_type)
 
 	spin_lock_irqsave(&c->lock, flags);
 	if (c->last_push_ns[event_type] &&
-	    now_ns - c->last_push_ns[event_type] < OPENIPC_FT_MIN_INTERVAL_NS) {
+	    now_ns - c->last_push_ns[event_type] <
+		    openipc_ft_min_interval_ns[event_type]) {
 		c->dropped++;
 		spin_unlock_irqrestore(&c->lock, flags);
 		return;

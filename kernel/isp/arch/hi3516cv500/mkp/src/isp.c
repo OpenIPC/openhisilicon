@@ -6847,9 +6847,23 @@ hi_s32 isp_drv_int_status_process(hi_vi_pipe vi_pipe, hi_s32 vi_dev, isp_drv_ctx
      * MIPI_FS pushed by the MIPI RX driver at frame-start, consumers
      * see two events per frame and can compute sensor readout duration
      * as wall_ns[FEND] − wall_ns[FS].
+     *
+     * Edge-detect on the raw status: vendor HAL leaves ISP_INT_FE_MASK
+     * at 0 by default so the masked status reads zero. The raw FEND
+     * bit is level-held across the inter-frame gap (hardware re-asserts
+     * after each W1C while the underlying frame-finished condition
+     * holds), so every ISR call during that window would otherwise
+     * fire. Track the previous raw state per pipe and emit only on
+     * the 0→1 transition.
      */
-    if (isp_int_status & ISP_INT_FE_FEND)
-        openipc_frame_ts_push(vi_pipe, OPENIPC_FT_EVT_ISP_FEND);
+    {
+        static bool s_fend_was_set[ISP_MAX_PIPE_NUM];
+        bool fend_now = !!(isp_raw_int & ISP_INT_FE_FEND);
+
+        if (fend_now && !s_fend_was_set[vi_pipe])
+            openipc_frame_ts_push(vi_pipe, OPENIPC_FT_EVT_ISP_FEND);
+        s_fend_was_set[vi_pipe] = fend_now;
+    }
 
     int_sch.isp_int_status  = isp_int_status;
     int_sch.port_int_status = port_int_f_start;
