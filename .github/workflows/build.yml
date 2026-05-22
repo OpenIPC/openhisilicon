@@ -822,7 +822,7 @@ jobs:
   # Each platform uses its own QEMU machine model from qemu-hisilicon.
   #
   qemu-boot:
-    name: QEMU boot (${{ matrix.machine }})
+    name: QEMU boot (${{ matrix.machine }}${{ matrix.variant && format('_{0}', matrix.variant) || '' }})
     runs-on: ubuntu-latest
     # Per-row continue-on-error so we can keep platforms in the matrix that
     # currently surface pre-existing firmware-side bugs (av100 module-name
@@ -900,6 +900,34 @@ jobs:
             mem: 128M
             min_modules: 5
             append: "console=ttyAMA0,115200 panic=20 mem=128M root=/dev/ram0 rootfstype=squashfs mmz_allocator=cma mmz=anonymous,0,0x42000000,96M"
+          # cv200_neo (V2 / ARM926EJ-S, Linux 7.0). Built from
+          # OpenIPC/firmware#2122 against the openhisilicon main tip that
+          # carries the open_v2_shim re-exporting do_gettimeofday,
+          # init_timer_key, register_sysctl_table, printk, etc. for the
+          # 4.9-compiled blobs. Boots to login + DHCP + ping in QEMU
+          # locally; allow-failure stays on until the firmware-side
+          # load_hisilicon learns the kernel 7.0 module path. Video
+          # pipeline blocked on openhisilicon#172 (struct timer_list.data
+          # drift on chnl/viu/vpss blobs).
+          - machine: hi3516cv200
+            firmware: hi3516cv200
+            variant: neo
+            mem: 64M
+            allow-failure: true
+            append: "console=ttyAMA0,115200 mem=32M root=/dev/ram0 rootfstype=squashfs"
+          # av100_neo (V2A / Cortex-A7, Linux 7.0). Built from
+          # OpenIPC/firmware#2122 against the openhisilicon main tip
+          # carrying open_v2a_shim, plus openipc/linux#44 with the
+          # mainline hi3516av100 SoC support (DT + CRG + hisi_higmac
+          # ethernet driver). Boots to login + DHCP + ping in QEMU
+          # locally via hisi_higmac. Same allow-failure rationale +
+          # struct timer_list.data caveat as cv200_neo.
+          - machine: hi3516av100
+            firmware: hi3516av100
+            variant: neo
+            mem: 256M
+            allow-failure: true
+            append: "console=ttyAMA0,115200 mem=32M root=/dev/ram0 rootfstype=squashfs"
 
     steps:
       - uses: actions/checkout@v4
@@ -936,7 +964,7 @@ jobs:
           mkdir -p /tmp/openipc
           cd /tmp/openipc
           curl -sSLf -o fw.tgz \
-            https://github.com/OpenIPC/firmware/releases/download/latest/openipc.${{ matrix.firmware }}-nor-lite.tgz
+            https://github.com/OpenIPC/firmware/releases/download/latest/openipc.${{ matrix.firmware }}-nor-${{ matrix.variant || 'lite' }}.tgz
           tar xzf fw.tgz
           ls uImage.${{ matrix.firmware }}
 
@@ -1081,7 +1109,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: qemu-boot-${{ matrix.machine }}
+          name: qemu-boot-${{ matrix.machine }}${{ matrix.variant && format('_{0}', matrix.variant) || '' }}
           path: qemu-output.txt
           retention-days: 7
 
