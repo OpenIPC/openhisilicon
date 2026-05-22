@@ -375,6 +375,19 @@ asmlinkage __printf(2, 3) void dev_err(const struct device *dev,
 }
 EXPORT_SYMBOL(dev_err);
 
+/* dev_warn — KERN_WARNING variant. */
+#undef dev_warn
+asmlinkage __printf(2, 3) void dev_warn(const struct device *dev,
+					const char *fmt, ...)
+{
+	va_list args;
+
+	va_start(args, fmt);
+	dev_vprintk_emit(4 /* KERN_WARNING */, dev, fmt, args);
+	va_end(args);
+}
+EXPORT_SYMBOL(dev_warn);
+
 /* -------------------------------------------------------------------
  * sched_setscheduler() — was EXPORT_SYMBOL_GPL'd in 4.9 but the export
  * was removed in 5.9 (commit 7318d4cc14c8); modules are expected to
