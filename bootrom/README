@@ -190,6 +190,63 @@ outside). Practical options for liberating one device are buying a
 different camera, transplanting a blank SoC, or commissioning a
 glitch attack — all costlier than the device for one-off use.
 
+SD-card recovery does not work on hi3516av300
+---------------------------------------------
+
+**For a camera with bricked NOR flash (e.g. botched firmware
+upgrade), there is no working SD-card recovery on av300 silicon.**
+The bootrom's `media_update()` code path that *should* load
+second-stage firmware from an SD card exists and is reached, but
+never successfully invokes the loaded payload. Empirically verified
+twice:
+
+  * 2026-05-15, consumer av300 IP camera, 32 GiB **SDXC** card on
+    SDIO0. NOR erased to force the bootrom into `media_update`.
+    Both the "use mtd0 contents as raw SD image" layout and the
+    "120-byte UART-printing marker SPL at sector 0" layout were
+    tried. UART captured only the `25× 0x20 + 0x0a`
+    `uart0_wait_start_frame` fastboot handshake — no "SDB-OK"
+    marker output, no SPL banner, no U-Boot output. The bootrom is
+    failing somewhere between `media_init_a/b/c` and
+    `invoke_foreign_code` on the SD payload.
+
+  * 2026-05-22, dev av300 board (`openipc-hi3516av300.dlab.
+    torturelabs.com`), 29 GiB **SDHC** card (different silicon
+    unit, different card class than 2026-05-15). Same SD layout
+    methodology: vendor SPL written to SD LBA 0 for 0x6000 bytes
+    + a fresh-built sdrec U-Boot variant written at LBA 0xC0
+    (0x6000 byte offset), no MBR signature so the bootrom takes
+    the raw-image branch in `media_program_b`. NOR `mtd0` erased.
+    Result: identical to 2026-05-15 — 38 cycles of fastboot
+    handshake in 60 s, zero SPL or U-Boot output. The bootrom
+    looped without progressing.
+
+Card class (SDHC vs SDXC) does not change the outcome, and silicon
+variation between consumer and dev boards does not change it
+either. The failure is somewhere in the bootrom's SDIO0 init /
+`media_program_b` / `media_finalize_b` chain on av300 specifically;
+sibling V4 chip hi3516ev300 ships a `himci_boot.c` SPL that *does*
+work via this path, so the silicon is presumably capable, but no
+av300 firmware (vendor SDK included) ever shipped or validated it.
+
+**The only validated recovery for a bricked av300 is `defib` over
+UART**, which does require TTL serial pad access:
+
+  defib burn -c hi3516av300 -p /dev/ttyUSB0 \
+      -f path/to/u-boot-hi3516av300.bin --terminal
+
+On most av300 boards the UART pads are exposed and reachable with
+jumper wires, but some consumer-finished casings hide them. If
+you can reach the pads, defib recovers the camera deterministically
+in under 30 seconds.
+
+If you arrive here intending to build an SD-recovery release / tool
+/ documentation for av300: **stop**. The path is not viable. Either
+prove the existing investigation wrong with a new test (different
+SD initialisation sequence, instrumented bootrom run via defib that
+inspects `media_program_b`'s return value, …) or document that
+av300 is excluded from any SD-recovery offering.
+
 What this means for security researchers
 ----------------------------------------
 
@@ -335,6 +392,15 @@ pass klad_dispatch_sig at 0x4000868.
   them into DDR at 0x81000000 and invokes_foreign_code() into them.
   Defence: keep PERISTAT bit 0 set in OTP so the secure path runs
   klad_dispatch_sig.
+  Empirical caveat: on hi3516av300 silicon specifically this path
+  has been tested twice (2026-05-15 SDXC + 2026-05-22 SDHC) and
+  the bootrom never reaches invoke_foreign_code — only the
+  fastboot UART handshake fires. The chain exists in the bootrom
+  code but the SDIO0 init / media_program_b / media_finalize_b
+  sub-chain fails silently. See the "SD-card recovery does not
+  work on hi3516av300" section above for details. This attack
+  surface item is structural — non-av300 V4 siblings (e.g.
+  hi3516ev300) likely do reach the invoke step.
 
 * **Physical UART access (also realistic).** Sequence:
     1. Attach to the recovery UART pads (TX/RX/GND on PCB).
