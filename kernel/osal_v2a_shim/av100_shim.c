@@ -276,6 +276,19 @@ asmlinkage __printf(2, 3) void dev_err(const struct device *dev,
 }
 EXPORT_SYMBOL(dev_err);
 
+/* dev_warn (KERN_WARNING; same shape as dev_err). */
+#undef dev_warn
+asmlinkage __printf(2, 3) void dev_warn(const struct device *dev,
+					const char *fmt, ...)
+{
+	va_list args;
+
+	va_start(args, fmt);
+	dev_vprintk_emit(4 /* KERN_WARNING */, dev, fmt, args);
+	va_end(args);
+}
+EXPORT_SYMBOL(dev_warn);
+
 /* sched_setscheduler (export removed 5.9; best-effort dispatch — drops
  * caller priority). See cv200_shim.c for rationale. */
 int sched_setscheduler(struct task_struct *p, int policy,

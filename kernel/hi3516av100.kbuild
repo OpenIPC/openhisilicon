@@ -98,7 +98,9 @@ obj-m += $(PREFIX)rgn.o
 obj-m += $(PREFIX)vgs.o
 obj-m += $(PREFIX)ive.o
 obj-m += $(PREFIX)vda.o
-obj-m += $(PREFIX)pm.o
+ifndef DISABLE_PM
+    obj-m += $(PREFIX)pm.o
+endif
 ifndef DISABLE_ISP
     obj-m += $(PREFIX)isp.o
 endif
