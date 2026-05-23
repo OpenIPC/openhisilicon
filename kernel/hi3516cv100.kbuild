@@ -32,7 +32,9 @@ ccflags-y += -I$(src)/include/hi3516cv100
 CFLAGS_osal_v1_shim/cv100_shim.o := \
 	-D_cond_resched=__v1_shim_cond_resched_unused_inline \
 	-D__copy_to_user=__v1_shim_copy_to_user_unused_inline \
-	-D__copy_from_user=__v1_shim_copy_from_user_unused_inline
+	-D__copy_from_user=__v1_shim_copy_from_user_unused_inline \
+	-Dmsecs_to_jiffies=__v1_shim_msecs_to_jiffies_unused_inline \
+	-Dmodule_put=__v1_shim_module_put_unused_inline
 $(PREFIX)v1_shim-objs := osal_v1_shim/cv100_shim.o
 obj-m += $(PREFIX)v1_shim.o
 

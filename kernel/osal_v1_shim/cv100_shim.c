@@ -458,6 +458,64 @@ extern unsigned long __copy_from_user(void *to,
 	__attribute__((alias("__v1_shim___copy_from_user")));
 EXPORT_SYMBOL(__copy_from_user);
 
+/* msecs_to_jiffies() — static inline in <linux/jiffies.h> wrapping
+ * __msecs_to_jiffies() (exported). Provide the legacy function name. */
+#include <linux/jiffies.h>
+#undef msecs_to_jiffies
+unsigned long __v1_shim_msecs_to_jiffies(const unsigned int m)
+{
+	return __msecs_to_jiffies(m);
+}
+extern unsigned long msecs_to_jiffies(const unsigned int m)
+	__attribute__((alias("__v1_shim_msecs_to_jiffies")));
+EXPORT_SYMBOL(msecs_to_jiffies);
+
+/* __get_free_pages() — was an exported function pre-6.x; now a macro
+ * wrapping get_free_pages_noprof. Alias to the noprof helper. */
+#include <linux/gfp.h>
+unsigned long __v1_shim___get_free_pages(gfp_t gfp_mask, unsigned int order)
+{
+	return get_free_pages_noprof(gfp_mask, order);
+}
+#undef __get_free_pages
+extern unsigned long __get_free_pages(gfp_t gfp_mask, unsigned int order)
+	__attribute__((alias("__v1_shim___get_free_pages")));
+EXPORT_SYMBOL(__get_free_pages);
+
+/* module_put() — became a static inline in modern <linux/module.h>; no
+ * exported helper for the "put" path. cv100 blobs use it for vendor
+ * refcount housekeeping; a no-op is safe — we don't actually unload
+ * the blob modules at runtime on QEMU. */
+#include <linux/module.h>
+#undef module_put
+void __v1_shim_module_put(struct module *mod)
+{
+	(void)mod;
+}
+extern void module_put(struct module *mod)
+	__attribute__((alias("__v1_shim_module_put")));
+EXPORT_SYMBOL(module_put);
+
+/* __udelay() — pre-6.x ARM exported function; now a macro to
+ * arm_delay_ops.udelay(). Wrap the function-pointer dispatch.
+ *
+ * <linux/delay.h> defines both __udelay() (macro) AND udelay() (macro)
+ * — both have to be #undef'd before referencing struct field arm_delay_ops.udelay,
+ * because the preprocessor expands any `udelay(` token sequence regardless
+ * of struct-member context (it doesn't track `.` before identifiers). */
+#include <linux/delay.h>
+#undef __udelay
+#undef udelay
+void __v1_shim___udelay(unsigned long usecs)
+{
+	/* arm_delay_ops.udelay() takes the usec arg pre-scaled by 0x10C7UL,
+	 * matching the modern <asm/delay.h> __udelay(n) macro expansion. */
+	arm_delay_ops.udelay(usecs * 0x10C7UL);
+}
+extern void __udelay(unsigned long usecs)
+	__attribute__((alias("__v1_shim___udelay")));
+EXPORT_SYMBOL(__udelay);
+
 #endif /* LINUX_VERSION_CODE >= KERNEL_VERSION(5, 0, 0) */
 
 /* -------------------------------------------------------------------
