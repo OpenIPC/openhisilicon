@@ -134,6 +134,42 @@ HI_U32                  lsc_update_mode = 0;
 
 spinlock_t g_stIspLock;
 
+/*
+ * Tasklet-deferred openipc_frame_ts_push for cv200 ISP_ISR.
+ *
+ * The cv200 ISR top half runs the entire ISP_IntBottomHalf synchronously
+ * before returning, and that bottom half writes sensor exposure/gain over
+ * i2c. Empirical reboot/power-cycle testing on the dlab hi3518ev200 bench
+ * (10 power-cycles per state, JXF22 sensor, kernel 4.9.37) showed that
+ * adding *any* extra work — even a fast spinlock_irqsave ring push —
+ * inside the top half before the bottom half runs tips a timing race
+ * downstream in the vendor VPSS/VENC chn 1 setup, raising the
+ * /image.jpg HTTP-000 brick rate from 20% (baseline) to 60%. That's
+ * why openhisilicon#155/#178 had to be gated off by #182.
+ *
+ * The race isn't the rt_mutex_trylock WARN that #183 originally blamed
+ * (we confirmed that empirically by deferring i2c to a workqueue and
+ * watching brick rate get *worse*). It's the µs budget itself.
+ *
+ * Fix: keep the ISR doing only a tasklet_hi_schedule() (a single bit
+ * set + softirq raise, ~10s of cycles), and run openipc_frame_ts_push()
+ * in the tasklet. Tasklets run in softirq context after the hardirq
+ * returns, so the ISR hot path stays at near-zero added µs and the
+ * downstream race doesn't fire.
+ *
+ * Timestamp precision trade-off: the push reads sched_clock() at
+ * tasklet-run time (a few µs after the IRQ rather than inside it).
+ * For 30 fps frame-edge events on a 33 ms cadence this is a negligible
+ * shift — and openipc_frame_ts_push() already has a per-event-type
+ * dedupe window so coalesced wake-ups don't double-fire.
+ */
+static struct tasklet_struct g_stIspFtTasklet;
+
+static void ISP_FtTaskletFn(unsigned long data)
+{
+    openipc_frame_ts_push((unsigned int)data, OPENIPC_FT_EVT_MIPI_FS);
+}
+
 /****************************************************************************
  * INTERNAL FUNCTION DECLARATION                                            *
  ****************************************************************************/
@@ -2628,25 +2664,19 @@ static inline irqreturn_t ISP_ISR(int irq, void *id)
     if (u32PortIntStatus)
     {
         /*
-         * openipc_frame_ts hook disabled on hi3516cv200 family pending
-         * a hardware-validation bench. The family includes hi3516cv200
-         * AND hi3518ev200 (same CHIPARCH=hi3516cv200, same open_isp.ko
-         * renamed to hi3518e_isp.ko at firmware install time). The hook
-         * adds a few µs to the ISR hot path which, on a real
-         * hi3518ev200 board, tips a latent i2c-from-hardirq race
-         * (rt_mutex_trylock WARN at rtmutex.c:1545 via
-         * hi_sensor_i2c_write → i2c_transfer); majestic can no longer
-         * read the sensor and /image.jpg returns HTTP 000.
+         * cv200's MIPI RX hardware doesn't expose a usable vsync bit,
+         * so we report this ISP-port FSTART IRQ as MIPI_FS-equivalent.
+         * It fires at the same pipeline point (frame start) as the
+         * MIPI_FS path on V4 SoCs. cv200 doesn't have an FEND IRQ
+         * source we can hook today — see kernel/isp/arch/hi3516cv200
+         * for the ISP register map.
          *
-         * Re-enable here only after the i2c-in-IRQ path is fixed
-         * upstream OR after we've confirmed on real hi3518ev200 and
-         * hi3516cv200 hardware that the hook doesn't perturb the
-         * sensor i2c timing budget.
-         *
-         * Tracked: openipc/firmware#2128 (revert of opensdk bump),
-         * openhisilicon#178 follow-up.
+         * Deferred to a tasklet so the ISR hot path stays at near-zero
+         * added µs — see g_stIspFtTasklet comment near the top of this
+         * file for why direct openipc_frame_ts_push() here bricked the
+         * camera ~60% of boots (openhisilicon#155/#178/#182/#183).
          */
-        /* openipc_frame_ts_push(IspDev, OPENIPC_FT_EVT_MIPI_FS); */
+        tasklet_hi_schedule(&g_stIspFtTasklet);
         HW_REG(IO_ADDRESS_PORT(VI_PT0_INT)) = VI_PT0_INT_FSTART;
     }
     /*When detect vi port's width&height changed,then reset isp*/
@@ -2968,6 +2998,11 @@ static int ISP_DRV_Init(void)
         tasklet_init(&g_astIspDrvCtx[0].stIntSch.tsklet, ISP_IntBottomHalf, (unsigned long)&g_astIspDrvCtx[0]);
     }
 
+    /* IspDev is always 0 on cv200 (single ISP). Passing it as the
+     * tasklet data lets the tasklet hand it to openipc_frame_ts_push()
+     * as the vi_chn parameter, matching the V4 / cv500 channel mapping. */
+    tasklet_init(&g_stIspFtTasklet, ISP_FtTaskletFn, 0);
+
     /* alloc isp stat shandow mem for application use */
     g_astIspDrvCtx[0].stStatShadowMem.u32Size = sizeof(ISP_STAT_S);
     s32Ret = CMPI_MmzMallocNocache(HI_NULL, "ISP shadow mem", &g_astIspDrvCtx[0].stStatShadowMem.u32PhyAddr,
@@ -2987,6 +3022,11 @@ static int ISP_DRV_Init(void)
 static int ISP_DRV_Exit(void)
 {
     free_irq(isp_irq, (void*)&g_astIspDrvCtx);
+    /* tasklet_kill must run *after* free_irq so no fresh IRQs can
+     * re-schedule it. It waits for any pending run to finish, so on
+     * return the tasklet is fully quiesced and safe to drop with the
+     * module. */
+    tasklet_kill(&g_stIspFtTasklet);
     //iounmap((void*)reg_vicap_base_va);
     //iounmap((void*)reg_isp_base_va);
     ISP_ACM_DRV_Exit();
