@@ -412,5 +412,49 @@ static inline struct spi_controller *compat_spi_busnum_to_controller(u16 bus_num
 #define pte_offset_map(pmd, addr) pte_offset_kernel((pmd), (addr))
 #endif
 
+/*
+ * hrtimer_init() + manual `timer->function = ...` was unified into a
+ * single hrtimer_setup(timer, fn, clock, mode) call in Linux 6.7
+ * (closes the small window where the timer could fire before the
+ * function pointer was assigned). Provide hrtimer_setup() as an
+ * inline shim on older kernels so driver code can be written in the
+ * new style and still compile on the 3.x / 4.x / 5.x trees this
+ * project supports.
+ */
+#if LINUX_VERSION_CODE < KERNEL_VERSION(6, 7, 0)
+/*
+ * Macro rather than a static inline so the compat header doesn't have
+ * to force-include <linux/hrtimer.h> into every translation unit (the
+ * compat header is `-include`d by kernel/Kbuild for the whole tree).
+ * Drivers that actually use hrtimer_setup() include <linux/hrtimer.h>
+ * themselves, which provides the type definitions the expanded macro
+ * needs.
+ */
+#define hrtimer_setup(t, fn, clk, mode) do { \
+	hrtimer_init((t), (clk), (mode)); \
+	(t)->function = (fn); \
+} while (0)
+#endif
+
+/*
+ * gpio_cansleep() — the int-based legacy wrapper — was removed in
+ * favour of the descriptor-based gpiod_cansleep() during the gpiolib
+ * cleanups around Linux 6.5+. The legacy gpio_request / gpio_set_value
+ * etc. integer API otherwise still works via CONFIG_GPIOLIB. Provide a
+ * gpio_to_desc() bridge so drivers that hold an integer GPIO number
+ * can still query "can this GPIO sleep?" without restructuring.
+ */
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 5, 0)
+#include <linux/gpio.h>
+#include <linux/gpio/consumer.h>
+static inline int gpio_cansleep_compat(unsigned int gpio)
+{
+	struct gpio_desc *d = gpio_to_desc(gpio);
+
+	return d ? gpiod_cansleep(d) : 0;
+}
+#define gpio_cansleep(gpio) gpio_cansleep_compat(gpio)
+#endif
+
 #endif /* KERNEL_COMPAT_H */
 

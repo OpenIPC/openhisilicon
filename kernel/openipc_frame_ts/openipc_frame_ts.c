@@ -24,10 +24,14 @@
 #include <linux/poll.h>
 #include <linux/wait.h>
 #include <linux/spinlock.h>
+#include <linux/mutex.h>
 #include <linux/uaccess.h>
 #include <linux/slab.h>
 #include <linux/ktime.h>
+#include <linux/hrtimer.h>
+#include <linux/gpio.h>
 #include <linux/sched.h>
+#include <linux/device.h>
 
 #include "openipc_frame_ts.h"
 
@@ -93,6 +97,77 @@ static const unsigned int g_default_evt_mask = ~0U;
 
 static struct miscdevice g_miscdev;
 
+/*
+ * Strobe-out: drive a GPIO synchronously with the sensor frame events,
+ * for triggering external illumination / measurement equipment.
+ *
+ *   pulse — assert on MIPI_FS, deassert via hrtimer `strobe_pulse_us`
+ *           microseconds later. Fixed-width pulse aligned with sensor
+ *           row-0 start; suitable for flash / strobe lights.
+ *   hold  — assert on MIPI_FS, deassert on ISP_FEND. High window equals
+ *           the sensor readout duration (~10–30 ms depending on mode);
+ *           suitable for a ring light that should be on only while
+ *           pixels are being received.
+ *
+ * The GPIO must be SoC-direct (memory-mapped); GPIOs that can sleep
+ * (I2C / SPI expanders) are rejected at configure time because the
+ * firing path runs in hardirq context. One global strobe slot for now.
+ */
+enum strobe_mode {
+	STROBE_OFF,
+	STROBE_PULSE,
+	STROBE_HOLD,
+};
+
+static int g_strobe_gpio = -1;
+static enum strobe_mode g_strobe_mode = STROBE_OFF;
+static unsigned int g_strobe_pulse_us = 1000;
+static bool g_strobe_active_low;
+static u64 g_strobe_events;
+static struct hrtimer g_strobe_timer;
+/* Serializes sysfs writes that re-request the GPIO. The firing path
+ * doesn't take this — it only reads the scalar tunables. */
+static DEFINE_MUTEX(g_strobe_lock);
+
+static inline int strobe_active_level(void)
+{
+	return g_strobe_active_low ? 0 : 1;
+}
+
+static enum hrtimer_restart strobe_timer_cb(struct hrtimer *t)
+{
+	int gpio = READ_ONCE(g_strobe_gpio);
+
+	if (gpio >= 0)
+		gpio_set_value(gpio, !strobe_active_level());
+	return HRTIMER_NORESTART;
+}
+
+/* Called from openipc_frame_ts_push after the ring push. Hardirq
+ * context. */
+static void strobe_on_event(unsigned int event_type)
+{
+	int gpio = READ_ONCE(g_strobe_gpio);
+	enum strobe_mode mode = READ_ONCE(g_strobe_mode);
+
+	if (gpio < 0 || mode == STROBE_OFF)
+		return;
+
+	if (event_type == OPENIPC_FT_EVT_MIPI_FS) {
+		gpio_set_value(gpio, strobe_active_level());
+		g_strobe_events++;
+		if (mode == STROBE_PULSE) {
+			u64 ns = (u64)READ_ONCE(g_strobe_pulse_us) * 1000ULL;
+
+			hrtimer_start(&g_strobe_timer, ns_to_ktime(ns),
+				      HRTIMER_MODE_REL);
+		}
+	} else if (event_type == OPENIPC_FT_EVT_ISP_FEND &&
+		   mode == STROBE_HOLD) {
+		gpio_set_value(gpio, !strobe_active_level());
+	}
+}
+
 static inline unsigned int ring_count(const struct openipc_ft_chn *c)
 {
 	return (c->head - c->tail) & (OPENIPC_FT_DEPTH - 1);
@@ -153,6 +228,8 @@ void openipc_frame_ts_push(unsigned int vi_chn, unsigned int event_type)
 	e->reserved   = 0;
 	c->head = (c->head + 1) & (OPENIPC_FT_DEPTH - 1);
 	spin_unlock_irqrestore(&c->lock, flags);
+
+	strobe_on_event(event_type);
 
 	wake_up_interruptible(&g_wait);
 }
@@ -360,6 +437,176 @@ static const struct file_operations g_fops = {
 	.unlocked_ioctl = ft_ioctl,
 };
 
+/*
+ * Strobe sysfs knobs, attached to the miscdev's underlying device so
+ * they appear at /sys/class/misc/openipc-frame-ts/.
+ */
+static void strobe_release_gpio_locked(void)
+{
+	if (g_strobe_gpio < 0)
+		return;
+	gpio_set_value(g_strobe_gpio, !strobe_active_level());
+	gpio_free(g_strobe_gpio);
+	g_strobe_gpio = -1;
+}
+
+static ssize_t strobe_gpio_show(struct device *dev,
+				struct device_attribute *attr, char *buf)
+{
+	return scnprintf(buf, PAGE_SIZE, "%d\n", g_strobe_gpio);
+}
+
+static ssize_t strobe_gpio_store(struct device *dev,
+				 struct device_attribute *attr,
+				 const char *buf, size_t count)
+{
+	int new_gpio;
+	int ret;
+
+	if (kstrtoint(buf, 0, &new_gpio))
+		return -EINVAL;
+
+	mutex_lock(&g_strobe_lock);
+
+	hrtimer_cancel(&g_strobe_timer);
+	strobe_release_gpio_locked();
+
+	if (new_gpio < 0) {
+		ret = count;
+		goto out;
+	}
+
+	if (!gpio_is_valid(new_gpio)) {
+		ret = -EINVAL;
+		goto out;
+	}
+
+	ret = gpio_request(new_gpio, "openipc_frame_ts_strobe");
+	if (ret)
+		goto out;
+
+	if (gpio_cansleep(new_gpio)) {
+		gpio_free(new_gpio);
+		ret = -EINVAL;
+		goto out;
+	}
+
+	gpio_direction_output(new_gpio, g_strobe_active_low ? 1 : 0);
+	g_strobe_gpio = new_gpio;
+	ret = count;
+
+out:
+	mutex_unlock(&g_strobe_lock);
+	return ret;
+}
+static DEVICE_ATTR(strobe_gpio, 0644, strobe_gpio_show, strobe_gpio_store);
+
+static ssize_t strobe_mode_show(struct device *dev,
+				struct device_attribute *attr, char *buf)
+{
+	const char *s;
+
+	switch (g_strobe_mode) {
+	case STROBE_PULSE: s = "pulse"; break;
+	case STROBE_HOLD:  s = "hold";  break;
+	default:           s = "off";   break;
+	}
+	return scnprintf(buf, PAGE_SIZE, "%s\n", s);
+}
+
+static ssize_t strobe_mode_store(struct device *dev,
+				 struct device_attribute *attr,
+				 const char *buf, size_t count)
+{
+	enum strobe_mode new_mode;
+
+	if (sysfs_streq(buf, "off"))
+		new_mode = STROBE_OFF;
+	else if (sysfs_streq(buf, "pulse"))
+		new_mode = STROBE_PULSE;
+	else if (sysfs_streq(buf, "hold"))
+		new_mode = STROBE_HOLD;
+	else
+		return -EINVAL;
+
+	mutex_lock(&g_strobe_lock);
+	if (new_mode == STROBE_OFF) {
+		hrtimer_cancel(&g_strobe_timer);
+		if (g_strobe_gpio >= 0)
+			gpio_set_value(g_strobe_gpio, !strobe_active_level());
+	}
+	g_strobe_mode = new_mode;
+	mutex_unlock(&g_strobe_lock);
+	return count;
+}
+static DEVICE_ATTR(strobe_mode, 0644, strobe_mode_show, strobe_mode_store);
+
+static ssize_t strobe_pulse_us_show(struct device *dev,
+				    struct device_attribute *attr, char *buf)
+{
+	return scnprintf(buf, PAGE_SIZE, "%u\n", g_strobe_pulse_us);
+}
+
+static ssize_t strobe_pulse_us_store(struct device *dev,
+				     struct device_attribute *attr,
+				     const char *buf, size_t count)
+{
+	unsigned int v;
+
+	if (kstrtouint(buf, 0, &v))
+		return -EINVAL;
+	if (v < 1 || v > 100000)
+		return -EINVAL;
+	g_strobe_pulse_us = v;
+	return count;
+}
+static DEVICE_ATTR(strobe_pulse_us, 0644,
+		   strobe_pulse_us_show, strobe_pulse_us_store);
+
+static ssize_t strobe_active_low_show(struct device *dev,
+				      struct device_attribute *attr, char *buf)
+{
+	return scnprintf(buf, PAGE_SIZE, "%u\n", g_strobe_active_low ? 1 : 0);
+}
+
+static ssize_t strobe_active_low_store(struct device *dev,
+				       struct device_attribute *attr,
+				       const char *buf, size_t count)
+{
+	bool v;
+
+	if (kstrtobool(buf, &v))
+		return -EINVAL;
+	mutex_lock(&g_strobe_lock);
+	g_strobe_active_low = v;
+	if (g_strobe_gpio >= 0)
+		gpio_direction_output(g_strobe_gpio, v ? 1 : 0);
+	mutex_unlock(&g_strobe_lock);
+	return count;
+}
+static DEVICE_ATTR(strobe_active_low, 0644,
+		   strobe_active_low_show, strobe_active_low_store);
+
+static ssize_t strobe_events_show(struct device *dev,
+				  struct device_attribute *attr, char *buf)
+{
+	return scnprintf(buf, PAGE_SIZE, "%llu\n",
+			 (unsigned long long)g_strobe_events);
+}
+static DEVICE_ATTR(strobe_events, 0444, strobe_events_show, NULL);
+
+static struct attribute *strobe_attrs[] = {
+	&dev_attr_strobe_gpio.attr,
+	&dev_attr_strobe_mode.attr,
+	&dev_attr_strobe_pulse_us.attr,
+	&dev_attr_strobe_active_low.attr,
+	&dev_attr_strobe_events.attr,
+	NULL,
+};
+static const struct attribute_group strobe_attr_group = {
+	.attrs = strobe_attrs,
+};
+
 static int __init openipc_ft_init(void)
 {
 	unsigned int i;
@@ -369,6 +616,9 @@ static int __init openipc_ft_init(void)
 		spin_lock_init(&g_chn[i].lock);
 
 	init_waitqueue_head(&g_wait);
+
+	hrtimer_setup(&g_strobe_timer, strobe_timer_cb,
+		      CLOCK_MONOTONIC, HRTIMER_MODE_REL);
 
 	g_miscdev.minor = MISC_DYNAMIC_MINOR;
 	g_miscdev.name  = OPENIPC_FT_NAME;
@@ -380,6 +630,12 @@ static int __init openipc_ft_init(void)
 		return ret;
 	}
 
+	ret = sysfs_create_group(&g_miscdev.this_device->kobj,
+				 &strobe_attr_group);
+	if (ret)
+		pr_warn("openipc_frame_ts: strobe sysfs attrs not created: %d\n",
+			ret);
+
 	pr_info("openipc_frame_ts: /dev/%s minor=%d, event types=%u\n",
 		OPENIPC_FT_NAME, g_miscdev.minor, OPENIPC_FT_MAX_EVT_TYPE);
 	return 0;
@@ -387,6 +643,12 @@ static int __init openipc_ft_init(void)
 
 static void __exit openipc_ft_exit(void)
 {
+	sysfs_remove_group(&g_miscdev.this_device->kobj, &strobe_attr_group);
+	hrtimer_cancel(&g_strobe_timer);
+	mutex_lock(&g_strobe_lock);
+	g_strobe_mode = STROBE_OFF;
+	strobe_release_gpio_locked();
+	mutex_unlock(&g_strobe_lock);
 	misc_deregister(&g_miscdev);
 }
 
