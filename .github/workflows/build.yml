@@ -572,6 +572,62 @@ jobs:
           done
 
   #
+  # samples-cross-compile
+  #
+  # Each sample/* directory has a tiny Makefile that builds a single
+  # user-space binary against include/openipc_frame_ts.h (uapi). The
+  # samples are CI-tested as an executable smoke test: if their
+  # Makefile or any header they include drifts, this job catches it
+  # before the binary ships in a release.
+  #
+  # Toolchain: stock Debian arm-linux-gnueabi (glibc) — same as the
+  # libraries-cross-compile job uses. Not musl because we don't need
+  # to match a specific firmware libc here; this is a build sanity
+  # check, not a deploy artifact.
+  #
+  samples-cross-compile:
+    name: Samples cross-compile (ARM)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install ARM toolchain
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            gcc-arm-linux-gnueabi libc6-dev-armel-cross binutils-arm-linux-gnueabi
+
+      - name: Build each sample
+        run: |
+          set -e
+          for d in samples/*/; do
+              [ -f "$d/Makefile" ] || continue
+              echo "=== $d ==="
+              make -C "$d" CC=arm-linux-gnueabi-gcc
+          done
+
+      - name: Verify outputs
+        run: |
+          set -e
+          # Each sample's Makefile produces at least one ARM ELF;
+          # the binary's filename isn't necessarily the dir basename
+          # (openipc_frame_ts/ produces openipc_frame_ts_test, etc.).
+          # Walk per-dir and accept any executable ARM ELF we find.
+          for d in samples/*/; do
+              [ -f "$d/Makefile" ] || continue
+              found=$(find "$d" -maxdepth 1 -type f -executable \
+                  -exec sh -c 'file -b "$1" | grep -q "ELF 32-bit LSB.*ARM" && echo "$1"' _ {} \;)
+              if [ -z "$found" ]; then
+                  echo "NO ARM ELF in $d" >&2
+                  ls -la "$d" >&2
+                  exit 1
+              fi
+              for f in $found; do
+                  echo "ok: $f"
+              done
+          done
+
+  #
   # qemu-ive-ops
   #
   # Builds QEMU with HiSilicon machine models from widgetii/qemu-hisilicon
