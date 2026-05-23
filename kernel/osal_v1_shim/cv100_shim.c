@@ -507,6 +507,95 @@ extern unsigned long long hi_sched_clock(void)
 	__attribute__((alias("__v1_shim_hi_sched_clock")));
 EXPORT_SYMBOL(hi_sched_clock);
 
+/* __const_udelay() — companion to __udelay for compile-time constants.
+ * Same arm_delay_ops dispatch via the .const_udelay slot. */
+#include <linux/delay.h>
+#undef udelay
+#undef __udelay
+#undef __const_udelay
+void __v1_shim___const_udelay(unsigned long xloops)
+{
+	arm_delay_ops.const_udelay(xloops);
+}
+extern void __const_udelay(unsigned long xloops)
+	__attribute__((alias("__v1_shim___const_udelay")));
+EXPORT_SYMBOL(__const_udelay);
+
+/* dma_alloc_coherent() / dma_free_coherent() — wrappers around the
+ * modern dma_alloc_attrs() / dma_free_attrs(). Pass attrs=0 to match
+ * the legacy default (cacheable=N, contiguous=Y). */
+#include <linux/dma-mapping.h>
+#undef dma_alloc_coherent
+#undef dma_free_coherent
+void *__v1_shim_dma_alloc_coherent(struct device *dev, size_t size,
+				   dma_addr_t *dma_handle, gfp_t gfp)
+{
+	return dma_alloc_attrs(dev, size, dma_handle, gfp, 0);
+}
+extern void *dma_alloc_coherent(struct device *dev, size_t size,
+				dma_addr_t *dma_handle, gfp_t gfp)
+	__attribute__((alias("__v1_shim_dma_alloc_coherent")));
+EXPORT_SYMBOL(dma_alloc_coherent);
+
+void __v1_shim_dma_free_coherent(struct device *dev, size_t size,
+				 void *cpu_addr, dma_addr_t dma_handle)
+{
+	dma_free_attrs(dev, size, cpu_addr, dma_handle, 0);
+}
+extern void dma_free_coherent(struct device *dev, size_t size,
+			      void *cpu_addr, dma_addr_t dma_handle)
+	__attribute__((alias("__v1_shim_dma_free_coherent")));
+EXPORT_SYMBOL(dma_free_coherent);
+
+/* no_llseek() — removed 6.12; legacy callers used it as the .llseek
+ * fops slot to signal "no seek". Modern code just leaves the slot
+ * NULL. As a SYMBOL, define it as a real function returning -ESPIPE
+ * (what kernel-internal no_llseek used to do). */
+#undef no_llseek
+loff_t __v1_shim_no_llseek(struct file *file, loff_t offset, int whence)
+{
+	(void)file; (void)offset; (void)whence;
+	return -ESPIPE;
+}
+extern loff_t no_llseek(struct file *file, loff_t offset, int whence)
+	__attribute__((alias("__v1_shim_no_llseek")));
+EXPORT_SYMBOL(no_llseek);
+
+/* rtc_time_to_tm() / rtc_tm_to_time() — renamed to *_time64_* on 5.6.
+ * Legacy callers used `unsigned long` for time; modern variants take
+ * time64_t. Cast through and call. */
+#include <linux/rtc.h>
+#undef rtc_time_to_tm
+void __v1_shim_rtc_time_to_tm(unsigned long time, struct rtc_time *tm)
+{
+	rtc_time64_to_tm((time64_t)time, tm);
+}
+extern void rtc_time_to_tm(unsigned long time, struct rtc_time *tm)
+	__attribute__((alias("__v1_shim_rtc_time_to_tm")));
+EXPORT_SYMBOL(rtc_time_to_tm);
+
+#undef rtc_tm_to_time
+int __v1_shim_rtc_tm_to_time(struct rtc_time *tm, unsigned long *time)
+{
+	*time = (unsigned long)rtc_tm_to_time64(tm);
+	return 0;
+}
+extern int rtc_tm_to_time(struct rtc_time *tm, unsigned long *time)
+	__attribute__((alias("__v1_shim_rtc_tm_to_time")));
+EXPORT_SYMBOL(rtc_tm_to_time);
+
+/* schedule_work() — static inline in <linux/workqueue.h> wrapping
+ * queue_work_on(WORK_CPU_UNBOUND, system_wq, work). Provide as symbol. */
+#include <linux/workqueue.h>
+#undef schedule_work
+bool __v1_shim_schedule_work(struct work_struct *work)
+{
+	return queue_work_on(WORK_CPU_UNBOUND, system_wq, work);
+}
+extern bool schedule_work(struct work_struct *work)
+	__attribute__((alias("__v1_shim_schedule_work")));
+EXPORT_SYMBOL(schedule_work);
+
 /* __udelay() — pre-6.x ARM exported function; now a macro to
  * arm_delay_ops.udelay(). Wrap the function-pointer dispatch.
  *

@@ -34,7 +34,11 @@ CFLAGS_osal_v1_shim/cv100_shim.o := \
 	-D__copy_to_user=__v1_shim_copy_to_user_unused_inline \
 	-D__copy_from_user=__v1_shim_copy_from_user_unused_inline \
 	-Dmsecs_to_jiffies=__v1_shim_msecs_to_jiffies_unused_inline \
-	-Dmodule_put=__v1_shim_module_put_unused_inline
+	-Dmodule_put=__v1_shim_module_put_unused_inline \
+	-Dschedule_work=__v1_shim_schedule_work_unused_inline \
+	-Dno_llseek=__v1_shim_no_llseek_unused_inline \
+	-Ddma_alloc_coherent=__v1_shim_dma_alloc_coherent_unused_inline \
+	-Ddma_free_coherent=__v1_shim_dma_free_coherent_unused_inline
 $(PREFIX)v1_shim-objs := osal_v1_shim/cv100_shim.o
 obj-m += $(PREFIX)v1_shim.o
 
