@@ -75,6 +75,50 @@ the dedupe is there to absorb. A nonzero `dropped` means reader can't
 keep up; a nonzero `coalesced` is expected steady-state at high IRQ
 rates and means the dedupe is doing its job.
 
+## Strobe-out (GPIO driven by frame events)
+
+The module can drive a SoC GPIO synchronously with the sensor frame
+events, for triggering an external flash / LED ring / measurement
+device. Configured at runtime via sysfs:
+
+```
+/sys/class/misc/openipc-frame-ts/
+├── strobe_gpio         (rw int)   GPIO number, -1 = disabled (default)
+├── strobe_mode         (rw str)   off | pulse | hold (default off)
+├── strobe_pulse_us     (rw uint)  pulse width µs, 1..100000 (default 1000)
+├── strobe_active_low   (rw bool)  invert polarity (default 0)
+└── strobe_events       (r  u64)   counter of fires since module load
+```
+
+Modes:
+
+- `pulse`: assert on `MIPI_FS`, deassert via hrtimer `strobe_pulse_us`
+  µs later. For triggering a flash / LED with a fixed-width pulse
+  aligned to sensor row-0 start. Latency from sensor vsync to GPIO
+  assert ≈ a few µs (kernel IRQ entry + register write).
+- `hold`: assert on `MIPI_FS`, deassert on `ISP_FEND`. High window
+  equals the sensor readout duration (~10–30 ms depending on
+  resolution). For driving a ring light that should be on while
+  pixels are being received.
+- `off`: no GPIO activity.
+
+The GPIO must be a SoC-direct (memory-mapped) line — GPIOs that can
+sleep (I2C / SPI expanders) are rejected at configure time because the
+firing path runs in hardirq context. One global strobe slot for now.
+
+Quick smoke test on any IP-camera board (almost all expose an IR-cut
+filter or day/night-sensor GPIO):
+
+```sh
+echo 16 > /sys/class/misc/openipc-frame-ts/strobe_gpio
+echo 500 > /sys/class/misc/openipc-frame-ts/strobe_pulse_us
+echo pulse > /sys/class/misc/openipc-frame-ts/strobe_mode
+sleep 5
+cat /sys/class/misc/openipc-frame-ts/strobe_events  # should ≈ sensor fps × 5
+echo off > /sys/class/misc/openipc-frame-ts/strobe_mode
+echo -1 > /sys/class/misc/openipc-frame-ts/strobe_gpio
+```
+
 ## Module loading
 
 `open_mipi_rx.ko` (and on hi3516cv200, `open_isp.ko`) reference
