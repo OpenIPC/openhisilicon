@@ -496,6 +496,17 @@ extern void module_put(struct module *mod)
 	__attribute__((alias("__v1_shim_module_put")));
 EXPORT_SYMBOL(module_put);
 
+/* hi_sched_clock() — vendor-specific wrapper around sched_clock() that
+ * the cv100 blobs (sys, venc) reference but no blob defines. Always
+ * was a thin alias to the kernel's sched_clock(). */
+unsigned long long __v1_shim_hi_sched_clock(void)
+{
+	return sched_clock();
+}
+extern unsigned long long hi_sched_clock(void)
+	__attribute__((alias("__v1_shim_hi_sched_clock")));
+EXPORT_SYMBOL(hi_sched_clock);
+
 /* __udelay() — pre-6.x ARM exported function; now a macro to
  * arm_delay_ops.udelay(). Wrap the function-pointer dispatch.
  *
