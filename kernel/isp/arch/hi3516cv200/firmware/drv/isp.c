@@ -2627,13 +2627,26 @@ static inline irqreturn_t ISP_ISR(int irq, void *id)
     }
     if (u32PortIntStatus)
     {
-        /* cv200's MIPI RX hardware doesn't expose a usable vsync bit,
-         * so we report this ISP-port FSTART IRQ as MIPI_FS-equivalent.
-         * It fires at the same pipeline point (frame start) as the
-         * MIPI_FS path on V4 SoCs. cv200 doesn't have an FEND IRQ
-         * source we can hook today — see kernel/isp/arch/hi3516cv200
-         * for the ISP register map. */
-        openipc_frame_ts_push(IspDev, OPENIPC_FT_EVT_MIPI_FS);
+        /*
+         * openipc_frame_ts hook disabled on hi3516cv200 family pending
+         * a hardware-validation bench. The family includes hi3516cv200
+         * AND hi3518ev200 (same CHIPARCH=hi3516cv200, same open_isp.ko
+         * renamed to hi3518e_isp.ko at firmware install time). The hook
+         * adds a few µs to the ISR hot path which, on a real
+         * hi3518ev200 board, tips a latent i2c-from-hardirq race
+         * (rt_mutex_trylock WARN at rtmutex.c:1545 via
+         * hi_sensor_i2c_write → i2c_transfer); majestic can no longer
+         * read the sensor and /image.jpg returns HTTP 000.
+         *
+         * Re-enable here only after the i2c-in-IRQ path is fixed
+         * upstream OR after we've confirmed on real hi3518ev200 and
+         * hi3516cv200 hardware that the hook doesn't perturb the
+         * sensor i2c timing budget.
+         *
+         * Tracked: openipc/firmware#2128 (revert of opensdk bump),
+         * openhisilicon#178 follow-up.
+         */
+        /* openipc_frame_ts_push(IspDev, OPENIPC_FT_EVT_MIPI_FS); */
         HW_REG(IO_ADDRESS_PORT(VI_PT0_INT)) = VI_PT0_INT_FSTART;
     }
     /*When detect vi port's width&height changed,then reset isp*/
