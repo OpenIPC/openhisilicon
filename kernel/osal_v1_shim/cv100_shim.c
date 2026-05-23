@@ -115,6 +115,12 @@ MODULE_DESCRIPTION("cv100 V1 OSAL shim — re-exports removed-since-3.0 kernel A
  * source-side rewrite. v1_shim provides del_timer as an exported
  * function for blob resolution — must use the legacy name verbatim. */
 #undef del_timer
+/* hi3516cv100.kbuild also passes -D__copy_to_user=...unused_inline /
+ * -D__copy_from_user=...unused_inline so the static-inline definitions
+ * in <linux/uaccess.h> get renamed away (no symbol emitted). Restore the
+ * real names so our function definitions below export under them. */
+#undef __copy_to_user
+#undef __copy_from_user
 
 /* -------------------------------------------------------------------
  * do_gettimeofday() — removed in 5.0 (commit 192a82f9000b).

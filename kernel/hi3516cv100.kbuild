@@ -30,7 +30,9 @@ ccflags-y += -I$(src)/include/hi3516cv100
 # kernel_compat.h (which transitively pulls sched.h) happens earlier
 # than any #define inside cv100_shim.c — must be a compiler flag.
 CFLAGS_osal_v1_shim/cv100_shim.o := \
-	-D_cond_resched=__v1_shim_cond_resched_unused_inline
+	-D_cond_resched=__v1_shim_cond_resched_unused_inline \
+	-D__copy_to_user=__v1_shim_copy_to_user_unused_inline \
+	-D__copy_from_user=__v1_shim_copy_from_user_unused_inline
 $(PREFIX)v1_shim-objs := osal_v1_shim/cv100_shim.o
 obj-m += $(PREFIX)v1_shim.o
 
