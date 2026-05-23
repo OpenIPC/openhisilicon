@@ -31,7 +31,7 @@
 #include <asm/atomic.h>
 #include <asm/cacheflush.h>
 #include <asm/io.h>
-#include <asm/system.h>
+/* asm/system.h removed — split into smaller headers in 3.4+ */
 #include <asm/uaccess.h>
 #include <asm/unistd.h>
 #include <asm/traps.h>

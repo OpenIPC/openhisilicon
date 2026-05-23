@@ -22,6 +22,18 @@
 # SDK include paths
 ccflags-y += -I$(src)/include/hi3516cv100
 
+# --- V1 OSAL shim (source) — re-exports removed-since-3.0 kernel APIs
+# so cv100 blobs (which were compiled against 3.0.8) load against modern
+# kernels. Must be inserted BEFORE any blob module by load_hisilicon.
+# Suppress the static-inline definition of _cond_resched via macro
+# rename BEFORE kernel headers are processed. The force-include of
+# kernel_compat.h (which transitively pulls sched.h) happens earlier
+# than any #define inside cv100_shim.c — must be a compiler flag.
+CFLAGS_osal_v1_shim/cv100_shim.o := \
+	-D_cond_resched=__v1_shim_cond_resched_unused_inline
+$(PREFIX)v1_shim-objs := osal_v1_shim/cv100_shim.o
+obj-m += $(PREFIX)v1_shim.o
+
 CV100_BLOB_DIR = obj/hi3516cv100
 CV100_INIT_DIR = init/hi3516cv100
 
