@@ -49,8 +49,15 @@
 
 #define HIIR_DEVICE_IRQ_NO 19
 
+/* IO_ADDRESS() static mapping table is gone in modern ARM (mach/hardware.h
+ * removed). Hold ioremap_nocache results in module-scope globals; the
+ * register macros below remain expressed as compile-time offsets against
+ * the bases. */
+static void __iomem *ir_reg_base_va;
+static void __iomem *ir_ioconfig_va;
+
 /* define IR IO */
-#define IR_REG_BASE (IO_ADDRESS(0x20070000))
+#define IR_REG_BASE ((unsigned long)ir_reg_base_va)
 #define IR_ENABLE   (IR_REG_BASE + 0x00)
 #define IR_CONFIG   (IR_REG_BASE + 0x04)
 #define CNT_LEADS   (IR_REG_BASE + 0x08)
@@ -66,7 +73,7 @@
 #define IR_INTC     (IR_REG_BASE + 0x30)
 #define IR_START    (IR_REG_BASE + 0x34)
 
-#define IOCONFIG  (IO_ADDRESS(0x200f01F8)) //TODO: ASIC config pin share
+#define IOCONFIG  ((unsigned long)ir_ioconfig_va) //TODO: ASIC config pin share
 
 /* interrupt mask */
 #define INTMS_RCV      (1L << 16)
@@ -526,6 +533,15 @@ static int __init hiir_init(void)
 
     printk(KERN_INFO OSDRV_MODULE_VERSION_STRING "\n");
 
+    ir_reg_base_va = ioremap_nocache(0x20070000, 0x40);
+    if (!ir_reg_base_va)
+        return -ENOMEM;
+    ir_ioconfig_va = ioremap_nocache(0x200f01F8, 0x4);
+    if (!ir_ioconfig_va) {
+        iounmap(ir_reg_base_va);
+        return -ENOMEM;
+    }
+
     /* disable HIIR */
     WRITE_REG(IR_ENABLE, 0x00);
 
@@ -554,6 +570,8 @@ static void __exit hiir_exit(void)
 {
     free_irq(HIIR_DEVICE_IRQ_NO, &hiir_interrupt);
     misc_deregister(&hiir_miscdev);
+    iounmap(ir_ioconfig_va);
+    iounmap(ir_reg_base_va);
 }
 
 module_init(hiir_init);
