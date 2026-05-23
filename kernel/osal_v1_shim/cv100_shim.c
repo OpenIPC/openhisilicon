@@ -327,6 +327,131 @@ int sched_setscheduler(struct task_struct *p, int policy,
 }
 EXPORT_SYMBOL(sched_setscheduler);
 
+/* -------------------------------------------------------------------
+ * The cv100 blobs (V1, pre-3.10 SDK) call a handful of ARM/kernel
+ * internals that have been renamed or removed in the modern tree.
+ * The set below is what modpost flags when linking the V1 module set
+ * against a Linux 7.0 ARMv5 kernel.
+ * ------------------------------------------------------------------- */
+
+#include <linux/mm.h>           /* vm_mmap, vm_munmap */
+#include <linux/uaccess.h>      /* arm_copy_to_user, arm_copy_from_user */
+#include <linux/proc_fs.h>      /* proc_create, struct proc_dir_entry */
+#include <asm/io.h>             /* ioremap / iounmap */
+
+/* __arm_ioremap() — ARMv5/v6 pre-3.10 ioremap entry point. Modern kernels
+ * use ioremap() directly. The legacy signature took (phys, size,
+ * mtype, caller); blobs only care about the first two. */
+void __iomem *__v1_shim___arm_ioremap(phys_addr_t phys_addr,
+				      size_t size,
+				      unsigned int mtype)
+{
+	(void)mtype;
+	return ioremap(phys_addr, size);
+}
+extern void __iomem *__arm_ioremap(phys_addr_t phys_addr,
+				   size_t size,
+				   unsigned int mtype)
+	__attribute__((alias("__v1_shim___arm_ioremap")));
+EXPORT_SYMBOL(__arm_ioremap);
+
+/* __iounmap() — pre-3.x ARM iounmap variant; just call iounmap(). */
+#undef __iounmap
+void __v1_shim___iounmap(volatile void __iomem *addr)
+{
+	iounmap((void __iomem *)addr);
+}
+extern void __iounmap(volatile void __iomem *addr)
+	__attribute__((alias("__v1_shim___iounmap")));
+EXPORT_SYMBOL(__iounmap);
+
+/* create_proc_entry() — removed 3.10. Best-effort wrap: register via
+ * proc_create_data() with NULL fops and return the resulting handle.
+ * Blobs (cv100 mmz, base) immediately overwrite ->proc_fops and
+ * ->write_proc post-call, but those struct fields are gone in 7.0;
+ * the cb writes silently miss. Acceptable for symbol resolution —
+ * the cv100 procfs nodes are diagnostic, not functional dependencies. */
+struct proc_dir_entry *__v1_shim_create_proc_entry(const char *name,
+						   umode_t mode,
+						   struct proc_dir_entry *parent)
+{
+	return proc_create_data(name, mode, parent, NULL, NULL);
+}
+extern struct proc_dir_entry *create_proc_entry(const char *name,
+						umode_t mode,
+						struct proc_dir_entry *parent)
+	__attribute__((alias("__v1_shim_create_proc_entry")));
+EXPORT_SYMBOL(create_proc_entry);
+
+/* __bug() — BUG() arch backend. Modern ARM uses a different name
+ * (bug_handler) but the legacy __bug() callers always panic. Map to
+ * panic() with a fixed string. */
+void __v1_shim___bug(const char *file, int line)
+{
+	panic("V1 blob BUG at %s:%d\n", file, line);
+}
+extern void __bug(const char *file, int line)
+	__attribute__((alias("__v1_shim___bug")));
+EXPORT_SYMBOL(__bug);
+
+/* do_mmap_pgoff() — kernel-internal mmap helper, unexported since 4.x
+ * for security reasons. The cv100 mmz blob uses it to map MMZ regions
+ * into userspace. The modern equivalent is vm_mmap(). Blob's caller
+ * doesn't care about the slight semantic difference (vm_mmap calls
+ * security_mmap_addr() first); the userspace-visible behaviour is the
+ * same modulo SELinux denials, which are off in OpenIPC's kernel
+ * config anyway. */
+unsigned long __v1_shim_do_mmap_pgoff(struct file *file, unsigned long addr,
+				      unsigned long len, unsigned long prot,
+				      unsigned long flags, unsigned long pgoff)
+{
+	return vm_mmap(file, addr, len, prot, flags, pgoff << PAGE_SHIFT);
+}
+extern unsigned long do_mmap_pgoff(struct file *file, unsigned long addr,
+				   unsigned long len, unsigned long prot,
+				   unsigned long flags, unsigned long pgoff)
+	__attribute__((alias("__v1_shim_do_mmap_pgoff")));
+EXPORT_SYMBOL(do_mmap_pgoff);
+
+/* do_munmap() — unexported alongside do_mmap_pgoff. Wrap vm_munmap(),
+ * which is exported. The blob caller discards the result. */
+int __v1_shim_do_munmap(struct mm_struct *mm, unsigned long start,
+			size_t len, struct list_head *uf)
+{
+	(void)mm; (void)uf;
+	return vm_munmap(start, len);
+}
+extern int do_munmap(struct mm_struct *mm, unsigned long start,
+		     size_t len, struct list_head *uf)
+	__attribute__((alias("__v1_shim_do_munmap")));
+EXPORT_SYMBOL(do_munmap);
+
+/* __copy_to_user() / __copy_from_user() — renamed on modern ARM
+ * to arm_copy_{to,from}_user, with the leading underscore prefix
+ * gone. Both are still in Module.symvers under the new names; just
+ * alias the legacy ones. The signatures are identical: (dst, src, n). */
+unsigned long __v1_shim___copy_to_user(void __user *to,
+				       const void *from, unsigned long n)
+{
+	return arm_copy_to_user(to, from, n);
+}
+extern unsigned long __copy_to_user(void __user *to,
+				    const void *from, unsigned long n)
+	__attribute__((alias("__v1_shim___copy_to_user")));
+EXPORT_SYMBOL(__copy_to_user);
+
+unsigned long __v1_shim___copy_from_user(void *to,
+					 const void __user *from,
+					 unsigned long n)
+{
+	return arm_copy_from_user(to, from, n);
+}
+extern unsigned long __copy_from_user(void *to,
+				      const void __user *from,
+				      unsigned long n)
+	__attribute__((alias("__v1_shim___copy_from_user")));
+EXPORT_SYMBOL(__copy_from_user);
+
 #endif /* LINUX_VERSION_CODE >= KERNEL_VERSION(5, 0, 0) */
 
 /* -------------------------------------------------------------------
