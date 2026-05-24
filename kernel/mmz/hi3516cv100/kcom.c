@@ -38,9 +38,9 @@
 #include <linux/init.h>
 #include <linux/delay.h>
 #include <asm/uaccess.h>
-#include <mach/hardware.h>
+/* mach/hardware.h removed — platform-specific, gone on >=4.9 */
 #include <asm/io.h>
-#include <asm/system.h>
+/* asm/system.h removed — split into smaller headers in 3.4+ */
 #include <linux/interrupt.h>
 #include <linux/ioport.h>
 #include <linux/spinlock.h>

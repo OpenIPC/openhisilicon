@@ -65,12 +65,20 @@ do { \
 #include <asm/io.h>
 #include <linux/rtc.h>
 
-#define CRG_BASE_ADDR		IO_ADDRESS(0x20030000)
+/* IO_ADDRESS() static mapping table comes from mach/hardware.h which is
+ * gone in modern ARM. Replace with ioremap_nocache results populated at
+ * module init. These pointers carry the bit pattern of the virtual
+ * address returned by ioremap_nocache; writel/readl call sites cast back
+ * to (void *) for the modern __iomem-typed prototype. */
+static unsigned long rtc_crg_base_addr;
+static unsigned long rtc_spi_base_addr;
+
+#define CRG_BASE_ADDR		rtc_crg_base_addr
 #define PERI_CRG57			(CRG_BASE_ADDR + 0xE4)
 #define BIT_TEMP_SRST_REQ	2
 
 /* RTC Control over SPI */
-#define RTC_SPI_BASE_ADDR	IO_ADDRESS(0x20060000)
+#define RTC_SPI_BASE_ADDR	rtc_spi_base_addr
 #define SPI_CLK_DIV			(RTC_SPI_BASE_ADDR + 0x000)
 #define SPI_RW				(RTC_SPI_BASE_ADDR + 0x004)
 
@@ -180,10 +188,10 @@ static int spi_write(char reg, char val)
 	
 	HI_MSG("val 0x%x\n", w_data.u32);
 
-	writel(w_data.u32, SPI_RW);
+	writel(w_data.u32, (void *)SPI_RW);
 
 	do {
-		r_data.u32 = readl(SPI_RW);
+		r_data.u32 = readl((void *)SPI_RW);
 		HI_MSG("read 0x%x", r_data.u32);
 		HI_MSG("test busy %d",r_data.bits.spi_busy);
 	} while (r_data.bits.spi_busy);
@@ -215,10 +223,10 @@ static int spi_read(char reg, char *val)
 	
 	HI_MSG("val 0x%x\n", w_data.u32);
 
-	writel(w_data.u32, SPI_RW);
+	writel(w_data.u32, (void *)SPI_RW);
 
 	do {
-		r_data.u32 = readl(SPI_RW);
+		r_data.u32 = readl((void *)SPI_RW);
 		HI_MSG("read 0x%x\n", r_data.u32);
 		HI_MSG("test busy %d\n",r_data.bits.spi_busy);
 	} while (r_data.bits.spi_busy);
@@ -239,11 +247,11 @@ static int spi_rtc_read(char reg, char *val)
 
 static int temp_crg_reset(void)
 {
-	u32 value = readl(PERI_CRG57);
+	u32 value = readl((void *)PERI_CRG57);
 	mb();
-	writel(value | (1<<BIT_TEMP_SRST_REQ),  PERI_CRG57); 
+	writel(value | (1<<BIT_TEMP_SRST_REQ), (void *)PERI_CRG57); 
 	mb();
-	writel(value & ~(1<<BIT_TEMP_SRST_REQ), PERI_CRG57); 
+	writel(value & ~(1<<BIT_TEMP_SRST_REQ), (void *)PERI_CRG57); 
 
 	return 0;
 }
@@ -557,7 +565,11 @@ static long hi_rtc_ioctl(struct file *file,
 
 
 
+#ifdef COMPAT_TIMER_SETUP
+static void temperature_detection(struct timer_list *t)
+#else
 static void temperature_detection(unsigned long arg)
+#endif
 {
 	int ret;
 	int cnt = 0;
@@ -568,7 +580,7 @@ static void temperature_detection(unsigned long arg)
 	{	
 
 		do {
-			ret = readl(RTC_TEMP_STAT);
+			ret = readl((void *)RTC_TEMP_STAT);
 			udelay(10);
 			cnt++;
 		} while (ret && (cnt < RETRY_CNT));
@@ -584,7 +596,7 @@ static void temperature_detection(unsigned long arg)
 		
 		HI_MSG("WRITE RTC_TEMP_START");
 
-		writel(0x1, RTC_TEMP_START);	
+		writel(0x1, (void *)RTC_TEMP_START);	
 	}
 	else if (mode == TEMP_SEL_INTERNAL)
 	{
@@ -617,7 +629,7 @@ static void set_temperature(void)
 	unsigned short ret;
 	unsigned char temp;
 
-	ret = (unsigned short)readl(RTC_TEMP_VAL);
+	ret = (unsigned short)readl((void *)RTC_TEMP_VAL);
 	HI_MSG("READ DS1820 temperature value 0x%x", ret);
 
 	/* mode 1 sample, ret > 0x800 means negative number */
@@ -647,18 +659,18 @@ static irqreturn_t rtc_temperature_interrupt(int irq, void *dev_id)
 	int ret = IRQ_NONE;
 	int irq_stat;
 
-	irq_stat = readl(RTC_TEMP_INT_STAT);
+	irq_stat = readl((void *)RTC_TEMP_INT_STAT);
 	if (!irq_stat) {
 		return ret;
 	}
 
 	HI_MSG("irq mask");
-	writel(0x01, RTC_TEMP_INT_MASK);
+	writel(0x01, (void *)RTC_TEMP_INT_MASK);
 
-	irq_stat = readl(RTC_TEMP_INT_RAW);
+	irq_stat = readl((void *)RTC_TEMP_INT_RAW);
 	HI_MSG("irq clear");
 
-	writel(0x1, RTC_TEMP_INT_CLEAR);
+	writel(0x1, (void *)RTC_TEMP_INT_CLEAR);
 
 	if (mode != TEMP_SEL_OUTSIDE)
 		goto endl;
@@ -673,7 +685,7 @@ static irqreturn_t rtc_temperature_interrupt(int irq, void *dev_id)
 
 endl:	
 	HI_MSG("irq unmask");
-	writel(0x0, RTC_TEMP_INT_MASK);
+	writel(0x0, (void *)RTC_TEMP_INT_MASK);
 	
 	ret = IRQ_HANDLED;
 	return ret;
@@ -728,6 +740,24 @@ static int __init rtc_init(void)
 	int i,ret = 0;
 	char base;
 
+	/* Static IO_ADDRESS mapping was removed with mach/hardware.h;
+	 * ioremap_nocache the two register windows the driver touches.
+	 * Both blocks are 256 bytes (covers everything the macros above
+	 * reference). The cast to (unsigned long) matches the rtc_*_base_addr
+	 * declaration so the (offset) arithmetic in CRG_BASE_ADDR + 0xE4
+	 * / RTC_SPI_BASE_ADDR + 0x9c stays well-defined. */
+	rtc_crg_base_addr = (unsigned long)ioremap_nocache(0x20030000, 0x100);
+	if (!rtc_crg_base_addr) {
+		HI_ERR("rtc: ioremap CRG failed\n");
+		return -ENOMEM;
+	}
+	rtc_spi_base_addr = (unsigned long)ioremap_nocache(0x20060000, 0x100);
+	if (!rtc_spi_base_addr) {
+		HI_ERR("rtc: ioremap SPI failed\n");
+		iounmap((void __iomem *)rtc_crg_base_addr);
+		return -ENOMEM;
+	}
+
 	ret = misc_register(&rtc_char_driver);
 	if (0 != ret)
 	{
@@ -754,13 +784,17 @@ static int __init rtc_init(void)
 		goto RTC_INIT_FAIL2;
 	}
 
+#ifdef COMPAT_TIMER_SETUP
+	timer_setup(&temperature_timer, temperature_detection, 0);
+#else
 	init_timer(&temperature_timer);
 	temperature_timer.function = temperature_detection;
+#endif
 	temperature_timer.expires = jiffies + HZ*t_second;
 
 	/* clk div value = (apb_clk/spi_clk)/2-1, for asic ,
 	   apb clk = 100MHz, spi_clk = 10MHz,so value= 0x4 */
-	writel(0x4, SPI_CLK_DIV);
+	writel(0x4, (void *)SPI_CLK_DIV);
 
 	/* always update temperature from TEMP_OUTSIDE */
 	spi_rtc_write(TEMP_SEL, 0x01);
@@ -783,7 +817,7 @@ static int __init rtc_init(void)
 	}
 
 	/* enable temperature IRQ */
-	writel(0x0, RTC_TEMP_INT_MASK);
+	writel(0x0, (void *)RTC_TEMP_INT_MASK);
 	return 0;
 
 RTC_INIT_FAIL2:
@@ -800,6 +834,8 @@ static void __exit rtc_exit(void)
 	free_irq(RTC_IRQ, NULL);
 	free_irq(RTC_TEMP_IRQ_NUM, NULL);
 	misc_deregister(&rtc_char_driver);
+	iounmap((void __iomem *)rtc_spi_base_addr);
+	iounmap((void __iomem *)rtc_crg_base_addr);
 }
 
 module_init(rtc_init);

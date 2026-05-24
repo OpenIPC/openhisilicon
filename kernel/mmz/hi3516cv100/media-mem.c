@@ -35,9 +35,9 @@
 #include <linux/init.h>
 #include <linux/delay.h>
 #include <asm/uaccess.h>
-#include <mach/hardware.h>
+/* mach/hardware.h removed — platform-specific, gone on >=4.9 */
 #include <asm/io.h>
-#include <asm/system.h>
+/* asm/system.h removed — split into smaller headers in 3.4+ */
 #include <linux/interrupt.h>
 #include <linux/ioport.h>
 #include <linux/spinlock.h>
@@ -49,7 +49,11 @@
 #include <linux/list.h>
 
 #include <linux/time.h>
+#ifdef CONFIG_OUTER_CACHE
 #include <asm/outercache.h>
+#else
+#define outer_flush_range(start, end) do {} while (0)
+#endif
 #include "media-mem.h"
 #include "mmz-proc.h"
 
@@ -1067,8 +1071,16 @@ int mmz_read_proc(struct seq_file *sfile)
 	return len;
 }
 
+#if LINUX_VERSION_CODE < KERNEL_VERSION(3, 10, 0)
 static int mmz_write_proc(struct file *file, const char __user *buffer,
 		                           unsigned long count, void *data)
+#else
+/* In 3.10+ ->write_proc is gone; the fops/proc_ops .write slot uses the
+ * standard write(2) signature. count is size_t and the trailing arg is
+ * loff_t * (position pointer) rather than the legacy void* (private data). */
+static ssize_t mmz_write_proc(struct file *file, const char __user *buffer,
+		                           size_t count, loff_t *data)
+#endif
 {
 	char buf[256];
 
@@ -1110,6 +1122,7 @@ static int mmz_proc_open(struct inode *inode, struct file *file)
 	return seq_open(file, &mmz_seq_ops);
 }
 
+#if LINUX_VERSION_CODE < KERNEL_VERSION(3, 10, 0)
 static struct file_operations mmz_proc_ops = {
 	.owner = THIS_MODULE,
 	.open = mmz_proc_open,
@@ -1127,6 +1140,39 @@ static int __init media_mem_proc_init(void)
 
     return 0;
 }
+#else
+/* create_proc_entry was removed in 3.10 (commit 59d8053f1c). Modern proc-fs
+ * uses proc_create() with a pre-baked fops table; ->write_proc / ->proc_fops
+ * direct assignment slots were also removed. */
+#ifdef COMPAT_USE_PROC_OPS
+static struct proc_ops mmz_proc_ops = {
+	.proc_open = mmz_proc_open,
+	.proc_read = seq_read,
+	.proc_write = mmz_write_proc,
+	.proc_release = seq_release,
+	.proc_lseek = seq_lseek,
+};
+#else
+static struct file_operations mmz_proc_ops = {
+	.owner = THIS_MODULE,
+	.open = mmz_proc_open,
+	.read = seq_read,
+	.write = mmz_write_proc,
+	.release = seq_release,
+};
+#endif
+static int __init media_mem_proc_init(void)
+{
+	struct proc_dir_entry *p;
+
+	p = proc_create(MEDIA_MEM_NAME, 0, MMZ_PROC_ROOT, &mmz_proc_ops);
+	if (!p) {
+		printk(KERN_ERR "Create mmz proc fail!\n");
+		return -1;
+	}
+	return 0;
+}
+#endif
 
 static void __exit media_mem_proc_exit(void)
 {
