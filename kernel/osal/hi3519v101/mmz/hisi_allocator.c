@@ -1,21 +1,8 @@
-/* media-mem.c
- *
- * Copyright (c) 2006 Hisilicon Co., Ltd.
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 2 of the License, or
- * (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License
- * along with this program; if not, write to the Free Software
- * Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA 02111-1307  USA
- *
+/*
+ * Copyright (c) Hisilicon Technologies Co., Ltd. 2016-2019.
+ * Description: hisi allocator source file.
+ * Author: Hisilicon multimedia software group
+ * Create: 2016-11-11
  */
 
 #include <linux/fs.h>
@@ -27,528 +14,569 @@
 #include <linux/list.h>
 #include <asm/cacheflush.h>
 #include <linux/version.h>
-
-//#include "media-mem.h"
-#include "osal_mmz.h"
 #include "allocator.h"
+#include "osal_mmz.h"
 
+#include "../../../compat/kernel_compat.h"
+
+/* media-mem.c owns these; hisi_allocator.c references them via the
+ * begin_list_for_each_mmz macro in osal_mmz.h. cv500's osal_mmz.h
+ * publishes extern decls under g_mmz_list; V3A's older header uses
+ * the unprefixed name mmz_list (matches the definition in media-mem.c)
+ * but doesn't declare extern. Declare here for the cv500-imported
+ * cma_allocator/hisi_allocator TUs. */
 extern struct osal_list_head mmz_list;
-
 extern int anony;
-extern int mmb_number; /* for mmb id */
+/* hil_mmz_unregister is exported from media-mem.c (V3A) — declared here
+ * since 3519v101's osal_mmz.h doesn't list it. */
+extern int hil_mmz_unregister(hil_mmz_t *zone);
+
+long long g_hi_max_malloc_size = 0x40000000UL;        /* 1GB */
 
 static unsigned long _strtoul_ex(const char *s, char **ep, unsigned int base)
 {
-        char *__end_p;
-        unsigned long __value;
+    char *__end_p = NULL;
+    unsigned long __value;
 
-        __value = simple_strtoul(s,&__end_p,base);
+    __value = simple_strtoul(s, &__end_p, base);
 
-        switch(*__end_p) {
+    switch (*__end_p) {
         case 'm':
         case 'M':
-                __value <<= 10;
+            __value <<= 10; /* 10: 1M=1024k, left shift 10bit */
+            /* fall-through */
         case 'k':
         case 'K':
-                __value <<= 10;
-                if(ep)
-                        (*ep) = __end_p + 1;
+            __value <<= 10; /* 10: 1K=1024Byte, left shift 10bit */
+            if (ep != NULL) {
+                (*ep) = __end_p + 1;
+            }
+            /* fall-through */
         default:
-                break;
-        }
+            break;
+    }
 
-        return __value;
+    return __value;
 }
 
 static unsigned long find_fixed_region(unsigned long *region_len,
-		hil_mmz_t *mmz,
-		unsigned long size,
-		unsigned long align)
+                                       hil_mmz_t *mmz,
+                                       unsigned long size,
+                                       unsigned long align)
 {
-	unsigned long start;
-	unsigned long fixed_start = 0;
-	unsigned long fixed_len = -1;
-	unsigned long len =0;
-	unsigned long blank_len =0;
-	hil_mmb_t *p = NULL;
+    unsigned long start;
+    unsigned long fixed_start = 0;
+    unsigned long fixed_len = -1;
+    unsigned long len;
+    unsigned long blank_len;
+    hil_mmb_t *p = NULL;
 
-	mmz_trace_func();
-	align = mmz_grain_align(align);
-	if(align == 0)align = MMZ_GRAIN;
-	start = mmz_align2(mmz->phys_start, align);
-	len = mmz_grain_align(size);
+    mmz_trace_func();
+    align = mmz_grain_align(align);
+    if (align == 0) {
+        align = MMZ_GRAIN;
+    }
+    start = mmz_align2(mmz->phys_start, align);
+    len = mmz_grain_align(size);
 
-	osal_list_for_each_entry(p,&mmz->mmb_list, list) {
-		hil_mmb_t *next;
-		mmz_trace(4,"p->phys_addr=0x%08lX p->length = %luKB \t",
-				p->phys_addr, p->length/SZ_1K);
-		next = list_entry(p->list.next, __typeof__(*p), list);
-		mmz_trace(4,",next = 0x%08lX\n\n", next->phys_addr);
-		/*if p is the first entry or not*/
-		if(osal_list_first_entry(&mmz->mmb_list, __typeof__(*p), list) == p) {
-			blank_len = p->phys_addr - start;
-			if((blank_len < fixed_len) && (blank_len>=len)) {
-				fixed_len = blank_len;
-				fixed_start = start;
-				mmz_trace(4,"%d: fixed_region: start=0x%08lX, len=%luKB\n",
-						__LINE__, fixed_start, fixed_len/SZ_1K);
-			}
-		}
-		start = mmz_align2((p->phys_addr + p->length),align);
-		
-		/*if aglin is larger than mmz->nbytes, it would trigger the BUG_ON */
-		//BUG_ON((start < mmz->phys_start) || (start > (mmz->phys_start + mmz->nbytes)));
-		
-		/*if we have to alloc after the last node*/
-		if (osal_list_is_last(&p->list, &mmz->mmb_list)) {
-			blank_len = mmz->phys_start + mmz->nbytes - start;
-			if ((blank_len < fixed_len) && (blank_len >= len)){
-				fixed_len = blank_len;
-				fixed_start = start;
-				mmz_trace(4,"%d: fixed_region: start=0x%08lX, len=%luKB\n",
-						__LINE__, fixed_start, fixed_len/SZ_1K);
-				break;
-			} else {
-				if(fixed_len != -1)
-					goto out;
-				fixed_start = 0;
-				mmz_trace(4,"%d: fixed_region: start=0x%08lX, len=%luKB\n",
-						__LINE__, fixed_start, fixed_len/SZ_1K);
-				goto out;
-			}
-		}
-		/* blank is too small */
-		if ((start + len) > next->phys_addr) {
-			mmz_trace(4,"start=0x%08lX ,len=%lu,next=0x%08lX\n",
-					start,len,next->phys_addr);
-			continue;
-		}
-		blank_len = next->phys_addr - start;
-		if((blank_len < fixed_len) && (blank_len >= len)) {
-			fixed_len = blank_len;
-			fixed_start = start;
-			mmz_trace(4,"%d: fixed_region: start=0x%08lX, len=%luKB\n",
-					__LINE__, fixed_start, fixed_len/SZ_1K);
-		}
-	}
+    osal_list_for_each_entry(p, &mmz->mmb_list, list) {
+        hil_mmb_t *next = NULL;
+        mmz_trace(4, "p->phys_addr=0x%08lX p->length = %luKB \t", /* 4: log debug level */
+                  p->phys_addr, p->length / SZ_1K);
+        next = osal_list_entry(p->list.next, typeof(*p), list);
+        mmz_trace(4, ",next = 0x%08lX\n\n", next->phys_addr); /* 4: log debug level */
+        /*
+         * if p is the first entry or not.
+         */
+        if (osal_list_first_entry(&mmz->mmb_list, typeof(*p), list) == p) {
+            blank_len = p->phys_addr - start;
+            if ((blank_len < fixed_len) && (blank_len >= len)) {
+                fixed_len = blank_len;
+                fixed_start = start;
+                mmz_trace(4, "%d: fixed_region: start=0x%08lX, len=%luKB\n", /* 4: log debug level */
+                          __LINE__, fixed_start, fixed_len / SZ_1K);
+            }
+        }
+        start = mmz_align2((p->phys_addr + p->length), align);
+        /* if aglin is larger than mmz->nbytes, it would trigger the BUG_ON */
+        /* if we have to alloc after the last node.  */
+        if (osal_list_is_last(&p->list, &mmz->mmb_list)) {
+            blank_len = mmz->phys_start + mmz->nbytes - start;
+            if ((blank_len < fixed_len) && (blank_len >= len)) {
+                fixed_len = blank_len;
+                fixed_start = start;
+                mmz_trace(4, "fixed_region: start=0x%08lX, len=%luKB\n", /* 4: log debug level */
+                          fixed_start, fixed_len / SZ_1K);
+                break;
+            } else {
+                if (fixed_len != -1) {
+                    goto out;
+                }
+                fixed_start = 0;
+                mmz_trace(4, "fixed_region: start=0x%08lX, len=%luKB\n", /* 4: log debug level */
+                          fixed_start, fixed_len / SZ_1K);
+                goto out;
+            }
+        }
+        /* blank is too small */
+        if ((start + len) > next->phys_addr) {
+            mmz_trace(4, "start=0x%08lX ,len=%lu,next=0x%08lX\n", /* 4: log debug level */
+                      start, len, next->phys_addr);
+            continue;
+        }
+        blank_len = next->phys_addr - start;
+        if ((blank_len < fixed_len) && (blank_len >= len)) {
+            fixed_len = blank_len;
+            fixed_start = start;
+            mmz_trace(4, "fixed_region: start=0x%08lX, len=%luKB\n", /* 4: log debug level */
+                      fixed_start, fixed_len / SZ_1K);
+        }
+    }
 
-	if ((mmz_grain_align(start+len) <= (mmz->phys_start + mmz->nbytes))
-			&& (start >= mmz->phys_start)
-			&& (start < (mmz->phys_start + mmz->nbytes))) {
-		fixed_len = len;
-		fixed_start = start;
-		mmz_trace(4,"%d: fixed_region: start=0x%08lX, len=%luKB\n",
-				__LINE__, fixed_start, fixed_len/SZ_1K);
-	} else {
-		fixed_start = 0;
-		mmz_trace(4,"%d: fixed_region: start=0x%08lX, len=%luKB\n",
-				__LINE__, fixed_start, len/SZ_1K);
-	}
+    if ((mmz_grain_align(start + len) <= (mmz->phys_start + mmz->nbytes)) &&
+        (start >= mmz->phys_start) &&
+        (start < (mmz->phys_start + mmz->nbytes))) {
+            fixed_len = len;
+            fixed_start = start;
+            mmz_trace(4, "fixed_region: start=0x%08lX, len=%luKB\n", /* 4: log debug level */
+                      fixed_start, fixed_len / SZ_1K);
+    } else {
+        fixed_start = 0;
+        mmz_trace(4, "fixed_region: start=0x%08lX, len=%luKB\n", /* 4: log debug level */
+                  fixed_start, len / SZ_1K);
+    }
 out:
-	*region_len = len;
-	return fixed_start;
+    *region_len = len;
+    return fixed_start;
 }
 
 static unsigned long find_fixed_region_from_highaddr(unsigned long *region_len,
-		hil_mmz_t *mmz,
-		unsigned long size,
-		unsigned long align)
+                                                     hil_mmz_t *mmz, unsigned long size, unsigned long align)
 {
-	int i, j;
-	unsigned long fixed_start=0;
-	unsigned long fixed_len=~1;
+    int j;
+    unsigned int i;
+    unsigned long fixed_start = 0;
+    unsigned long fixed_len = ~1;
 
-	mmz_trace_func();
+    mmz_trace_func();
 
-	i = mmz_length2grain(mmz->nbytes);
+    i = mmz_length2grain(mmz->nbytes);
 
-	for(; i>0; i--) {
-		unsigned long start;
-		unsigned long len;
-		unsigned long start_highaddr;
-		
-		if(mmz_get_bit(mmz,i))
-			continue;
+    for (; i > 0; i--) {
+        unsigned long start;
+        unsigned long len;
+        unsigned long start_highaddr;
 
-		len = 0;
-		start_highaddr = mmz_pos2phy_addr(mmz,i);
-		for(; i>0; i--) {
-			if(mmz_get_bit(mmz,i)) {
-				break;
-			}
+        if (mmz_get_bit(mmz, i)) {
+            continue;
+        }
 
-			len += MMZ_GRAIN;
-		}
+        len = 0;
+        start_highaddr = mmz_pos2phy_addr(mmz, i);
+        for (; i > 0; i--) {
+            if (mmz_get_bit(mmz, i)) {
+                break;
+            }
 
-		if(len>=size) {
-			j = mmz_phy_addr2pos(mmz, mmz_align2low(start_highaddr-size, align));
-			//align = mmz_grain_align(align)/MMZ_GRAIN;
-			//start = mmz_pos2phy_addr(mmz, j - align);
-			start = mmz_pos2phy_addr(mmz, j);
-			if((start_highaddr - len <= start) && (start <= start_highaddr - size)){
-				fixed_len = len;
-				fixed_start = start;
-				break;
-			}				
-						
-			mmz_trace(1,"fixed_region: start=0x%08lX, len=%luKB",
-					fixed_start, fixed_len/SZ_1K);
-		}
-	}
+            len += MMZ_GRAIN;
+        }
 
-	*region_len = fixed_len;
+        if (len >= size) {
+            j = mmz_phy_addr2pos(mmz, mmz_align2low(start_highaddr - size, align));
+            start = mmz_pos2phy_addr(mmz, j);
+            if ((start_highaddr - len <= start) && (start <= start_highaddr - size)) {
+                fixed_len = len;
+                fixed_start = start;
+                break;
+            }
 
-	return fixed_start;
+            mmz_trace(1, "fixed_region: start=0x%08lX, len=%luKB",
+                      fixed_start, fixed_len / SZ_1K);
+        }
+    }
+
+    *region_len = fixed_len;
+
+    return fixed_start;
 }
 
 static int do_mmb_alloc(hil_mmb_t *mmb)
 {
-	hil_mmb_t *p=NULL;
-	mmz_trace_func();
+    hil_mmb_t *p = NULL;
 
-	/* add mmb sorted */
-	osal_list_for_each_entry(p,&mmb->zone->mmb_list, list) {
-		if(mmb->phys_addr < p->phys_addr)
-			break;
-		if(mmb->phys_addr == p->phys_addr){
-			printk("ERROR: media-mem allocator bad in %s! (%s, %d)",
-					mmb->zone->name,  __FUNCTION__, __LINE__);
-			return -1;
-		}
-	}
-	osal_list_add(&mmb->list, p->list.prev);
+    mmz_trace_func();
 
-	mmz_trace(1,HIL_MMB_FMT_S,hil_mmb_fmt_arg(mmb));
+    /* add mmb sorted */
+    osal_list_for_each_entry(p, &mmb->zone->mmb_list, list) {
+        if (mmb->phys_addr < p->phys_addr) {
+            break;
+        }
+        if (mmb->phys_addr == p->phys_addr) {
+            printk(KERN_ERR "ERROR: media-mem allocator bad in %s! (%s, %d)",
+                   mmb->zone->name, __FUNCTION__, __LINE__);
+        }
+    }
+    osal_list_add(&mmb->list, p->list.prev);
 
-	return 0;
+    mmz_trace(1, HIL_MMB_FMT_S, hil_mmb_fmt_arg(mmb));
+
+    return 0;
 }
 
 static hil_mmb_t *__mmb_alloc(const char *name,
-		unsigned long size,
-		unsigned long align,
-		unsigned long gfp,
-		const char *mmz_name,
-		hil_mmz_t *_user_mmz)
+                              unsigned long size,
+                              unsigned long align,
+                              unsigned long gfp,
+                              const char *mmz_name,
+                              hil_mmz_t *_user_mmz)
 {
-	hil_mmz_t *mmz;
-	hil_mmb_t *mmb;
+    hil_mmz_t *mmz = NULL;
+    hil_mmb_t *mmb = NULL;
 
-	unsigned long start;
-	unsigned long region_len;
+    unsigned long start;
+    unsigned long region_len;
 
-	unsigned long fixed_start=0;
-	unsigned long fixed_len=~1;
-	hil_mmz_t *fixed_mmz=NULL;
+    unsigned long fixed_start = 0;
+    unsigned long fixed_len = ~1;
+    hil_mmz_t *fixed_mmz = NULL;
 
-	mmz_trace_func();
+    mmz_trace_func();
 
-	if(size == 0 || size > 0x40000000UL)
-		return NULL;
-	if(align == 0)
-		align = MMZ_GRAIN;
+    if ((size == 0) || (size > g_hi_max_malloc_size)) {
+        return NULL;
+    }
+    if (align == 0) {
+        align = MMZ_GRAIN;
+    }
 
-	size = mmz_grain_align(size);
+    size = mmz_grain_align(size);
 
-	mmz_trace(1,"size=%luKB, align=%lu", size/SZ_1K, align);
+    mmz_trace(1, "size=%luKB, align=%lu", size / SZ_1K, align);
 
-	begin_list_for_each_mmz(mmz, gfp, mmz_name)
-		if(_user_mmz!=NULL && _user_mmz!=mmz)
-			continue;
+    begin_list_for_each_mmz(mmz, gfp, mmz_name)
 
-		start = find_fixed_region(&region_len, mmz, size, align);
-		if( (fixed_len > region_len) && (start!=0)) {
-			fixed_len = region_len;
-			fixed_start = start;
-			fixed_mmz = mmz;
-		}
-	end_list_for_each_mmz()
+    if ((_user_mmz != NULL) && (_user_mmz != mmz)) {
+        continue;
+    }
 
-	if(fixed_mmz == NULL) {
-		return NULL;
-	}
+    start = find_fixed_region(&region_len, mmz, size, align);
+    if ((fixed_len > region_len) && (start != 0)) {
+        fixed_len = region_len;
+        fixed_start = start;
+        fixed_mmz = mmz;
+    }
+    end_list_for_each_mmz()
 
-	mmb = kmalloc(sizeof(hil_mmb_t), GFP_KERNEL);
-	if (mmb == NULL){
-		return NULL;
-	}
+    if (fixed_mmz == NULL) {
+        return NULL;
+    }
 
-	memset(mmb, 0, sizeof(hil_mmb_t));
-	mmb->zone = fixed_mmz;
-	mmb->phys_addr = fixed_start;
-	mmb->length = size;
-	mmb->id = ++mmb_number;
-	if(name)
-		strlcpy(mmb->name, name, HIL_MMB_NAME_LEN);
-	else 
-		strncpy(mmb->name, "<null>", HIL_MMB_NAME_LEN);
+    mmb = kmalloc(sizeof(hil_mmb_t), GFP_KERNEL);
+    if (mmb == NULL) {
+        return NULL;
+    }
 
-	if(do_mmb_alloc(mmb)) {
-		kfree(mmb);
-		mmb = NULL;
-	}
+    memset(mmb, 0, sizeof(hil_mmb_t));
+    mmb->zone = fixed_mmz;
+    mmb->phys_addr = fixed_start;
+    mmb->length = size;
+    if (name != NULL) {
+        compat_strlcpy(mmb->name, name, HIL_MMB_NAME_LEN);
+    } else {
+        strncpy(mmb->name, "<null>", HIL_MMB_NAME_LEN - 1);
+    }
 
-	return mmb;
+    if (do_mmb_alloc(mmb)) {
+        kfree(mmb);
+        mmb = NULL;
+    }
+
+    return mmb;
 }
 
 static hil_mmb_t *__mmb_alloc_v2(const char *name,
-		unsigned long size,
-		unsigned long align,
-		unsigned long gfp, 
-		const char *mmz_name,
-		hil_mmz_t *_user_mmz,
-		unsigned int order)
+                                 unsigned long size,
+                                 unsigned long align,
+                                 unsigned long gfp,
+                                 const char *mmz_name,
+                                 hil_mmz_t *_user_mmz,
+                                 unsigned int order)
 {
-	hil_mmz_t *mmz;
-	hil_mmb_t *mmb;
-	unsigned int i;
+    hil_mmz_t *mmz = NULL;
+    hil_mmb_t *mmb = NULL;
+    unsigned int i;
 
-	unsigned long start = 0;
-	unsigned long region_len = 0;
+    unsigned long start = 0;
+    unsigned long region_len = 0;
 
-	unsigned long fixed_start=0;
-	unsigned long fixed_len=~1;
-	hil_mmz_t *fixed_mmz=NULL;
+    unsigned long fixed_start = 0;
+    unsigned long fixed_len = ~1;
+    hil_mmz_t *fixed_mmz = NULL;
 
-	mmz_trace_func();
+    mmz_trace_func();
 
-	if(size == 0 || size > 0x40000000UL)
-		return NULL;
-	if(align == 0)
-		align = 1;
-		
-	size = mmz_grain_align(size);
+    if ((size == 0) || (size > 0x40000000UL)) { /* max size 0x40000000 */
+        return NULL;
+    }
+    if (align == 0) {
+        align = 1;
+    }
 
-	mmz_trace(1,"size=%luKB, align=%lu", size/SZ_1K, align);
+    size = mmz_grain_align(size);
 
-	begin_list_for_each_mmz(mmz, gfp, mmz_name)
-		if(_user_mmz!=NULL && _user_mmz!=mmz)
-			continue;
-			
-		if(mmz->alloc_type == SLAB_ALLOC){
-			if((size-1) & size){
-				for(i = 1; i <= 32; i++){
-					if(!((size >> i) & ~0)){
-						size = 1 << i;	
-						break;
-					}						
-				}	
-			}
-		}
-		else if(mmz->alloc_type == EQ_BLOCK_ALLOC){
-			size = mmz_align2(size,mmz->block_align);
-		}
-		if(order == LOW_TO_HIGH){
-			start = find_fixed_region(&region_len, mmz, size, align);
-		}
-		else if(order == HIGH_TO_LOW)
-			start = find_fixed_region_from_highaddr(&region_len, mmz, size, align);
-		if( (fixed_len > region_len) && (start!=0)) {
-			fixed_len = region_len;
-			fixed_start = start;
-			fixed_mmz = mmz;
-		}
-	end_list_for_each_mmz()
+    mmz_trace(1, "size=%luKB, align=%lu", size / SZ_1K, align);
 
-	if(fixed_mmz == NULL) {
-		return NULL;
-	}
+    begin_list_for_each_mmz(mmz, gfp, mmz_name)
 
-	mmb = kmalloc(sizeof(hil_mmb_t), GFP_KERNEL);
-	if (mmb == NULL) {
-	    return NULL;
-	}
+    if ((_user_mmz != NULL) && (_user_mmz != mmz)) {
+        continue;
+    }
 
-	memset(mmb, 0, sizeof(hil_mmb_t));
-	mmb->zone = fixed_mmz;
-	mmb->phys_addr = fixed_start;
-	mmb->length = size;
-	mmb->order = order;
-	if(name)
-		strlcpy(mmb->name, name, HIL_MMB_NAME_LEN);
-	else 
-		strncpy(mmb->name, "<null>", HIL_MMB_NAME_LEN);
+    if (mmz->alloc_type == SLAB_ALLOC) {
+        if ((size - 1) & size) {
+            for (i = 1; i < 32; i++) { /* 32: the max size is 2^(32-1) */
+                if (!((size >> i) & ~0)) {
+                    size = 1 << i;
+                    break;
+                }
+            }
+        }
+    } else if (mmz->alloc_type == EQ_BLOCK_ALLOC) {
+        size = mmz_align2(size, mmz->block_align);
+    }
 
-	if(do_mmb_alloc(mmb)) {
-		kfree(mmb);
-		mmb = NULL;
-	}
+    if (order == LOW_TO_HIGH) {
+        start = find_fixed_region(&region_len, mmz, size, align);
+    } else if (order == HIGH_TO_LOW) {
+        start = find_fixed_region_from_highaddr(&region_len, mmz, size, align);
+    }
 
-	return mmb;
+    if ((fixed_len > region_len) && (start != 0)) {
+        fixed_len = region_len;
+        fixed_start = start;
+        fixed_mmz = mmz;
+    }
+
+    end_list_for_each_mmz()
+
+    if (fixed_mmz == NULL) {
+        return NULL;
+    }
+
+    mmb = kmalloc(sizeof(hil_mmb_t), GFP_KERNEL);
+    if (mmb == NULL) {
+        return NULL;
+    }
+
+    memset(mmb, 0, sizeof(hil_mmb_t));
+    mmb->zone = fixed_mmz;
+    mmb->phys_addr = fixed_start;
+    mmb->length = size;
+    mmb->order = order;
+
+    if (name != NULL) {
+        compat_strlcpy(mmb->name, name, HIL_MMB_NAME_LEN);
+    } else {
+        strncpy(mmb->name, "<null>", HIL_MMB_NAME_LEN);
+    }
+
+    if (do_mmb_alloc(mmb)) {
+        kfree(mmb);
+        mmb = NULL;
+    }
+
+    return mmb;
 }
 
 static void *__mmb_map2kern(hil_mmb_t *mmb, int cached)
 {
-	/*
-	 * already mapped? no need to remap again,
-	 * just return mmb's kernel virtual address.
-	 */
-	if (mmb->flags & HIL_MMB_MAP2KERN) {
-		if ((cached * HIL_MMB_MAP2KERN_CACHED)
-				!= (mmb->flags & HIL_MMB_MAP2KERN_CACHED)) {
-			printk(KERN_ERR "mmb<%s> has been kernel-mapped as %s,\
-					can not be re-mapped as %s.",
-					mmb->name,
-					(mmb->flags&HIL_MMB_MAP2KERN_CACHED) ? "cached" : "non-cached",
-					(cached) ? "cached" : "non-cached" );
-			return NULL;
-		}
+    /*
+      * already mapped? no need to remap again,
+      * just return mmb's kernel virtual address.
+      */
+    if (mmb->flags & HIL_MMB_MAP2KERN) {
+        if ((!!cached * HIL_MMB_MAP2KERN_CACHED) != (mmb->flags & HIL_MMB_MAP2KERN_CACHED)) {
+            printk(KERN_ERR "mmb<%s> has been kernel-mapped as %s, can not be re-mapped as %s.",
+                   mmb->name,
+                   (mmb->flags & HIL_MMB_MAP2KERN_CACHED) ? "cached" : "non-cached",
+                   (cached) ? "cached" : "non-cached");
+            return NULL;
+        }
 
-		mmb->map_ref++;
+        mmb->map_ref++;
 
-		return mmb->kvirt;
-	}
+        return mmb->kvirt;
+    }
 
-	if (cached) {
-		mmb->flags |= HIL_MMB_MAP2KERN_CACHED;
-#if LINUX_VERSION_CODE < KERNEL_VERSION(3,18,10)
-		mmb->kvirt = ioremap_cached(mmb->phys_addr, mmb->length);
-#else
-		mmb->kvirt = ioremap_cache(mmb->phys_addr, mmb->length);
-#endif
-	} else {
-		mmb->flags &= ~HIL_MMB_MAP2KERN_CACHED;
-		/* ioremap_wc has better performance */ 
-		mmb->kvirt = ioremap_wc(mmb->phys_addr, mmb->length);
-	}
+    if (cached) {
+        mmb->flags |= HIL_MMB_MAP2KERN_CACHED;
+        mmb->kvirt = ioremap_cache(mmb->phys_addr, mmb->length);
+    } else {
+        mmb->flags &= ~HIL_MMB_MAP2KERN_CACHED;
+        /* ioremap_wc has better performance */
+        mmb->kvirt = ioremap_wc(mmb->phys_addr, mmb->length);
+    }
 
-	if(mmb->kvirt) {
-	       	mmb->flags |= HIL_MMB_MAP2KERN;
-		mmb->map_ref++;
-	}
+    if (mmb->kvirt) {
+        mmb->flags |= HIL_MMB_MAP2KERN;
+        mmb->map_ref++;
+    } else {
+        mmb->flags &= ~HIL_MMB_MAP2KERN_CACHED;
+    }
 
-	return mmb->kvirt;
+    return mmb->kvirt;
 }
 
 static void __mmb_free(hil_mmb_t *mmb)
 {
-	if (mmb->flags & HIL_MMB_MAP2KERN_CACHED) {
-		__cpuc_flush_dcache_area((void *)mmb->kvirt, (size_t)mmb->length);
-		outer_flush_range(mmb->phys_addr, mmb->phys_addr + mmb->length);
-	}
+    if (mmb->flags & HIL_MMB_MAP2KERN_CACHED) {
+#ifdef CONFIG_64BIT
+        __flush_dcache_area((void *)mmb->kvirt, (size_t)mmb->length);
+#else
+        __cpuc_flush_dcache_area((void *)mmb->kvirt, (size_t)mmb->length);
+        outer_flush_range(mmb->phys_addr, mmb->phys_addr + mmb->length);
+#endif
+    }
 
-	osal_list_del(&mmb->list);
-	kfree(mmb);
+    osal_list_del(&mmb->list);
+    kfree(mmb);
 }
 
 static int __mmb_unmap(hil_mmb_t *mmb)
 {
-	int ref;
-	
-	if (mmb->flags & HIL_MMB_MAP2KERN_CACHED) {
-		__cpuc_flush_dcache_area((void *)mmb->kvirt, (size_t)mmb->length);
-		outer_flush_range(mmb->phys_addr, mmb->phys_addr + mmb->length);
-	}
+    int ref;
 
-	if(mmb->flags & HIL_MMB_MAP2KERN) {
-		ref = --mmb->map_ref;
-		if(mmb->map_ref !=0) {
-			return ref;
-		}
-		iounmap(mmb->kvirt);
-	}
+    if (mmb->flags & HIL_MMB_MAP2KERN_CACHED) {
+#ifdef CONFIG_64BIT
+        __flush_dcache_area((void *)mmb->kvirt, (size_t)mmb->length);
+#else
+        __cpuc_flush_dcache_area((void *)mmb->kvirt, (size_t)mmb->length);
+        outer_flush_range(mmb->phys_addr, mmb->phys_addr + mmb->length);
+#endif
+    }
 
-	mmb->kvirt = NULL;
-	mmb->flags &= ~HIL_MMB_MAP2KERN;
-	mmb->flags &= ~HIL_MMB_MAP2KERN_CACHED;
+    if (mmb->flags & HIL_MMB_MAP2KERN) {
+        ref = --mmb->map_ref;
+        if (mmb->map_ref != 0) {
+            return ref;
+        }
+        iounmap(mmb->kvirt);
+    }
 
-	if((mmb->flags & HIL_MMB_RELEASED) && mmb->phy_ref ==0) {
-		__mmb_free(mmb);
-	}
+    mmb->kvirt = NULL;
+    mmb->flags &= ~HIL_MMB_MAP2KERN;
+    mmb->flags &= ~HIL_MMB_MAP2KERN_CACHED;
 
-	return 0;
+    if ((mmb->flags & HIL_MMB_RELEASED) && (mmb->phy_ref == 0)) {
+        __mmb_free(mmb);
+    }
+
+    return 0;
 }
 
-static void *__mmf_map(unsigned long phys, int len, int cache)
+static void *__mmf_map(phys_addr_t phys, int len, int cache)
 {
-	void *virt;
-	if (cache) {
-#if LINUX_VERSION_CODE < KERNEL_VERSION(3,18,10)
-		virt = ioremap_cached(phys, len);
-#else
-		virt = ioremap_cache(phys, len);
-#endif
-	} else {
-		virt = ioremap_wc(phys, len);
-	}
+    void *virt = NULL;
+    if (cache) {
+        virt = ioremap_cache(phys, len);
+    } else {
+        virt = ioremap_wc(phys, len);
+    }
 
-	return virt;
+    return virt;
 }
 
 static void __mmf_unmap(void *virt)
 {
-	if (virt)
-	    iounmap(virt);
+    if (virt != NULL) {
+        iounmap(virt);
+    }
 }
 
 static int __allocator_init(char *s)
 {
-	hil_mmz_t *zone = NULL;
-	char *line;
-	int attempted = 0, registered = 0;
+    hil_mmz_t *zone = NULL;
+    char *line = NULL;
+    unsigned long phys_end;
 
-	while ((line = strsep(&s, ":")) != NULL) {
-		int i;
-		char *argv[6];
+    while ((line = strsep(&s, ":")) != NULL) {
+        int i;
+        char *argv[6]; /* 6: cmdline include 6 arguments */
 
-		for (i = 0; (argv[i] = strsep(&line, ",")) != NULL;)
-			if (++i == ARRAY_SIZE(argv))
-				break;
+        for (i = 0; (argv[i] = strsep(&line, ",")) != NULL;) {
+            if (++i == ARRAY_SIZE(argv)) {
+                break;
+            }
+        }
 
-		if (i == 4) {
-			zone = hil_mmz_create("null",0,0,0);
-			if (NULL == zone)
-				continue;
-			strlcpy(zone->name, argv[0], HIL_MMZ_NAME_LEN);
-			zone->gfp = _strtoul_ex(argv[1], NULL, 0);
-			zone->phys_start = _strtoul_ex(argv[2], NULL, 0);
-			zone->nbytes = _strtoul_ex(argv[3], NULL, 0);
-		} else if (i == 6) {
-			zone = hil_mmz_create_v2("null",0,0,0,0,0);
-			if (zone == NULL)
-				continue;
+        if (i == 4) { /* 4: had parse four args */
+            zone = hil_mmz_create("null", 0, 0, 0);
+            if (zone == NULL) {
+                continue;
+            }
 
-			strlcpy(zone->name, argv[0], HIL_MMZ_NAME_LEN);
-			zone->gfp = _strtoul_ex(argv[1], NULL, 0);
-			zone->phys_start = _strtoul_ex(argv[2], NULL, 0);
-			zone->nbytes = _strtoul_ex(argv[3], NULL, 0);
-			zone->alloc_type = _strtoul_ex(argv[4], NULL, 0);
-			zone->block_align = _strtoul_ex(argv[5], NULL, 0);
-		} else {
-			printk(KERN_ERR "error parameters\n");
-			return -EINVAL;
-		}
+            compat_strlcpy(zone->name, argv[0], HIL_MMZ_NAME_LEN); /* 0: the first args */
+            zone->gfp = _strtoul_ex(argv[1], NULL, 0); /* 1: the second args */
+            zone->phys_start = _strtoul_ex(argv[2], NULL, 0); /* 2: the third args */
+            zone->nbytes = _strtoul_ex(argv[3], NULL, 0); /* 3: the fourth args */
+            if (zone->nbytes > g_hi_max_malloc_size) {
+                g_hi_max_malloc_size = zone->nbytes;
+            }
+        } else if (i == 6) { /* 6: had parse six args */
+            zone = hil_mmz_create_v2("null", 0, 0, 0, 0, 0);
+            if (zone == NULL) {
+                continue;
+            }
 
-		//mmz_info_phys_start = zone->phys_start + zone->nbytes - 0x2000;
+            compat_strlcpy(zone->name, argv[0], HIL_MMZ_NAME_LEN); /* 0: the first args */
+            zone->gfp = _strtoul_ex(argv[1], NULL, 0); /* 1: the second args */
+            zone->phys_start = _strtoul_ex(argv[2], NULL, 0); /* 2: the third args */
+            zone->nbytes = _strtoul_ex(argv[3], NULL, 0); /* 3: the fourth args */
+            zone->alloc_type = _strtoul_ex(argv[4], NULL, 0); /* 4: the fifth args */
+            zone->block_align = _strtoul_ex(argv[5], NULL, 0); /* 5: the sixth args */
+            if (zone->nbytes > g_hi_max_malloc_size) {
+                g_hi_max_malloc_size = zone->nbytes;
+            }
+        } else {
+            printk(KERN_ERR "error parameters\n");
+            return -EINVAL;
+        }
 
-		attempted++;
-		if (hil_mmz_register(zone)) {
-			printk(KERN_WARNING "Add MMZ failed: " HIL_MMZ_FMT_S "\n", hil_mmz_fmt_arg(zone));
-			hil_mmz_destroy(zone);
-		} else {
-			registered++;
-		}
-		zone = NULL;
-	}
+        if (hil_mmz_register(zone)) {
+            printk(KERN_WARNING "Add MMZ failed: " HIL_MMZ_FMT_S "\n", hil_mmz_fmt_arg(zone));
+            hil_mmz_destroy(zone);
+            return -1;
+        }
 
-	if (attempted > 0 && registered == 0) {
-		printk(KERN_ERR "MMZ: all %d configured zone(s) failed to register; refusing to load\n",
-				attempted);
-		return -ENODEV;
-	}
+        /* if phys_end is maxinum value (ex, 0xFFFFFFFF 32bit) */
+        phys_end = (zone->phys_start + zone->nbytes);
+        if ((phys_end == 0) && (zone->nbytes >= PAGE_SIZE)) {
+            /* reserve last PAGE_SIZE memory */
+            zone->nbytes = zone->nbytes - PAGE_SIZE;
+        }
 
-	return 0;
+        /* if phys_end exceed 0xFFFFFFFF (32bit), wraping error */
+        if ((zone->phys_start > phys_end) && (phys_end != 0)) {
+            printk(KERN_ERR "MMZ: parameter is not correct! Address exceeds 0xFFFFFFFF\n");
+            hil_mmz_unregister(zone);
+            hil_mmz_destroy(zone);
+            return -1;
+        }
+        zone = NULL;
+    }
+
+    return 0;
 }
 
 int hisi_allocator_setopt(struct mmz_allocator *allocator)
 {
-	allocator->init = __allocator_init;
-	allocator->mmb_alloc = __mmb_alloc;
-	allocator->mmb_alloc_v2 = __mmb_alloc_v2;
-	allocator->mmb_map2kern = __mmb_map2kern;
-	allocator->mmb_unmap = __mmb_unmap;
-	allocator->mmb_free = __mmb_free;
-	allocator->mmf_map = __mmf_map;
-	allocator->mmf_unmap = __mmf_unmap;
-	return 0;
+    allocator->init = __allocator_init;
+    allocator->mmb_alloc = __mmb_alloc;
+    allocator->mmb_alloc_v2 = __mmb_alloc_v2;
+    allocator->mmb_map2kern = __mmb_map2kern;
+    allocator->mmb_unmap = __mmb_unmap;
+    allocator->mmb_free = __mmb_free;
+    allocator->mmf_map = __mmf_map;
+    allocator->mmf_unmap = __mmf_unmap;
+    return 0;
 }
-

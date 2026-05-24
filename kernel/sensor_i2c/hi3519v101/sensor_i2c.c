@@ -8,6 +8,11 @@
 #include <linux/delay.h>
 #include "isp_ext.h"
 
+/* hi_i2c_master_send was a vendor BVT wrapper. Mainline uses i2c_master_send. */
+#ifndef hi_i2c_master_send
+#define hi_i2c_master_send i2c_master_send
+#endif
+
 #define I2C_MAX_NUM 2
 
 static struct i2c_board_info hi_info =

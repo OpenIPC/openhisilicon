@@ -1,6 +1,11 @@
 #include <linux/module.h>
 #include <linux/kernel.h>
 
+extern void *pAcodec;
+COMPAT_REEXPORT_BLOB_SYMBOL(pAcodec);
+extern void *pAioBase;
+COMPAT_REEXPORT_BLOB_SYMBOL(pAioBase);
+
 extern int _3519v101_hi3519v101_aio_init(void);
 extern void _3519v101_hi3519v101_aio_exit(void);
 

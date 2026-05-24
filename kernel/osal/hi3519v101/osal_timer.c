@@ -8,7 +8,80 @@
 #include <linux/rtc.h>
 #include "hi_osal.h"
 
+/* Linux 4.15 timer rework removed struct timer_list .data and changed the
+ * callback signature from void(*)(unsigned long) to void(*)(struct timer_list*).
+ * Same shim pattern as kernel/osal/hi3516cv500/osal_timer.c — wrap the
+ * timer_list in a compat struct so the legacy osal_timer_t API (which
+ * publishes function/data as void(*)(unsigned long) and unsigned long) keeps
+ * working unchanged. */
+#ifdef COMPAT_TIMER_SETUP
+struct osal_v3a_timer_compat {
+    struct timer_list tl;
+    void (*function)(unsigned long);
+    unsigned long data;
+};
 
+static void osal_v3a_timer_shim_callback(struct timer_list *t)
+{
+    struct osal_v3a_timer_compat *ot =
+        container_of(t, struct osal_v3a_timer_compat, tl);
+    if (ot->function)
+        ot->function(ot->data);
+}
+
+int osal_timer_init(osal_timer_t *timer){
+    struct osal_v3a_timer_compat *ot = NULL;
+
+    if(timer == NULL){
+        osal_printk("%s - parameter invalid!\n", __FUNCTION__);
+        return -1;
+    }
+
+    ot = kmalloc(sizeof(*ot), GFP_KERNEL);
+    if(ot == NULL){
+        osal_printk("%s - kmalloc error!\n", __FUNCTION__);
+        return -1;
+    }
+    memset(ot, 0, sizeof(*ot));
+    timer_setup(&ot->tl, osal_v3a_timer_shim_callback, 0);
+    timer->timer = ot;
+    return 0;
+}
+EXPORT_SYMBOL(osal_timer_init);
+
+int osal_set_timer(osal_timer_t *timer, unsigned long interval){
+    struct osal_v3a_timer_compat *ot = NULL;
+    if(timer == NULL || timer->timer == NULL || timer->function == NULL || interval == 0){
+        osal_printk("%s - parameter invalid!\n", __FUNCTION__);
+        return -1;
+    }
+    ot = timer->timer;
+    ot->function = timer->function;
+    ot->data = timer->data;
+    return mod_timer(&ot->tl, jiffies + msecs_to_jiffies(interval));
+}
+EXPORT_SYMBOL(osal_set_timer);
+
+int osal_del_timer(osal_timer_t *timer){
+    struct osal_v3a_timer_compat *ot = NULL;
+    if(timer == NULL || timer->timer == NULL || timer->function == NULL){
+        osal_printk("%s - parameter invalid!\n", __FUNCTION__);
+        return -1;
+    }
+    ot = timer->timer;
+    return del_timer(&ot->tl);
+}
+EXPORT_SYMBOL(osal_del_timer);
+
+int osal_timer_destory(osal_timer_t *timer){
+    struct osal_v3a_timer_compat *ot = timer->timer;
+    del_timer(&ot->tl);
+    kfree(ot);
+    timer->timer=NULL;
+    return 0;
+}
+EXPORT_SYMBOL(osal_timer_destory);
+#else /* pre-4.15: legacy init_timer */
 int osal_timer_init(osal_timer_t *timer){
     struct timer_list *t = NULL;
 
@@ -61,6 +134,7 @@ int osal_timer_destory(osal_timer_t *timer){
     return 0;
 }
 EXPORT_SYMBOL(osal_timer_destory);
+#endif
 
 unsigned long osal_msleep(unsigned int msecs){
     return  msleep_interruptible(msecs);

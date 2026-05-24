@@ -317,10 +317,22 @@ static inline struct spi_controller *compat_spi_busnum_to_controller(u16 bus_num
 
 /* Inserted before #endif */
 /*
- * i2c_new_device renamed to i2c_new_client_device in 5.x.
+ * i2c_new_device renamed to i2c_new_client_device in 5.2 (and the old name
+ * dropped later). Map legacy source forward, normalising the error return
+ * (ERR_PTR -> NULL) so callers that check `if (client == NULL)` still work.
  */
 #if LINUX_VERSION_CODE < KERNEL_VERSION(5, 2, 0)
 #define i2c_new_client_device i2c_new_device
+#else
+#include <linux/i2c.h>
+#include <linux/err.h>
+static inline struct i2c_client *compat_i2c_new_device(
+	struct i2c_adapter *adap, struct i2c_board_info const *info)
+{
+	struct i2c_client *c = i2c_new_client_device(adap, info);
+	return IS_ERR(c) ? NULL : c;
+}
+#define i2c_new_device(adap, info) compat_i2c_new_device(adap, info)
 #endif
 
 /*
@@ -329,6 +341,20 @@ static inline struct spi_controller *compat_spi_busnum_to_controller(u16 bus_num
  */
 #if LINUX_VERSION_CODE < KERNEL_VERSION(5, 0, 0)
 #define spi_busnum_to_controller spi_busnum_to_master
+#endif
+
+/*
+ * Re-export blob symbols only on kernels where modpost ignores the
+ * legacy 8-byte __ksymtab_ format. Pre-5.0 modpost honours the legacy
+ * blob ksymtab, so a second EXPORT_SYMBOL in our init wrapper would
+ * collide ("multiple definition of __ksymtab_X"). On 5.0+ modpost
+ * skips the legacy format — we must re-publish via EXPORT_SYMBOL to
+ * make the symbol visible to other modules.
+ */
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(5, 0, 0)
+#define COMPAT_REEXPORT_BLOB_SYMBOL(sym) EXPORT_SYMBOL(sym)
+#else
+#define COMPAT_REEXPORT_BLOB_SYMBOL(sym)
 #endif
 
 /*

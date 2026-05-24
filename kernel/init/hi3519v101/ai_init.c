@@ -1,6 +1,9 @@
 #include <linux/module.h>
 #include <linux/kernel.h>
 
+extern int AI_DRV_IsVqeEnable(int chn);
+COMPAT_REEXPORT_BLOB_SYMBOL(AI_DRV_IsVqeEnable);
+
 extern int _3519v101_hi3519v101_ai_init(void);
 extern void _3519v101_hi3519v101_ai_exit(void);
 
