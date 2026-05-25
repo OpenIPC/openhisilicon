@@ -14,6 +14,15 @@
 #include <linux/kernel.h>
 #include <linux/printk.h>
 #include <linux/sysctl.h>
+#include <linux/version.h>
+
+/* Pre-5.0 kernels honour the blob's legacy 8-byte __ksymtab_* entries
+ * directly; adding our own extern + EXPORT_SYMBOL declarations on top
+ * regresses lite-target loading on hardware (blob's exports disappear
+ * from /proc/kallsyms when paired with our extern in the same TU).
+ * Gate every re-export to >= 5.0 so the 3.18 lite path stays a simple
+ * forwarder, bit-for-bit equivalent to the pre-V3A-neo upstream. */
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(5, 0, 0)
 
 extern int HI_LOG(int level, int mod_id, const char *fmt, ...);
 COMPAT_REEXPORT_BLOB_SYMBOL(HI_LOG);
@@ -61,6 +70,8 @@ extern int g_proc_enable;
 COMPAT_REEXPORT_BLOB_SYMBOL(g_proc_enable);
 extern int g_power_save_enable;
 COMPAT_REEXPORT_BLOB_SYMBOL(g_power_save_enable);
+
+#endif /* LINUX_VERSION_CODE >= KERNEL_VERSION(5, 0, 0) */
 
 extern int _3519v101_hi3519v101_base_init(void);
 extern void _3519v101_hi3519v101_base_exit(void);

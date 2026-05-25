@@ -7,6 +7,11 @@
 
 #include <linux/module.h>
 #include <linux/init.h>
+#include <linux/version.h>
+
+/* See base_init.c for the >= 5.0 gate rationale. */
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(5, 0, 0)
+
 
 extern int VIU_DRV_GetChnIntStatus(int chn);
 COMPAT_REEXPORT_BLOB_SYMBOL(VIU_DRV_GetChnIntStatus);
@@ -27,6 +32,7 @@ extern void *g_psViuAllReg;
 COMPAT_REEXPORT_BLOB_SYMBOL(g_psViuAllReg);
 extern void *g_stViuExpFunc;
 COMPAT_REEXPORT_BLOB_SYMBOL(g_stViuExpFunc);
+#endif /* LINUX_VERSION_CODE >= KERNEL_VERSION(5, 0, 0) */
 
 extern int _3519v101_hi3519v101_viu_init(void);
 extern void _3519v101_hi3519v101_viu_exit(void);

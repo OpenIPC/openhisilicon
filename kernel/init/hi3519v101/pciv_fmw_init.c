@@ -1,5 +1,10 @@
 #include <linux/module.h>
 #include <linux/kernel.h>
+#include <linux/version.h>
+
+/* See base_init.c for the >= 5.0 gate rationale. */
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(5, 0, 0)
+
 
 extern int PCIV_FirmWareCreate(void *p);
 COMPAT_REEXPORT_BLOB_SYMBOL(PCIV_FirmWareCreate);
@@ -33,6 +38,7 @@ extern int PCIV_FirmWareWindowVbCreate(int id, void *attr);
 COMPAT_REEXPORT_BLOB_SYMBOL(PCIV_FirmWareWindowVbCreate);
 extern int PCIV_FirmWareWindowVbDestroy(int id);
 COMPAT_REEXPORT_BLOB_SYMBOL(PCIV_FirmWareWindowVbDestroy);
+#endif /* LINUX_VERSION_CODE >= KERNEL_VERSION(5, 0, 0) */
 
 extern int _3519v101_hi3519v101_pciv_fmw_init(void);
 extern void _3519v101_hi3519v101_pciv_fmw_exit(void);

@@ -1,8 +1,14 @@
 #include <linux/module.h>
 #include <linux/kernel.h>
+#include <linux/version.h>
+
+/* See base_init.c for the >= 5.0 gate rationale. */
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(5, 0, 0)
+
 
 extern void *g_stVouExpFunc;
 COMPAT_REEXPORT_BLOB_SYMBOL(g_stVouExpFunc);
+#endif /* LINUX_VERSION_CODE >= KERNEL_VERSION(5, 0, 0) */
 
 extern int _3519v101_hi3519v101_vou_init(void);
 extern void _3519v101_hi3519v101_vou_exit(void);

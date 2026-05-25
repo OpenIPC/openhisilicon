@@ -1,8 +1,14 @@
 #include <linux/module.h>
 #include <linux/kernel.h>
+#include <linux/version.h>
+
+/* See base_init.c for the >= 5.0 gate rationale. */
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(5, 0, 0)
+
 
 extern int AI_DRV_IsVqeEnable(int chn);
 COMPAT_REEXPORT_BLOB_SYMBOL(AI_DRV_IsVqeEnable);
+#endif /* LINUX_VERSION_CODE >= KERNEL_VERSION(5, 0, 0) */
 
 extern int _3519v101_hi3519v101_ai_init(void);
 extern void _3519v101_hi3519v101_ai_exit(void);
