@@ -37,7 +37,9 @@
 
 
 #ifndef __HuaweiLite__
+#if LINUX_VERSION_CODE < KERNEL_VERSION(4,0,0)
 #include <mach/io.h>/* for IO_ADDRESS */
+#endif
 #ifdef CONFIG_HISI_SNAPSHOT_BOOT
 #include "himedia.h"
 #endif
@@ -522,11 +524,11 @@ static int pwm_probe(struct platform_device *pdev)
     pwm_init();
     return 0;
 }
-static int pwm_remove(struct platform_device *pdev)
+static compat_platform_remove_ret pwm_remove(struct platform_device *pdev)
 {
     printk("<%s> is called\n",__FUNCTION__);
     pwm_exit();
-    return 0;
+    compat_platform_remove_return;
 }
 static const struct of_device_id pwm_match[] = {
         { .compatible = "hisilicon,pwm" },

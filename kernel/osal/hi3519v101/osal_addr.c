@@ -57,7 +57,7 @@ EXPORT_SYMBOL(osal_copy_to_user);
 
 int osal_access_ok(int type, const void *addr, unsigned long size)
 {
-    return access_ok(type, addr, size);
+    return compat_access_ok(type, addr, size);
 }
 EXPORT_SYMBOL(osal_access_ok);
 

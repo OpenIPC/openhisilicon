@@ -79,14 +79,24 @@ static int osal_procopen(struct inode *inode, struct file *file)
     return single_open(file, osal_seq_show, sentry);
 }
 
+#ifdef COMPAT_USE_PROC_OPS
+static struct proc_ops osal_proc_ops = {
+    .proc_open    = osal_procopen,
+    .proc_read    = seq_read,
+    .proc_write   = osal_procwrite,
+    .proc_lseek   = seq_lseek,
+    .proc_release = single_release,
+};
+#else
 static struct file_operations osal_proc_ops = {
     .owner   = THIS_MODULE,
     .open    = osal_procopen,
     .read    = seq_read,
     .write   = osal_procwrite,
-    .llseek  = seq_lseek, 
+    .llseek  = seq_lseek,
     .release = single_release
-}; 
+};
+#endif
 
 osal_proc_entry_t *osal_create_proc_entry(const char *name, osal_proc_entry_t *parent){
 	struct proc_dir_entry *entry = NULL;

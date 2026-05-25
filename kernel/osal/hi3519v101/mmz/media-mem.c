@@ -60,7 +60,7 @@
 
 
 OSAL_LIST_HEAD(mmz_list);
-static DEFINE_SEMAPHORE(mmz_lock);
+static compat_DEFINE_SEMAPHORE(mmz_lock);
 
 int anony = 0;
 module_param(anony, int, S_IRUGO);
@@ -529,9 +529,9 @@ EXPORT_SYMBOL(hil_mmb_free);
 #define MACH_MMB(p, val, member) do{\
     hil_mmz_t *__mach_mmb_zone__; \
     (p) = NULL;\
-    list_for_each_entry(__mach_mmb_zone__,&mmz_list, list) { \
+    osal_list_for_each_entry(__mach_mmb_zone__,&mmz_list, list) { \
         hil_mmb_t *__mach_mmb__;\
-        list_for_each_entry(__mach_mmb__,&__mach_mmb_zone__->mmb_list, list) { \
+        osal_list_for_each_entry(__mach_mmb__,&__mach_mmb_zone__->mmb_list, list) { \
             if(__mach_mmb__->member == (val)){ \
                 (p) = __mach_mmb__; \
                 break;\
@@ -553,6 +553,9 @@ EXPORT_SYMBOL(hil_mmb_getby_phys);
 unsigned long usr_virt_to_phys(unsigned long virt)
 {
     pgd_t *pgd;
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(5, 0, 0)
+    p4d_t *p4d;
+#endif
     pud_t *pud;
     pmd_t *pmd;
     pte_t *pte;
@@ -577,7 +580,19 @@ unsigned long usr_virt_to_phys(unsigned long virt)
         return 0;
     }
 
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(5, 0, 0)
+    /* 5.0 added a 5th level (P4D). On 4-level archs (ARM) p4d_offset
+     * folds into a no-op returning the pgd cast, but the type must be
+     * walked explicitly because pud_offset() in 6.5+ rejects a pgd_t*. */
+    p4d = p4d_offset(pgd, virt);
+    if (p4d_none(*p4d)) {
+        printk("error: not mapped in p4d!\n");
+        return 0;
+    }
+    pud = pud_offset(p4d, virt);
+#else
     pud = pud_offset(pgd, virt);
+#endif
     if (pud_none(*pud)) {
         printk("error: not mapped in pud!\n");
         return 0;
@@ -619,9 +634,9 @@ EXPORT_SYMBOL(usr_virt_to_phys);
 #define MACH_MMB_2(p, val, member, Outoffset) do{\
     hil_mmz_t *__mach_mmb_zone__; \
     (p) = NULL;\
-    list_for_each_entry(__mach_mmb_zone__,&mmz_list, list) { \
+    osal_list_for_each_entry(__mach_mmb_zone__,&mmz_list, list) { \
         hil_mmb_t *__mach_mmb__;\
-        list_for_each_entry(__mach_mmb__,&__mach_mmb_zone__->mmb_list, list) { \
+        osal_list_for_each_entry(__mach_mmb__,&__mach_mmb_zone__->mmb_list, list) { \
             if ((__mach_mmb__->member <= (val)) && ((__mach_mmb__->length + __mach_mmb__->member) > (val))){ \
                 (p) = __mach_mmb__; \
                 Outoffset = val - __mach_mmb__->member;\
@@ -788,6 +803,15 @@ static int __init media_mem_proc_init(void)
 }
 #else
 
+#ifdef COMPAT_USE_PROC_OPS
+static struct proc_ops mmz_proc_ops = {
+    .proc_open    = mmz_proc_open,
+    .proc_read    = seq_read,
+    .proc_write   = mmz_write_proc,
+    .proc_lseek   = seq_lseek,
+    .proc_release = seq_release,
+};
+#else
 static struct file_operations mmz_proc_ops = {
     .owner = THIS_MODULE,
     .open = mmz_proc_open,
@@ -795,6 +819,7 @@ static struct file_operations mmz_proc_ops = {
     .write = mmz_write_proc,
     .release = seq_release,
 };
+#endif
 
 static int __init media_mem_proc_init(void)
 {
@@ -831,7 +856,7 @@ static void mmz_exit_check(void)
 
     mmz_trace_func();
 
-    list_for_each_safe(p, n, &mmz_list) {
+    osal_list_for_each_safe(p, n, &mmz_list) {
         pmmz = osal_list_entry(p,hil_mmz_t,list);
         printk(KERN_WARNING "MMZ force removed: " HIL_MMZ_FMT_S "\n", hil_mmz_fmt_arg(pmmz));
         hil_mmz_unregister(pmmz);

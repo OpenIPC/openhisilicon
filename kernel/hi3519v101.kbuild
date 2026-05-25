@@ -65,6 +65,22 @@ obj-m += $(PREFIX)osal.o
 $(PREFIX)sys_config-objs := sys_config/hi3519v101/sys_config.o
 obj-m += $(PREFIX)sys_config.o
 
+# --- V3A OSAL shim (source) — re-exports removed-since-3.18 kernel APIs
+# (printk → _printk, vmalloc/kmalloc_noprof, dev_err/warn, sysctl table
+# variants, raw spinlock ops, ARM helpers) AND stubs vendor BSP symbols
+# the blob references (dis_irq_handle[], hios_mcc_*, hil_*, cmpi_*).
+# Must load BEFORE any blob module. The shim body is gated to >= 5.0;
+# on the lite target (3.18) it compiles to a no-op.
+CFLAGS_osal_v3a_shim/v3a_shim.o := \
+	-Ddel_timer_sync=__v3a_shim_del_timer_sync_unused_inline \
+	-Dmsecs_to_jiffies=__v3a_shim_msecs_to_jiffies_unused_inline \
+	-Dof_property_read_u32_array=__v3a_shim_of_prop_unused_inline \
+	-Dmodule_put=__v3a_shim_module_put_unused_inline \
+	-Dtry_module_get=__v3a_shim_try_module_get_unused_inline \
+	-D__mutex_init=__v3a_shim_mutex_init_unused_inline
+$(PREFIX)v3a_shim-objs := osal_v3a_shim/v3a_shim.o
+obj-m += $(PREFIX)v3a_shim.o
+
 # --- Blob modules (pre-built .o + init wrapper) ---
 V101_BLOB_DIR = obj/hi3519v101
 V101_INIT_DIR = init/hi3519v101
@@ -115,7 +131,13 @@ obj-m += $(PREFIX)ao.o
 obj-m += $(PREFIX)aenc.o
 obj-m += $(PREFIX)adec.o
 obj-m += $(PREFIX)acodec.o
+# pm.ko has hard-coded cpufreq/regulator integration referencing vendor
+# BSP symbols (devm_regulator_*, dev_pm_opp_*, cpufreq_*) that aren't
+# in mainline kernel. Hisilicon firmware build passes DISABLE_PM=1, so
+# this gate matches the upstream convention and skips the broken module.
+ifndef DISABLE_PM
 obj-m += $(PREFIX)pm.o
+endif
 obj-m += $(PREFIX)fisheye.o
 obj-m += $(PREFIX)photo.o
 obj-m += $(PREFIX)pciv.o

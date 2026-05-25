@@ -349,11 +349,11 @@ static long piris_ioctl(struct file* file, unsigned int cmd, unsigned long arg)
 #ifndef __HuaweiLite__
     if (_IOC_DIR(cmd) & _IOC_READ)
     {
-        err = !access_ok(VERIFY_WRITE, (void __user*)arg, _IOC_SIZE(cmd));
+        err = !compat_access_ok(VERIFY_WRITE, (void __user*)arg, _IOC_SIZE(cmd));
     }
     else if (_IOC_DIR(cmd) & _IOC_WRITE)
     {
-        err =  !access_ok(VERIFY_READ, (void __user*)arg, _IOC_SIZE(cmd));
+        err =  !compat_access_ok(VERIFY_READ, (void __user*)arg, _IOC_SIZE(cmd));
     }
 
     if (err)
@@ -450,7 +450,9 @@ static struct miscdevice gstPirisDev =
 
 #ifdef __HuaweiLite__
 void piris_timer_cb(UINT32 arg)
-#else 
+#elif defined(COMPAT_TIMER_SETUP)
+void piris_timer_cb(struct timer_list *t)
+#else
 void piris_timer_cb(unsigned long arg)
 #endif
 {
@@ -460,7 +462,11 @@ void piris_timer_cb(unsigned long arg)
     unsigned char bits;
     unsigned long u32Flags;
 
+#ifdef COMPAT_TIMER_SETUP
+    PIRIS_DEV* pstPiris = from_timer(pstPiris, t, timer);
+#else
     PIRIS_DEV* pstPiris = (PIRIS_DEV*)arg;
+#endif
 
     spin_lock_irqsave(&pstPiris->lock, u32Flags);
     if (pstPiris->src_pos == pstPiris->dest_pos)
@@ -646,6 +652,9 @@ int piris_init(void)
         u32Interval = HZ / PIRIS_PPS;
         LOS_SwtmrCreate(u32Interval, LOS_SWTMR_MODE_PERIOD, piris_timer_cb, &p_piris_dev[i]->u16TimerID, (UINT32)p_piris_dev[i]);
         LOS_SwtmrStart(p_piris_dev[i]->u16TimerID);
+#elif defined(COMPAT_TIMER_SETUP)
+        timer_setup(&p_piris_dev[i]->timer, piris_timer_cb, 0);
+        p_piris_dev[i]->timer.expires = jiffies + HZ; /* one second */
 #else
     	init_timer(&p_piris_dev[i]->timer);
         p_piris_dev[i]->timer.function = piris_timer_cb;
@@ -727,11 +736,11 @@ static int piris_probe(struct platform_device *pdev)
     piris_init();
     return 0;
 }
-static int piris_remove(struct platform_device *pdev)
+static compat_platform_remove_ret piris_remove(struct platform_device *pdev)
 {
     printk("<%s> is called\n",__FUNCTION__);
     piris_exit();
-    return 0;
+    compat_platform_remove_return;
 }
 static const struct of_device_id piris_match[] = {
         { .compatible = "hisilicon,piris" },
