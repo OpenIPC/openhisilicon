@@ -17,8 +17,13 @@
  * where openipc_frame_ts dispatches it. Error-stat bits unchanged. */
 #define MIPI_INT_VSYNC     (1u << 4)   /* MIPI_CTRL_INT.int_vsync */
 #define LVDS_INT_VSYNC     (1u << 28)  /* LVDS_CTRL_INT.lvds_vsync */
+#if defined(hi3516ev200) || defined(gk7205v200)
+#define MIPI_CTRL_INT_MASK (0x00030003)
+#define LVDS_CTRL_INT_MASK (0x0f110000)
+#else
 #define MIPI_CTRL_INT_MASK (0x00030013)
 #define LVDS_CTRL_INT_MASK (0x1f110000)
+#endif
 #define MIPI_FRAME_INT_MASK (0x000f0000)
 #define MIPI_PKT_INT1_MASK (0x0001000f)
 #define MIPI_PKT_INT2_MASK (0x000f000f)
