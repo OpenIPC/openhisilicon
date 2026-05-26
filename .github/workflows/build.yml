@@ -48,6 +48,18 @@ jobs:
           - platform: hi3516cv300
             board: hi3516cv300_neo
             kernel: "7.0"
+          - platform: hi3519v101
+            board: hi3516av200_neo
+            kernel: "7.0"
+          - platform: hi3516cv200
+            board: hi3516cv200_neo
+            kernel: "7.0"
+          - platform: hi3516av100
+            board: hi3516av100_neo
+            kernel: "7.0"
+          - platform: hi3516cv100
+            board: hi3516cv100_neo
+            kernel: "7.0"
 
     steps:
       - name: Checkout Source
@@ -203,6 +215,99 @@ jobs:
             exit 1
           fi
 
+          sed -i 's|cat $(CONFIG) $(PWD)/general/openipc.fragment|cat $(PWD)/general/openipc.fragment $(CONFIG)|' Makefile
+
+      # V3A (Hi3519V101 / Hi3516AV200 — same die, distinguished only by the
+      # SCSYSID0 sub-variant byte) — last HiSilicon family that lacked
+      # modern-kernel support. Targets the hi3516av200 SKU (most-deployed
+      # V3A and the canonical dev board variant); the openhisilicon side
+      # builds via OPENIPC_SOC_FAMILY=hi3519v101 which is shared with the
+      # v101 SKU. DT support landed in openipc/linux PR #47
+      # (arch/arm/boot/dts/hisilicon/hi3519v101.dtsi +
+      # hi3519v101-demb.dts). Firmware-side target is
+      # OpenIPC/firmware#2137 — hi3516av200_neo_defconfig +
+      # hi3516av200.neo.config + neo-post-image.sh.
+      - name: Setup neo target (V3A AV200, 7.0 kernel)
+        if: matrix.kernel == '7.0' && matrix.platform == 'hi3519v101'
+        run: |
+          cd ../firmware
+
+          # Neo patches dir (may already exist from earlier setup steps)
+          mkdir -p general/package/all-patches-neo/linux
+          for d in general/package/all-patches/*/; do
+            name=$(basename "$d")
+            [ "$name" != "linux" ] && [ ! -e "general/package/all-patches-neo/$name" ] && \
+              ln -sf "../all-patches/$name" "general/package/all-patches-neo/$name"
+          done
+
+          # Firmware-side dependency: hi3516av200_neo_defconfig + per-SKU
+          # kernel config + neo-post-image.sh — all landed in firmware#2137.
+          if [ ! -f br-ext-chip-hisilicon/configs/hi3516av200_neo_defconfig ]; then
+            echo "ERROR: hi3516av200_neo_defconfig not found in firmware repo" >&2
+            exit 1
+          fi
+
+          sed -i 's|cat $(CONFIG) $(PWD)/general/openipc.fragment|cat $(PWD)/general/openipc.fragment $(CONFIG)|' Makefile
+
+      # V2 (Hi3516CV200 / Hi3518EV200) neo — kernel 7.0 with the
+      # open_v2_shim module re-exporting symbols the 4.9-compiled blobs
+      # reference. Firmware-side target: OpenIPC/firmware#2122 +
+      # opensdk bump #2121.
+      - name: Setup neo target (V2 CV200, 7.0 kernel)
+        if: matrix.kernel == '7.0' && matrix.platform == 'hi3516cv200'
+        run: |
+          cd ../firmware
+          mkdir -p general/package/all-patches-neo/linux
+          for d in general/package/all-patches/*/; do
+            name=$(basename "$d")
+            [ "$name" != "linux" ] && [ ! -e "general/package/all-patches-neo/$name" ] && \
+              ln -sf "../all-patches/$name" "general/package/all-patches-neo/$name"
+          done
+          if [ ! -f br-ext-chip-hisilicon/configs/hi3516cv200_neo_defconfig ]; then
+            echo "ERROR: hi3516cv200_neo_defconfig not found in firmware repo" >&2
+            exit 1
+          fi
+          sed -i 's|cat $(CONFIG) $(PWD)/general/openipc.fragment|cat $(PWD)/general/openipc.fragment $(CONFIG)|' Makefile
+
+      # V2A (Hi3516AV100, Cortex-A7) neo — kernel 7.0. Same shape as cv200
+      # neo but using mainline hi3516av100 SoC support + hisi_higmac
+      # ethernet driver from openipc/linux PR #44. open_v2a_shim re-exports
+      # the av100-blob-required APIs. Firmware-side target:
+      # OpenIPC/firmware#2122 alongside cv200.
+      - name: Setup neo target (V2A AV100, 7.0 kernel)
+        if: matrix.kernel == '7.0' && matrix.platform == 'hi3516av100'
+        run: |
+          cd ../firmware
+          mkdir -p general/package/all-patches-neo/linux
+          for d in general/package/all-patches/*/; do
+            name=$(basename "$d")
+            [ "$name" != "linux" ] && [ ! -e "general/package/all-patches-neo/$name" ] && \
+              ln -sf "../all-patches/$name" "general/package/all-patches-neo/$name"
+          done
+          if [ ! -f br-ext-chip-hisilicon/configs/hi3516av100_neo_defconfig ]; then
+            echo "ERROR: hi3516av100_neo_defconfig not found in firmware repo" >&2
+            exit 1
+          fi
+          sed -i 's|cat $(CONFIG) $(PWD)/general/openipc.fragment|cat $(PWD)/general/openipc.fragment $(CONFIG)|' Makefile
+
+      # V1 (Hi3516CV100 / Hi3518EV200 / Hi3518CV100, ARM926EJ-S) neo —
+      # kernel 7.0 with open_v1_shim wrapping ~31 ARM926-era kernel APIs
+      # the V1 blobs reference. DT support from openipc/linux PR #46.
+      # Firmware-side target: OpenIPC/firmware#2131.
+      - name: Setup neo target (V1 CV100, 7.0 kernel)
+        if: matrix.kernel == '7.0' && matrix.platform == 'hi3516cv100'
+        run: |
+          cd ../firmware
+          mkdir -p general/package/all-patches-neo/linux
+          for d in general/package/all-patches/*/; do
+            name=$(basename "$d")
+            [ "$name" != "linux" ] && [ ! -e "general/package/all-patches-neo/$name" ] && \
+              ln -sf "../all-patches/$name" "general/package/all-patches-neo/$name"
+          done
+          if [ ! -f br-ext-chip-hisilicon/configs/hi3516cv100_neo_defconfig ]; then
+            echo "ERROR: hi3516cv100_neo_defconfig not found in firmware repo" >&2
+            exit 1
+          fi
           sed -i 's|cat $(CONFIG) $(PWD)/general/openipc.fragment|cat $(PWD)/general/openipc.fragment $(CONFIG)|' Makefile
 
       - name: Build OpenHisilicon
