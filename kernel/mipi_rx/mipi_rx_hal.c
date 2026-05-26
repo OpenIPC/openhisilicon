@@ -1977,7 +1977,9 @@ static int mipi_rx_interrupt_route(int irq, void *dev_id)
 {
 	volatile mipi_rx_sys_regs_t *mipi_rx_sys_regs = get_mipi_rx_sys_regs();
 	volatile lvds_ctrl_regs_t *lvds_ctrl_regs;
+#if !defined(hi3516ev200) && !defined(gk7205v200)
 	volatile mipi_ctrl_regs_t *mipi_ctrl_regs;
+#endif
 	int i = 0;
 
 	for (i = 0; i < MIPI_RX_MAX_PHY_NUM; i++) {
@@ -1997,6 +1999,7 @@ static int mipi_rx_interrupt_route(int irq, void *dev_id)
 	 * the 0→1 transition; the per-event-type 1 ms dedupe in
 	 * openipc_frame_ts still backstops cv500's double-vsync quirk.
 	 */
+#if !defined(hi3516ev200) && !defined(gk7205v200)
 	for (i = 0; i < MIPI_RX_MAX_DEV_NUM; i++) {
 		static bool s_vsync_was_set[MIPI_RX_MAX_DEV_NUM];
 		unsigned int mipi_int, lvds_int;
@@ -2020,6 +2023,7 @@ static int mipi_rx_interrupt_route(int irq, void *dev_id)
 			openipc_frame_ts_push(i, OPENIPC_FT_EVT_MIPI_FS);
 		s_vsync_was_set[i] = vsync_now;
 	}
+#endif
 
 	for (i = 0; i < MIPI_RX_MAX_DEV_NUM; i++) {
 		lvds_ctrl_regs = get_lvds_ctrl_regs(i);
