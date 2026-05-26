@@ -1087,6 +1087,21 @@ jobs:
             variant: neo
             mem: 256M
             append: "console=ttyAMA0,115200 mem=32M root=/dev/ram0 rootfstype=squashfs"
+          # av200_neo (V3A / Cortex-A7 in QEMU; real silicon is A17+A7
+          # big.LITTLE distinguished from v101 only by SCSYSID0 sub-variant
+          # byte). Kernel 7.0 with the open_v3a_shim re-exports landed in
+          # openhisilicon#188 + the legacy __ksymtab_* preservation fix in
+          # #190. Firmware-side target is OpenIPC/firmware#2137 — tarball
+          # openipc.hi3516av200-nor-neo.tgz is published by the firmware
+          # nightly. mem=128M to match the V3A osmem/totalmem split
+          # load_hisilicon uses (kernel 0x80000000+128M, MMZ at
+          # 0x88000000+384M); higher mem= overlaps MMZ and trips
+          # `MMZ conflict to kernel memory` on insmod.
+          - machine: hi3516av200
+            firmware: hi3516av200
+            variant: neo
+            mem: 256M
+            append: "console=ttyAMA0,115200 mem=128M root=/dev/ram0 rootfstype=squashfs"
 
     steps:
       - uses: actions/checkout@v4
