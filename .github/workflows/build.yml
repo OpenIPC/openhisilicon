@@ -35,12 +35,6 @@ jobs:
             board: hi3519v101_lite
           - platform: hi3516ev300
             board: hi3516ev300_neo
-            kernel: "6.6"
-          - platform: hi3516ev300
-            board: hi3516ev300_neo
-            kernel: "6.18"
-          - platform: hi3516ev300
-            board: hi3516ev300_neo
             kernel: "7.0"
           - platform: hi3516cv500
             board: hi3516av300_neo
@@ -68,60 +62,8 @@ jobs:
       - name: Clone firmware
         run: git clone --depth 1 https://github.com/openipc/firmware ../firmware
 
-      - name: Setup neo target (6.6 kernel)
-        if: matrix.kernel == '6.6'
-        run: |
-          cd ../firmware
-
-          # Create neo defconfig if not present
-          if [ ! -f br-ext-chip-hisilicon/configs/hi3516ev300_neo_defconfig ]; then
-            cp br-ext-chip-hisilicon/configs/hi3516ev300_lite_defconfig \
-               br-ext-chip-hisilicon/configs/hi3516ev300_neo_defconfig
-            sed -i 's|$(OPENIPC_KERNEL).tar.gz|hisilicon-hi3516ev200-6.6.tar.gz|' \
-               br-ext-chip-hisilicon/configs/hi3516ev300_neo_defconfig
-            sed -i 's|hi3516ev300.generic.config|hi3516ev300.4.15.config|' \
-               br-ext-chip-hisilicon/configs/hi3516ev300_neo_defconfig
-            sed -i 's|VARIANT="lite"|VARIANT="neo"|' \
-               br-ext-chip-hisilicon/configs/hi3516ev300_neo_defconfig
-            echo 'BR2_LINUX_KERNEL_UIMAGE_LOADADDR="0x40008000"' >> \
-               br-ext-chip-hisilicon/configs/hi3516ev300_neo_defconfig
-            echo 'BR2_GLOBAL_PATCH_DIR="$(BR2_EXTERNAL)/package/all-patches-neo"' >> \
-               br-ext-chip-hisilicon/configs/hi3516ev300_neo_defconfig
-          fi
-
-          # Create 6.6 kernel config if not present
-          if [ ! -f br-ext-chip-hisilicon/board/hi3516ev200/hi3516ev300.4.15.config ]; then
-            cp br-ext-chip-hisilicon/board/hi3516ev200/hi3516ev300.generic.config \
-               br-ext-chip-hisilicon/board/hi3516ev200/hi3516ev300.4.15.config
-            # Disable features incompatible with mainline 6.6
-            printf '%s\n' \
-              '# CONFIG_CMA is not set' \
-              '# CONFIG_DMA_CMA is not set' \
-              'CONFIG_STACKPROTECTOR=y' \
-              'CONFIG_STACKPROTECTOR_STRONG=y' \
-              '# CONFIG_DEBUG_INFO is not set' \
-              '# CONFIG_FTRACE is not set' \
-              '# CONFIG_INPUT is not set' \
-              '# CONFIG_VT is not set' \
-              '# CONFIG_SOUND is not set' \
-              '# CONFIG_USB_SUPPORT is not set' \
-              '# CONFIG_NFS_FS is not set' \
-              '# CONFIG_DEBUG_KERNEL is not set' \
-              >> br-ext-chip-hisilicon/board/hi3516ev200/hi3516ev300.4.15.config
-          fi
-
-          # Create all-patches-neo with empty linux dir
-          mkdir -p general/package/all-patches-neo/linux
-          for d in general/package/all-patches/*/; do
-            name=$(basename "$d")
-            [ "$name" != "linux" ] && ln -sf "../all-patches/$name" "general/package/all-patches-neo/$name"
-          done
-
-          # Fragment comes before defconfig so defconfig can override
-          sed -i 's|cat $(CONFIG) $(PWD)/general/openipc.fragment|cat $(PWD)/general/openipc.fragment $(CONFIG)|' Makefile
-
-      - name: Setup neo target (EV300, 6.18/7.0 kernel)
-        if: (matrix.kernel == '6.18' || matrix.kernel == '7.0') && matrix.platform == 'hi3516ev300'
+      - name: Setup neo target (EV300, 7.0 kernel)
+        if: matrix.kernel == '7.0' && matrix.platform == 'hi3516ev300'
         run: |
           cd ../firmware
           BRANCH="upstream-patches"
