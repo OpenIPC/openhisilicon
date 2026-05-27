@@ -112,6 +112,7 @@ extern HI_BOOL VB_IsSupplementSupport(HI_U32 u32Mask);
 
 static HI_U32 g_u32ISP_STAT_DRC_PHY = HI_NULL;
 void ISP_IntBottomHalf(unsigned long data);
+static irqreturn_t ISP_IntBottomHalf_threaded(int irq, void *dev_id);
 
 int isp_irq = -1;
 
@@ -129,7 +130,7 @@ void __iomem            *reg_isp_base_va = HI_NULL;
 HI_U32                  proc_param = 0;        /* 0: close proc; n: write proc info's interval int num */
 HI_U32                  pwm_num = 1;
 HI_U32                  update_pos = 0;         /* 0: frame start; 1: frame end */
-bool                    int_bottomhalf = HI_FALSE;  /* 1 to enable interrupt processing at bottom half */
+bool                    int_bottomhalf = HI_TRUE;   /* preserved for ABI; bottom half is always deferred to a threaded IRQ now */
 HI_U32                  lsc_update_mode = 0;
 
 spinlock_t g_stIspLock;
@@ -2695,16 +2696,36 @@ static inline irqreturn_t ISP_ISR(int irq, void *id)
     pstDrvCtx->stIntSch.u32IspIntStatus = u32IspIntStatus;
     pstDrvCtx->stIntSch.u32PortIntStatus= u32PortIntStatus;
 
-    if ( !int_bottomhalf )
-    {
-        ISP_IntBottomHalf((unsigned long)pstDrvCtx);
-    }
-    else
-    {
-        tasklet_schedule(&pstDrvCtx->stIntSch.tsklet);
-    }
+    /*
+     * Wake the threaded bottom half. ISP_IntBottomHalf calls
+     * ISP_DRV_RegConfigSensor → hi_sensor_i2c_write → i2c_transfer,
+     * which acquires an rt_mutex; on this kernel rt_mutex_trylock
+     * WARNs in both hardirq (in_irq) and tasklet (in_serving_softirq)
+     * contexts, and i2c_transfer returns -EAGAIN, so sensor writes
+     * silently fail and AE destabilises. The threaded IRQ runs the
+     * bottom half in a dedicated kthread (SCHED_FIFO, prio 50) — the
+     * only legal caller for rt_mutex. See OpenIPC/firmware#2144 and
+     * openhisilicon#155/#178/#182/#186 for the regression chain that
+     * exposed this on V2A.
+     *
+     * Threaded IRQs do not coalesce: each hardirq returns
+     * IRQ_WAKE_THREAD and the kernel wakes the thread once per IRQ,
+     * so we do not drop frames the way schedule_work() would when
+     * the workqueue handler is slower than the IRQ rate.
+     *
+     * The int_bottomhalf module parameter is preserved for ABI
+     * compat but is now a no-op.
+     */
+    (void)int_bottomhalf;
+    return IRQ_WAKE_THREAD;
+}
 
-	return IRQ_HANDLED;
+static irqreturn_t ISP_IntBottomHalf_threaded(int irq, void *dev_id)
+{
+    ISP_DEV IspDev = 0;
+    ISP_CHECK_DEV(IspDev);
+    ISP_IntBottomHalf((unsigned long)ISP_DRV_GET_CTX(IspDev));
+    return IRQ_HANDLED;
 }
 void ISP_IntBottomHalf(unsigned long data)
 {
@@ -2971,7 +2992,8 @@ static int ISP_DRV_Init(void)
 
     HW_REG(IO_ADDRESS_PORT(ISP_INT_MASK)) = (0x0);
 
-    if (request_irq(isp_irq, ISP_ISR, IRQF_SHARED, "ISP", (void*)&g_astIspDrvCtx))
+    if (request_threaded_irq(isp_irq, ISP_ISR, ISP_IntBottomHalf_threaded,
+                             IRQF_SHARED, "ISP", (void*)&g_astIspDrvCtx))
     {
         printk(KERN_ERR  "ISP Register Interrupt Failed!\n");
         iounmap(reg_vicap_base_va);
@@ -2993,11 +3015,6 @@ static int ISP_DRV_Init(void)
         /* work bad in line WDR mode */
     //HW_REG(IO_ADDRESS_PORT(VC_NUM_ADDR)) = 0x2000000;
     ISP_ACM_DRV_Init();
-    if (int_bottomhalf)
-    {
-        tasklet_init(&g_astIspDrvCtx[0].stIntSch.tsklet, ISP_IntBottomHalf, (unsigned long)&g_astIspDrvCtx[0]);
-    }
-
     /* IspDev is always 0 on cv200 (single ISP). Passing it as the
      * tasklet data lets the tasklet hand it to openipc_frame_ts_push()
      * as the vi_chn parameter, matching the V4 / cv500 channel mapping. */
