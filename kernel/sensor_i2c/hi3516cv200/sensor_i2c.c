@@ -10,20 +10,28 @@
 #include <linux/delay.h>
 #include "isp_ext.h"
 
-/* HiSi vendor i2c extensions don't exist in mainline. Map to standard
- * i2c_master_send/recv. Drop the 16-bit reg/data flags — sensors that
- * require 16-bit register addressing will be broken at runtime (not at
- * build), needs follow-up kernel patch for true 16-bit support. */
-#ifndef hi_i2c_master_send
-#define hi_i2c_master_send i2c_master_send
-#endif
-#ifndef hi_i2c_master_recv
-#define hi_i2c_master_recv i2c_master_recv
-#endif
+/*
+ * OpenIPC's hisilicon-hi3516cv200 kernel patches i2c with a vendor
+ * extension: `hi_i2c_master_send` calls `hibvt_i2c_xfer` directly,
+ * bypassing i2c-core's rt_mutex_trylock so it is safe from the ISP_ISR
+ * hot path. The vendor uapi i2c.h also defines I2C_M_16BIT_REG and
+ * I2C_M_16BIT_DATA so the controller can switch reg/data width per
+ * transfer. On mainline kernels neither exists; we fall back to the
+ * standard i2c API (which WARNs from atomic context via
+ * rt_mutex_trylock — see OpenIPC/firmware#2144) and lose true 16-bit
+ * sensor addressing until a kernel-side patch lands.
+ *
+ * Gate the entire compat shim on the I2C_M_16BIT_REG macro — it is
+ * the only macro symbol the vendor provides that the preprocessor can
+ * see. The function symbol `hi_i2c_master_send` is an extern, so a
+ * naive `#ifndef hi_i2c_master_send` triggers the macro fallback even
+ * on the vendor kernel, silently routing all sensor writes through
+ * rt_mutex_trylock and making AE writes fail from ISR context.
+ */
 #ifndef I2C_M_16BIT_REG
+#define hi_i2c_master_send i2c_master_send
+#define hi_i2c_master_recv i2c_master_recv
 #define I2C_M_16BIT_REG 0
-#endif
-#ifndef I2C_M_16BIT_DATA
 #define I2C_M_16BIT_DATA 0
 #endif
 
