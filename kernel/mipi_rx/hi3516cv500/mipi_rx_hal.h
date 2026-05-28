@@ -15,12 +15,8 @@
 #define MIPI_RX_MIN_EXT_DATA_TYPE_BIT_WIDTH    8
 
 #define MIPI_CIL_INT_MASK   0x00003f3f
-/* Vsync bits unmasked so frame-start propagates to mipi_rx_interrupt_route,
- * where openipc_frame_ts dispatches it. Error-stat bits unchanged. */
-#define MIPI_INT_VSYNC      (1u << 4)   /* MIPI_CTRL_INT.int_vsync */
-#define LVDS_INT_VSYNC      (1u << 28)  /* LVDS_CTRL_INT.lvds_vsync */
-#define MIPI_CTRL_INT_MASK  0x00030013
-#define LVDS_CTRL_INT_MASK  0x1f110000
+#define MIPI_CTRL_INT_MASK  0x00030003
+#define LVDS_CTRL_INT_MASK  0x0f110000 /* lvds_vsync_msk and lane0~3_sync_err_msk ignore, not err int */
 #define MIPI_FRAME_INT_MASK 0x000f0000
 #define MIPI_PKT_INT1_MASK  0x0001000f
 #define MIPI_PKT_INT2_MASK  0x000f000f
