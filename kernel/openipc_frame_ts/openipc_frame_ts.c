@@ -39,12 +39,33 @@
 #define OPENIPC_FT_MAX_CHN        8
 #define OPENIPC_FT_MAX_EVT_TYPE   2   /* MIPI_FS + ISP_FEND so far */
 /*
- * Per-channel ring depth (power of 2). 256 events ≈ 0.5 s of buffer at
- * 240 fps × 2 event types — covers high-fps modes (imx335 800x480 240 fps)
- * with margin for reader-side jitter (scheduler latency, printf-to-disk).
- * At 32 B/event the per-channel cost is 8 KiB.
+ * Per-channel ring depth bounds. Must be powers of two — push uses
+ * `head & (depth-1)` wrap math, which only works for power-of-2 depths.
+ *
+ * Default 256 ≈ 0.5 s buffer at 240 fps × 2 event types (8 KiB/chn). Fine
+ * for the SR-anchor use case (reads cached state every ~5 s and tolerates
+ * stale entries).
+ *
+ * For per-frame consumers — frame-by-frame latency histograms, evidence
+ * chains, multi-sensor sync correlators — the default may be undersized
+ * if the reader's dispatch latency is bursty (libevent under RTSP+RTCP
+ * load on cv500 was observed to lose ~52 events/s during 30 s sessions,
+ * see openhisilicon#200). Raise via `insmod open_openipc_frame_ts
+ * ring_depth=4096` (16× default, ~8 s buffer; 128 KiB/chn × 8 chn = 1 MiB
+ * total worst case).
  */
-#define OPENIPC_FT_DEPTH          256
+#define OPENIPC_FT_DEPTH_MIN      16
+#define OPENIPC_FT_DEPTH_MAX      65536
+#define OPENIPC_FT_DEPTH_DEFAULT  256
+
+static unsigned int ring_depth = OPENIPC_FT_DEPTH_DEFAULT;
+module_param(ring_depth, uint, 0444);
+MODULE_PARM_DESC(ring_depth,
+	"Per-channel ring depth (power of 2, 16..65536, default 256). "
+	"Bump for per-frame consumers under bursty reader load.");
+
+static unsigned int g_ring_depth;
+static unsigned int g_ring_mask;
 /*
  * Drop double-pushes of the SAME event type within these intervals.
  *
@@ -74,7 +95,7 @@ static const u64 openipc_ft_min_interval_ns[OPENIPC_FT_MAX_EVT_TYPE] = {
 };
 
 struct openipc_ft_chn {
-	struct openipc_frame_ts_event ring[OPENIPC_FT_DEPTH];
+	struct openipc_frame_ts_event *ring;   /* kmalloc'd, g_ring_depth entries */
 	unsigned int head;
 	unsigned int tail;
 	u32          seq[OPENIPC_FT_MAX_EVT_TYPE];
@@ -170,12 +191,12 @@ static void strobe_on_event(unsigned int event_type)
 
 static inline unsigned int ring_count(const struct openipc_ft_chn *c)
 {
-	return (c->head - c->tail) & (OPENIPC_FT_DEPTH - 1);
+	return (c->head - c->tail) & g_ring_mask;
 }
 
 static inline bool ring_full(const struct openipc_ft_chn *c)
 {
-	return ring_count(c) == (OPENIPC_FT_DEPTH - 1);
+	return ring_count(c) == g_ring_mask;
 }
 
 static inline bool ring_empty(const struct openipc_ft_chn *c)
@@ -216,7 +237,7 @@ void openipc_frame_ts_push(unsigned int vi_chn, unsigned int event_type)
 
 	if (ring_full(c)) {
 		/* drop oldest */
-		c->tail = (c->tail + 1) & (OPENIPC_FT_DEPTH - 1);
+		c->tail = (c->tail + 1) & g_ring_mask;
 		c->dropped++;
 	}
 	e = &c->ring[c->head];
@@ -226,7 +247,7 @@ void openipc_frame_ts_push(unsigned int vi_chn, unsigned int event_type)
 	e->seq        = c->seq[event_type]++;
 	e->event_type = event_type;
 	e->reserved   = 0;
-	c->head = (c->head + 1) & (OPENIPC_FT_DEPTH - 1);
+	c->head = (c->head + 1) & g_ring_mask;
 	spin_unlock_irqrestore(&c->lock, flags);
 
 	strobe_on_event(event_type);
@@ -312,7 +333,7 @@ static bool pop_one(u32 chn_mask, u32 evt_mask,
 			struct openipc_frame_ts_event *cand =
 				&c->ring[c->tail];
 
-			c->tail = (c->tail + 1) & (OPENIPC_FT_DEPTH - 1);
+			c->tail = (c->tail + 1) & g_ring_mask;
 			if (event_passes(cand, chn_mask, evt_mask)) {
 				*out = *cand;
 				got = true;
@@ -607,13 +628,43 @@ static const struct attribute_group strobe_attr_group = {
 	.attrs = strobe_attrs,
 };
 
+static unsigned int sanitize_ring_depth(unsigned int req)
+{
+	unsigned int d = req;
+	unsigned int p;
+
+	if (d < OPENIPC_FT_DEPTH_MIN)
+		d = OPENIPC_FT_DEPTH_MIN;
+	if (d > OPENIPC_FT_DEPTH_MAX)
+		d = OPENIPC_FT_DEPTH_MAX;
+
+	/* round up to next power of 2 */
+	p = 1;
+	while (p < d)
+		p <<= 1;
+	return p;
+}
+
 static int __init openipc_ft_init(void)
 {
 	unsigned int i;
 	int ret;
 
-	for (i = 0; i < OPENIPC_FT_MAX_CHN; i++)
+	g_ring_depth = sanitize_ring_depth(ring_depth);
+	g_ring_mask  = g_ring_depth - 1;
+	if (g_ring_depth != ring_depth)
+		pr_info("openipc_frame_ts: ring_depth %u → %u (clamped + power-of-2)\n",
+			ring_depth, g_ring_depth);
+
+	for (i = 0; i < OPENIPC_FT_MAX_CHN; i++) {
+		g_chn[i].ring = kmalloc_array(g_ring_depth,
+			sizeof(struct openipc_frame_ts_event), GFP_KERNEL);
+		if (!g_chn[i].ring) {
+			ret = -ENOMEM;
+			goto err_free_rings;
+		}
 		spin_lock_init(&g_chn[i].lock);
+	}
 
 	init_waitqueue_head(&g_wait);
 
@@ -627,7 +678,7 @@ static int __init openipc_ft_init(void)
 	ret = misc_register(&g_miscdev);
 	if (ret) {
 		pr_err("openipc_frame_ts: misc_register failed: %d\n", ret);
-		return ret;
+		goto err_free_rings;
 	}
 
 	ret = sysfs_create_group(&g_miscdev.this_device->kobj,
@@ -636,13 +687,23 @@ static int __init openipc_ft_init(void)
 		pr_warn("openipc_frame_ts: strobe sysfs attrs not created: %d\n",
 			ret);
 
-	pr_info("openipc_frame_ts: /dev/%s minor=%d, event types=%u\n",
-		OPENIPC_FT_NAME, g_miscdev.minor, OPENIPC_FT_MAX_EVT_TYPE);
+	pr_info("openipc_frame_ts: /dev/%s minor=%d, event types=%u, ring_depth=%u\n",
+		OPENIPC_FT_NAME, g_miscdev.minor, OPENIPC_FT_MAX_EVT_TYPE,
+		g_ring_depth);
 	return 0;
+
+err_free_rings:
+	while (i--) {
+		kfree(g_chn[i].ring);
+		g_chn[i].ring = NULL;
+	}
+	return ret;
 }
 
 static void __exit openipc_ft_exit(void)
 {
+	unsigned int i;
+
 	sysfs_remove_group(&g_miscdev.this_device->kobj, &strobe_attr_group);
 	hrtimer_cancel(&g_strobe_timer);
 	mutex_lock(&g_strobe_lock);
@@ -650,6 +711,11 @@ static void __exit openipc_ft_exit(void)
 	strobe_release_gpio_locked();
 	mutex_unlock(&g_strobe_lock);
 	misc_deregister(&g_miscdev);
+
+	for (i = 0; i < OPENIPC_FT_MAX_CHN; i++) {
+		kfree(g_chn[i].ring);
+		g_chn[i].ring = NULL;
+	}
 }
 
 module_init(openipc_ft_init);
