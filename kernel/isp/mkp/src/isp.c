@@ -7938,6 +7938,37 @@ static inline int ISP_ISR(int irq, void *id)
 				s_fend_was_set[ViPipe] = fend_now;
 			}
 
+			/*
+			 * openipc_frame_ts: push a MIPI_FS event from the
+			 * ISP front-end FSTART status. The original V4 MIPI_FS
+			 * source from #155 lived in
+			 * kernel/mipi_rx/mipi_rx_hal.c's
+			 * mipi_rx_interrupt_route — unmasking the MIPI
+			 * controller's vsync IRQ and W1C-clearing it in the
+			 * ISR top half. That desynced the MIPI controller's
+			 * row state machine under sustained load (V4 nightly
+			 * regression — torn frames, VENC timeouts; gated off
+			 * by #195). ISP_INT_FE.FSTART fires once per frame
+			 * in this same ISR, is W1C-cleared by the existing
+			 * end-of-ISR ack, and needs no MIPI-controller mask
+			 * changes — same fix pattern as cv500 in the sibling
+			 * commit on this branch.
+			 *
+			 * Edge-detect mirrors the FEND block above: the raw
+			 * FSTART bit is level-held across the frame-start
+			 * window and the FE IRQ fires on both transitions.
+			 */
+			{
+				static bool s_fstart_was_set[ISP_MAX_PHY_PIPE_NUM];
+				bool fstart_now =
+					!!(u32IspRawIntStatus & ISP_INT_FE_FSTART);
+
+				if (fstart_now && !s_fstart_was_set[ViPipe])
+					openipc_frame_ts_push(ViPipe,
+							      OPENIPC_FT_EVT_MIPI_FS);
+				s_fstart_was_set[ViPipe] = fstart_now;
+			}
+
 			pstDrvCtx->stIntSch.u32IspIntStatus = u32IspIntStatus;
 			pstDrvCtx->stIntSch.u32PortIntStatus = u32PortIntFStart;
 			pstDrvCtx->stIntSch.u32PortIntErr = u32PortIntErr;

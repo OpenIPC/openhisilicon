@@ -6865,6 +6865,47 @@ hi_s32 isp_drv_int_status_process(hi_vi_pipe vi_pipe, hi_s32 vi_dev, isp_drv_ctx
         s_fend_was_set[vi_pipe] = fend_now;
     }
 
+    /*
+     * openipc_frame_ts MIPI_FS push — hook on VI port FSTART, the
+     * same source cv200 already uses successfully. The original
+     * cv500 MIPI_FS source from #155 unmasked the MIPI controller's
+     * own vsync IRQ and W1C-cleared the bit inside the ISR top half.
+     * Empirically that desyncs the MIPI controller's row state
+     * machine under 4K30fps load (IMX415 on hi3516av300_lite:
+     * persistent magenta cast + intermittent `Timeout from venc
+     * channel 0`; the same hazard pattern as the V4 regression
+     * #195 fixed). port_int_f_start (VI_PT_INT_FSTART) is read in
+     * this exact ISR slot, is non-zero exactly when a frame is
+     * starting, and needs no mask changes or W1C in atomic context.
+     *
+     * Edge-detect with the same per-pipe latch as the FEND block
+     * since port_int is masked through VI_PT_INT_MASK and may
+     * remain set across multiple ISR rounds during the frame-
+     * start window.
+     */
+    {
+        /*
+         * openipc_frame_ts MIPI_FS push — hook on ISP front-end FSTART.
+         * The cv500 ISP FE IRQ (g_isp_fe_irq) fires twice per frame:
+         * once with isp_raw_int & ISP_INT_FE_FSTART set (frame start),
+         * once with isp_raw_int & ISP_INT_FE_FEND set (frame end).
+         * Both bits are W1C-cleared by the existing
+         * `io_rw_fe_address(vi_pipe, ISP_INT_FE) = isp_raw_int;` at
+         * the end of this function — we just observe them here, no
+         * extra mask changes or W1C in atomic context. This is the
+         * non-disruptive replacement for the cv500 mipi_rx vsync
+         * hook from #155 that desynced the MIPI controller under
+         * sustained load (see OpenIPC/firmware#... and the V4
+         * sibling #195).
+         */
+        static bool s_fstart_was_set[ISP_MAX_PIPE_NUM];
+        bool fstart_now = !!(isp_raw_int & ISP_INT_FE_FSTART);
+
+        if (fstart_now && !s_fstart_was_set[vi_pipe])
+            openipc_frame_ts_push(vi_pipe, OPENIPC_FT_EVT_MIPI_FS);
+        s_fstart_was_set[vi_pipe] = fstart_now;
+    }
+
     int_sch.isp_int_status  = isp_int_status;
     int_sch.port_int_status = port_int_f_start;
     int_sch.port_int_err    = port_int_err;
