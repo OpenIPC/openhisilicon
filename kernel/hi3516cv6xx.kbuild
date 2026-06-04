@@ -1,0 +1,266 @@
+# hi3516cv6xx SoC family (V5 — Hi3516CV610 / Hi3516CV608) build configuration
+#
+# Vendor SDK: Hi3516CV610_SDK_V1.0.2.0
+# Kernel target: openipc/linux 5.10.221, ARMv7 Cortex-A7, musl
+#
+# Layout under kernel/:
+#   obj/hi3516cv6xx/        vendor closed-source .o blobs (extracted from out/obj/mod_*.o)
+#   init/hi3516cv6xx/       vendor-shipped init wrapper source (out/init/src/*_init.c)
+#   include/hi3516cv6xx/    vendor SDK public headers (out/include/*.h + exp_inc/)
+#   osal/hi3516cv6xx/       vendor OSAL source (osal/src/linux/kernel/*.c)
+#   osal/hi3516cv6xx/mmz/   vendor MMZ allocator source (common/mem/mmz/linux/*.c)
+#   sys_config/hi3516cv6xx/ vendor sysconfig source (interdrv/sysconfig/*.c)
+#   mipi_rx/hi3516cv6xx/    vendor mipi_rx source (interdrv/mipi_rx/source/**)
+#
+# Unlike V4 cv500, V5 ships:
+#  * the OSAL/MMZ/sys_config layer as full source
+#  * every module's init wrapper as full source (out/init/src/<X>_init.c)
+# so only the closed MPP/ISP/codec payloads need blob-linking.
+
+# --- SDK include paths ---
+ccflags-y += -I$(src)/include/hi3516cv6xx
+ccflags-y += -I$(src)/include/hi3516cv6xx/exp_inc
+ccflags-y += -I$(src)/include/hi3516cv6xx/module
+ccflags-y += -I$(src)/osal/hi3516cv6xx
+ccflags-y += -I$(src)/osal/hi3516cv6xx/include
+ccflags-y += -I$(src)/osal/hi3516cv6xx/media
+ccflags-y += -I$(src)/init/hi3516cv6xx
+
+# V5 vendor blobs target ot_* type / OT_LOG identifiers (vs hi_* on V4).
+ccflags-y += -DCHIP_TYPE_hi3516cv6xx
+ccflags-y += -DOT_TARGET_BOARD
+
+# Vendor SDK relies on CONFIG_OT_* macros from autoconf.h (e.g.
+# CONFIG_OT_SYS_KOL_SUPPORT gates the syskol_sleep_{suspend,resume}
+# exports in sys_ctrl.c). Force-include it so every TU sees the same
+# config the vendor closed blobs were built against.
+ccflags-y += -include $(src)/include/hi3516cv6xx/autoconf.h
+
+# --- OSAL module (full vendor source) ---
+CV6XX_OSAL_DIR = osal/hi3516cv6xx
+CV6XX_OSAL_SRCS := \
+	$(CV6XX_OSAL_DIR)/osal_addr.c \
+	$(CV6XX_OSAL_DIR)/osal_atomic.c \
+	$(CV6XX_OSAL_DIR)/osal_barrier.c \
+	$(CV6XX_OSAL_DIR)/osal_bitmap.c \
+	$(CV6XX_OSAL_DIR)/osal_cache.c \
+	$(CV6XX_OSAL_DIR)/osal_completion.c \
+	$(CV6XX_OSAL_DIR)/osal_debug.c \
+	$(CV6XX_OSAL_DIR)/osal_delayedwork.c \
+	$(CV6XX_OSAL_DIR)/osal_device.c \
+	$(CV6XX_OSAL_DIR)/osal_fileops.c \
+	$(CV6XX_OSAL_DIR)/osal_init.c \
+	$(CV6XX_OSAL_DIR)/osal_interrupt.c \
+	$(CV6XX_OSAL_DIR)/osal_math.c \
+	$(CV6XX_OSAL_DIR)/osal_mutex.c \
+	$(CV6XX_OSAL_DIR)/osal_notifier.c \
+	$(CV6XX_OSAL_DIR)/osal_platform.c \
+	$(CV6XX_OSAL_DIR)/osal_proc.c \
+	$(CV6XX_OSAL_DIR)/osal_rtc.c \
+	$(CV6XX_OSAL_DIR)/osal_rwlock.c \
+	$(CV6XX_OSAL_DIR)/osal_semaphore.c \
+	$(CV6XX_OSAL_DIR)/osal_spinlock.c \
+	$(CV6XX_OSAL_DIR)/osal_string.c \
+	$(CV6XX_OSAL_DIR)/osal_task.c \
+	$(CV6XX_OSAL_DIR)/osal_timer.c \
+	$(CV6XX_OSAL_DIR)/osal_wait.c \
+	$(CV6XX_OSAL_DIR)/osal_workqueue.c \
+	$(CV6XX_OSAL_DIR)/media/base.c \
+	$(CV6XX_OSAL_DIR)/media/ot_media.c
+
+$(PREFIX)osal-objs := $(CV6XX_OSAL_SRCS:%.c=%.o)
+obj-m += $(PREFIX)osal.o
+
+# --- MMZ module (full vendor source) ---
+# V5 ships ot_mmz.ko as a *separate* module from ot_osal.ko.
+CV6XX_MMZ_DIR = osal/hi3516cv6xx/mmz
+CV6XX_MMZ_SRCS := \
+	$(CV6XX_MMZ_DIR)/media_mem.c \
+	$(CV6XX_MMZ_DIR)/mmz_init.c \
+	$(CV6XX_MMZ_DIR)/mmz_userdev.c \
+	$(CV6XX_MMZ_DIR)/cma_allocator.c \
+	$(CV6XX_MMZ_DIR)/ot_allocator.c
+
+$(PREFIX)mmz-objs := $(CV6XX_MMZ_SRCS:%.c=%.o)
+ccflags-y += -I$(src)/$(CV6XX_MMZ_DIR)
+ccflags-y += -I$(src)/$(CV6XX_MMZ_DIR)/include
+obj-m += $(PREFIX)mmz.o
+
+# --- sys_config module (full vendor source) ---
+CV6XX_SYS_CFG_DIR = sys_config/hi3516cv6xx
+CV6XX_SYS_CFG_SRCS := \
+	$(CV6XX_SYS_CFG_DIR)/sys_cfg.c \
+	$(CV6XX_SYS_CFG_DIR)/sys_ctrl.c \
+	$(CV6XX_SYS_CFG_DIR)/clk_cfg.c \
+	$(CV6XX_SYS_CFG_DIR)/pin_mux.c
+
+# Note: sys_config in V5 is the *module* name used at load time.
+$(PREFIX)sys_config-objs := $(CV6XX_SYS_CFG_SRCS:%.c=%.o)
+ccflags-y += -I$(src)/$(CV6XX_SYS_CFG_DIR)
+obj-m += $(PREFIX)sys_config.o
+
+# --- Blob modules (vendor mod_<X>.o + vendor-shipped init wrapper) ---
+# Pattern: open_<mod>-objs := obj/hi3516cv6xx/hi_<mod>.o init/hi3516cv6xx/<mod>_init.o
+
+CV6XX_BLOB_DIR = obj/hi3516cv6xx
+CV6XX_INIT_DIR = init/hi3516cv6xx
+
+$(PREFIX)base-objs    := $(CV6XX_BLOB_DIR)/hi_base.o    $(CV6XX_INIT_DIR)/base_init.o
+$(PREFIX)vb-objs      := $(CV6XX_BLOB_DIR)/hi_vb.o      $(CV6XX_INIT_DIR)/vb_init.o
+$(PREFIX)vca-objs     := $(CV6XX_BLOB_DIR)/hi_vca.o     $(CV6XX_INIT_DIR)/vca_init.o
+$(PREFIX)sys-objs     := $(CV6XX_BLOB_DIR)/hi_sys.o     $(CV6XX_INIT_DIR)/sys_init.o
+$(PREFIX)rgn-objs     := $(CV6XX_BLOB_DIR)/hi_rgn.o     $(CV6XX_INIT_DIR)/rgn_init.o
+$(PREFIX)vpp-objs     := $(CV6XX_BLOB_DIR)/hi_vpp.o     $(CV6XX_INIT_DIR)/vpp_init.o
+$(PREFIX)vgs-objs     := $(CV6XX_BLOB_DIR)/hi_vgs.o     $(CV6XX_INIT_DIR)/vgs_init.o
+$(PREFIX)vpss-objs    := $(CV6XX_BLOB_DIR)/hi_vpss.o    $(CV6XX_INIT_DIR)/vpss_init.o
+$(PREFIX)vi-objs      := $(CV6XX_BLOB_DIR)/hi_vi.o      $(CV6XX_INIT_DIR)/vi_init.o
+$(PREFIX)isp-objs     := $(CV6XX_BLOB_DIR)/hi_isp.o     $(CV6XX_INIT_DIR)/isp_init.o
+$(PREFIX)chnl-objs    := $(CV6XX_BLOB_DIR)/hi_chnl.o    $(CV6XX_INIT_DIR)/chnl_init.o
+$(PREFIX)rc-objs      := $(CV6XX_BLOB_DIR)/hi_rc.o      $(CV6XX_INIT_DIR)/rc_init.o
+obj-m += $(PREFIX)base.o
+obj-m += $(PREFIX)vb.o
+obj-m += $(PREFIX)vca.o
+obj-m += $(PREFIX)sys.o
+obj-m += $(PREFIX)rgn.o
+obj-m += $(PREFIX)vpp.o
+obj-m += $(PREFIX)vgs.o
+obj-m += $(PREFIX)vpss.o
+obj-m += $(PREFIX)vi.o
+obj-m += $(PREFIX)isp.o
+obj-m += $(PREFIX)chnl.o
+obj-m += $(PREFIX)rc.o
+
+# --- M3: encoder ---
+$(PREFIX)venc-objs    := $(CV6XX_BLOB_DIR)/hi_venc.o    $(CV6XX_INIT_DIR)/venc_init.o
+$(PREFIX)h264e-objs   := $(CV6XX_BLOB_DIR)/hi_h264e.o   $(CV6XX_INIT_DIR)/h264e_init.o
+$(PREFIX)h265e-objs   := $(CV6XX_BLOB_DIR)/hi_h265e.o   $(CV6XX_INIT_DIR)/h265e_init.o
+$(PREFIX)jpege-objs   := $(CV6XX_BLOB_DIR)/hi_jpege.o   $(CV6XX_INIT_DIR)/jpege_init.o
+$(PREFIX)svac3e-objs  := $(CV6XX_BLOB_DIR)/hi_svac3e.o  $(CV6XX_INIT_DIR)/svac3e_init.o
+obj-m += $(PREFIX)venc.o
+obj-m += $(PREFIX)h264e.o
+obj-m += $(PREFIX)h265e.o
+obj-m += $(PREFIX)jpege.o
+obj-m += $(PREFIX)svac3e.o
+
+# --- M5: audio (aio/ai/ao/aenc/adec/acodec) ---
+$(PREFIX)aio-objs     := $(CV6XX_BLOB_DIR)/hi_aio.o     $(CV6XX_INIT_DIR)/aio_init.o
+$(PREFIX)ai-objs      := $(CV6XX_BLOB_DIR)/hi_ai.o      $(CV6XX_INIT_DIR)/ai_init.o
+$(PREFIX)ao-objs      := $(CV6XX_BLOB_DIR)/hi_ao.o      $(CV6XX_INIT_DIR)/ao_init.o
+$(PREFIX)aenc-objs    := $(CV6XX_BLOB_DIR)/hi_aenc.o    $(CV6XX_INIT_DIR)/aenc_init.o
+$(PREFIX)adec-objs    := $(CV6XX_BLOB_DIR)/hi_adec.o    $(CV6XX_INIT_DIR)/adec_init.o
+$(PREFIX)acodec-objs  := $(CV6XX_BLOB_DIR)/hi_acodec.o  $(CV6XX_INIT_DIR)/acodec_init.o
+obj-m += $(PREFIX)aio.o
+obj-m += $(PREFIX)ai.o
+obj-m += $(PREFIX)ao.o
+obj-m += $(PREFIX)aenc.o
+obj-m += $(PREFIX)adec.o
+obj-m += $(PREFIX)acodec.o
+
+# --- M5/M6: AI / SVP / IVE / PM / misc ---
+$(PREFIX)ive-objs     := $(CV6XX_BLOB_DIR)/hi_ive.o     $(CV6XX_INIT_DIR)/ive_init.o
+$(PREFIX)svp_npu-objs := $(CV6XX_BLOB_DIR)/hi_svp_npu.o $(CV6XX_INIT_DIR)/svp_npu_init.o
+$(PREFIX)aiisp-objs   := $(CV6XX_BLOB_DIR)/hi_aiisp.o   $(CV6XX_INIT_DIR)/aiisp_init.o
+$(PREFIX)pm-objs      := $(CV6XX_BLOB_DIR)/hi_pm.o      $(CV6XX_INIT_DIR)/pm_init.o
+$(PREFIX)uvc-objs     := $(CV6XX_BLOB_DIR)/hi_uvc.o     $(CV6XX_INIT_DIR)/uvc_init.o
+$(PREFIX)devstat-objs := $(CV6XX_BLOB_DIR)/hi_devstat.o $(CV6XX_INIT_DIR)/devstat_init.o
+$(PREFIX)user_proc-objs := $(CV6XX_BLOB_DIR)/hi_user_proc.o $(CV6XX_INIT_DIR)/user_proc_init.o
+obj-m += $(PREFIX)ive.o
+obj-m += $(PREFIX)svp_npu.o
+obj-m += $(PREFIX)aiisp.o
+obj-m += $(PREFIX)pm.o
+obj-m += $(PREFIX)uvc.o
+obj-m += $(PREFIX)devstat.o
+obj-m += $(PREFIX)user_proc.o
+
+# --- M4: source-driven peripherals (mipi_rx, sensor_i2c, sensor_spi,
+# pwm, piris, wdt, adc, spi_dma_transfer, user) ---
+
+# Shared ISP headers used by sensor_i2c / sensor_spi / piris.
+# Vendor Makefile pattern: -I$(ISP_ROOT)/ext_inc + -I$(ISP_ROOT)/kernel/mkp/include
+ccflags-y += -I$(src)/include/hi3516cv6xx/isp_ext_inc
+ccflags-y += -I$(src)/include/hi3516cv6xx/isp_mkp_inc
+ccflags-y += -I$(src)/include/hi3516cv6xx/isp_arch_inc
+ccflags-y += -I$(src)/include/hi3516cv6xx/isp_fw_arch_inc
+ccflags-y += -I$(src)/include/hi3516cv6xx/isp_fw_inc
+
+# Source-driven driver init wrappers live in init/hi3516cv6xx/source_drv_init/
+# and carry the module_init/module_exit/MODULE_LICENSE("GPL") boilerplate that
+# is missing from the bare driver C files. Required: without MODULE_LICENSE
+# the modules can't import EXPORT_SYMBOL_GPL symbols (i2c_new_client_device,
+# spi_sync, etc.) which is what made sensor_i2c / sensor_spi fail to load
+# during the first hardware test.
+CV6XX_SDRV_INIT = init/hi3516cv6xx/source_drv_init
+ccflags-y += -I$(src)/$(CV6XX_SDRV_INIT)
+
+# Watchdog
+ccflags-y += -I$(src)/wdt/hi3516cv6xx/arch
+$(PREFIX)wdt-objs        := wdt/hi3516cv6xx/ot_wtdg.o $(CV6XX_SDRV_INIT)/wtdg_init.o
+obj-m += $(PREFIX)wdt.o
+
+# ADC
+ccflags-y += -I$(src)/adc/hi3516cv6xx/arch
+$(PREFIX)adc-objs        := adc/hi3516cv6xx/adc.o $(CV6XX_SDRV_INIT)/adc_init.o
+obj-m += $(PREFIX)adc.o
+
+# Sensor I2C
+ccflags-y += -I$(src)/sensor_i2c/hi3516cv6xx/arch
+$(PREFIX)sensor_i2c-objs := sensor_i2c/hi3516cv6xx/sensor_i2c.o $(CV6XX_SDRV_INIT)/sensor_i2c_init.o
+obj-m += $(PREFIX)sensor_i2c.o
+
+# Sensor SPI
+ccflags-y += -I$(src)/sensor_spi/hi3516cv6xx
+ccflags-y += -I$(src)/sensor_spi/hi3516cv6xx/arch
+$(PREFIX)sensor_spi-objs := sensor_spi/hi3516cv6xx/sensor_spi.o $(CV6XX_SDRV_INIT)/sensor_spi_init.o
+obj-m += $(PREFIX)sensor_spi.o
+
+# PWM
+ccflags-y += -I$(src)/pwm/hi3516cv6xx
+ccflags-y += -I$(src)/pwm/hi3516cv6xx/arch
+$(PREFIX)pwm-objs        := pwm/hi3516cv6xx/pwm.o $(CV6XX_SDRV_INIT)/pwm_init.o
+obj-m += $(PREFIX)pwm.o
+
+# PIRIS
+ccflags-y += -I$(src)/piris/hi3516cv6xx
+ccflags-y += -I$(src)/piris/hi3516cv6xx/arch
+$(PREFIX)piris-objs      := piris/hi3516cv6xx/piris.o piris/hi3516cv6xx/arch/piris_hal.o $(CV6XX_SDRV_INIT)/piris_init.o
+obj-m += $(PREFIX)piris.o
+
+# SPI DMA transfer (multi-source)
+ccflags-y += -I$(src)/spi_dma_transfer/hi3516cv6xx
+$(PREFIX)spi_dma_transfer-objs := \
+	spi_dma_transfer/hi3516cv6xx/transfer_dev.o \
+	spi_dma_transfer/hi3516cv6xx/transfer_data.o \
+	spi_dma_transfer/hi3516cv6xx/hal_spi.o \
+	spi_dma_transfer/hi3516cv6xx/hal_dma.o
+obj-m += $(PREFIX)spi_dma_transfer.o
+
+# User chrdev (otuser.c)
+ccflags-y += -I$(src)/user/hi3516cv6xx
+$(PREFIX)user-objs       := user/hi3516cv6xx/otuser.o
+obj-m += $(PREFIX)user.o
+
+# MIPI RX (multi-source, multi-include)
+CV6XX_MIPI_DIR = mipi_rx/hi3516cv6xx
+ccflags-y += -I$(src)/$(CV6XX_MIPI_DIR)
+ccflags-y += -I$(src)/$(CV6XX_MIPI_DIR)/drv
+ccflags-y += -I$(src)/$(CV6XX_MIPI_DIR)/drv/hal
+ccflags-y += -I$(src)/$(CV6XX_MIPI_DIR)/drv/hal/v100
+ccflags-y += -I$(src)/$(CV6XX_MIPI_DIR)/drv/hal/v100/reg
+ccflags-y += -I$(src)/$(CV6XX_MIPI_DIR)/drv/platform/linux
+ccflags-y += -I$(src)/$(CV6XX_MIPI_DIR)/drv/osal/os
+ccflags-y += -I$(src)/$(CV6XX_MIPI_DIR)/include/kapi
+ccflags-y += -I$(src)/$(CV6XX_MIPI_DIR)/include/ioctl
+$(PREFIX)mipi_rx-objs := \
+	$(CV6XX_MIPI_DIR)/drv/drv_mipirx_proc.o \
+	$(CV6XX_MIPI_DIR)/drv/drv_mipirx_kapi.o \
+	$(CV6XX_MIPI_DIR)/drv/drv_mipirx_comm.o \
+	$(CV6XX_MIPI_DIR)/drv/drv_mipirx_ioctl.o \
+	$(CV6XX_MIPI_DIR)/drv/hal/hal_mipirx_comm.o \
+	$(CV6XX_MIPI_DIR)/drv/hal/v100/hal_mipirx_sensor.o \
+	$(CV6XX_MIPI_DIR)/drv/hal/v100/hal_mipirx_lvds_ctrl.o \
+	$(CV6XX_MIPI_DIR)/drv/hal/v100/hal_mipirx_crg.o \
+	$(CV6XX_MIPI_DIR)/drv/hal/v100/hal_mipirx_mipi_ctrl.o \
+	$(CV6XX_MIPI_DIR)/drv/hal/v100/hal_mipirx_phy.o \
+	$(CV6XX_MIPI_DIR)/drv/platform/linux/drv_mipirx_plt.o \
+	$(CV6XX_MIPI_DIR)/drv/osal/os/drv_mipirx_osal.o
+obj-m += $(PREFIX)mipi_rx.o

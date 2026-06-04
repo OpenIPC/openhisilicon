@@ -38,6 +38,15 @@ ifeq ($(CHIPARCH),hi3519v101)
     SUBDIRS := $(filter ./sensor/hi3519v101/%,$(SUBDIRS))
 endif
 
+# hi3516cv6xx (V5): build sensor drivers from SDK source. Exclude the
+# common/ subdir from the per-sensor build loop — sensor_common.c is
+# pulled into each sensor's link via the per-sensor Makefile, so common/
+# itself has no Makefile and would fail the outer `make -C`.
+ifeq ($(CHIPARCH),hi3516cv6xx)
+    SUBDIRS := $(filter ./sensor/hi3516cv6xx/%,$(SUBDIRS))
+    SUBDIRS := $(filter-out ./sensor/hi3516cv6xx/common/,$(SUBDIRS))
+endif
+
 all:
 	@failed=""; \
 	for dir in $(SUBDIRS); do \
