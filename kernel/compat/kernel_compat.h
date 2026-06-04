@@ -230,11 +230,14 @@ static inline void compat_do_gettimeofday(struct compat_timeval *tv)
  */
 
 /*
- * linux/dma-contiguous.h merged into linux/dma-map-ops.h in 5.x.
+ * linux/dma-contiguous.h merged into linux/dma-map-ops.h in 5.x. The
+ * exact cutoff differs between upstream (5.16) and the openipc/linux
+ * branches we build against — hisilicon-hi3516cv6xx already merged the
+ * two on 5.10.221 — so probe by header presence instead of version.
  */
-#if LINUX_VERSION_CODE >= KERNEL_VERSION(5, 16, 0)
+#if __has_include(<linux/dma-map-ops.h>)
 #include <linux/dma-map-ops.h>
-#elif LINUX_VERSION_CODE >= KERNEL_VERSION(3, 5, 0)
+#elif __has_include(<linux/dma-contiguous.h>)
 #include <linux/dma-contiguous.h>
 #endif
 
