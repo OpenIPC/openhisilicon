@@ -1,6 +1,6 @@
 # OpenHisilicon
 
-Open-source kernel modules and sensor libraries for HiSilicon/Goke IP camera SoCs, covering seven chip generations from V1 through V4.
+Open-source kernel modules and sensor libraries for HiSilicon/Goke IP camera SoCs, covering eight chip generations from V1 through V5.
 
 Replaces the proprietary SDK that HiSilicon ships to camera manufacturers. Used by [OpenIPC](https://openipc.org/) firmware and can be used independently in your own projects.
 
@@ -16,6 +16,7 @@ Replaces the proprietary SDK that HiSilicon ships to camera manufacturers. Used 
 | V3.5 | hi3516cv500 | hi3516cv500, hi3516av300, hi3516dv300 | Cortex-A7 | `hi3516cv500` |
 | V4 | hi3516ev200 | hi3516ev200, hi3516ev300, hi3518ev300, hi3516dv200 | Cortex-A7 | `hi3516ev200` |
 | V4/Goke | gk7205v200 | gk7205v200, gk7205v300, gk7202v300, gk7605v100 | Cortex-A7 | `gk7205v200` |
+| V5 | hi3516cv610 | hi3516cv610, hi3516cv608 | Cortex-A7 | `hi3516cv6xx` |
 
 Generation labels match [qemu-hisilicon](https://github.com/widgetii/qemu-hisilicon). The hi3516ev200 and gk7205v200 are pin-compatible — the same source compiles for both via `CHIPARCH`. A [conversion script](scripts/hi2gk.sh) translates between HiSilicon and Goke naming.
 
@@ -87,6 +88,7 @@ No `#ifdef` soup in driver code — the compat header handles everything. This i
 | 3.0.8 (vendor) | Production | hi3516cv100 |
 | 3.18.20 (vendor) | Production | hi3516cv300, hi3519v101 |
 | 4.9.37 (vendor) | Production | hi3516cv200, hi3516av100, hi3516cv500, hi3516ev300, gk7205v200 |
+| 5.10.221 (vendor) | Production | hi3516cv6xx |
 | 6.6 LTS | Production | hi3516ev300 (neo) |
 | 6.18 LTS | Tested | hi3516ev300 (CI-verified) |
 | 7.0-rc6 (mainline) | Production | hi3516ev300 (neo) |
@@ -101,6 +103,7 @@ No `#ifdef` soup in driver code — the compat header handles everything. This i
 │   ├── hi3516cv500.kbuild       V3.5 monolithic build config (OSAL)
 │   ├── hi3516av100.kbuild       V2A monolithic build config
 │   ├── hi3519v101.kbuild        V3A monolithic build config (OSAL)
+│   ├── hi3516cv6xx.kbuild       V5 monolithic build config (OSAL + MMZ split)
 │   ├── Kbuild                   Main entry — dispatches by CHIPARCH
 │   ├── compat/                  Kernel version compatibility (3.0 – 7.0)
 │   ├── obj/<chiparch>/          Pre-built vendor .o blobs
