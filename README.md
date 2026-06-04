@@ -51,6 +51,7 @@ The generation **number** tracks the peripheral address map and SDK architecture
 | V3A | 3519V101 | Cortex-A17+A7 | OSAL | `.ko` blobs via objcopy | V3 SDK with big.LITTLE for 4K |
 | V3.5 | CV500 | Cortex-A7 | OSAL | Raw `.o` + init wrappers | Incremental V3, snake_case SDK symbols |
 | V4 | EV200 | Cortex-A7 | OSAL | Source-based Kbuild | Redesigned modular SDK, Goke compat, mainline kernel |
+| V5 | CV610 | Cortex-A7 | OSAL + MMZ split | Raw `.o` + vendor init wrappers | Hi3516CV610/CV608, MMZ separated from OSAL again, vendor ships init wrappers as source |
 
 ### Dealing with vendor .ko blobs
 
@@ -61,7 +62,7 @@ A vendor `.ko` is an ELF relocatable object containing:
 
 We use two strategies to build new `.ko` modules that incorporate this vendor code:
 
-**Strategy A: Raw `.o` blobs** (CV300, CV500 SDKs). The SDK provides separate `.o` object files without `init_module`/`cleanup_module`. We write a thin C wrapper (`init/hi3516cv300/base_init.c`) that calls the blob's init function and re-exports its symbols, then link them together via Kbuild into a new `open_base.ko`. Clean and simple.
+**Strategy A: Raw `.o` blobs** (CV300, CV500, CV6xx SDKs). The SDK provides separate `.o` object files without `init_module`/`cleanup_module`. We write a thin C wrapper (`init/hi3516cv300/base_init.c`) that calls the blob's init function and re-exports its symbols, then link them together via Kbuild into a new `open_base.ko`. Clean and simple. The CV6xx SDK is unusually generous: vendor ships the init wrappers *as source* (`out/init/src/*_init.c`), so we drop them in directly instead of hand-writing them.
 
 **Strategy B: objcopy on `.ko`** (CV100, CV200, AV100, 3519V101). The SDK only provides complete `.ko` files. We use `objcopy --redefine-sym init_module=_renamed_init` to rename the embedded entry points, write a new wrapper that forwards to them, and link both into our `open_*.ko`. The blob's `__ksymtab_*` entries survive, so the wrapper must not re-export the same symbols.
 
@@ -117,6 +118,8 @@ No `#ifdef` soup in driver code — the compat header handles everything. This i
 │   ├── mipi_rx/<chiparch>/      MIPI CSI-2 receiver source
 │   ├── cipher/<chiparch>/       Cipher / crypto source
 │   ├── wdt/, ir/, rtc/, pwm/   Peripheral driver sources
+│   ├── adc/, piris/             Additional peripheral driver sources
+│   ├── spi_dma_transfer/, user/ V5 peripheral driver sources
 │   ├── sensor_i2c/, sensor_spi/ Sensor bus driver sources
 │   ├── osal/linux/kernel/       V4 shared OSAL (hi3516ev200 path)
 │   ├── base/, sys/, vi/, ...    V4 per-module Kbuild dirs
@@ -156,6 +159,7 @@ make BOARD=hi3516cv500_lite br-hisilicon-opensdk   # V3.5
 make BOARD=hi3516ev300_lite br-hisilicon-opensdk   # V4
 make BOARD=gk7205v200_lite br-hisilicon-opensdk    # V4/Goke
 make BOARD=hi3516ev300_neo br-hisilicon-opensdk    # V4 mainline kernel
+make BOARD=hi3516cv6xx_lite br-hisilicon-opensdk   # V5
 ```
 
 ### Standalone (for development)
@@ -180,63 +184,69 @@ EV200, the side-by-side porting diffs, and how to identify which SDK a
 sensor driver found online came from — see
 [**docs/sensor-driver-api.md**](docs/sensor-driver-api.md).
 
-| Manufacturer | Sensor | CV100 | CV200 | AV100 | CV300 | 3519V101 | CV500 | EV200 |
-|---|---|---|---|---|---|---|---|---|
-| **Sony** | IMX104 | x | | | | | | |
-| | IMX117 | | | x | | | | |
-| | IMX122 | x | | | | | | |
-| | IMX123 | | | x | | | | |
-| | IMX138 | x | | | | | | |
-| | IMX178 | | | x | | | | |
-| | IMX185 | | | x | | | | |
-| | IMX222 | | x | | | | | |
-| | IMX226 | | | | | x | | |
-| | IMX236 | x | | | | | | |
-| | IMX274 | | | | | x | | |
-| | IMX290 | | | | x | x | | x |
-| | IMX307 | | | | x | | x | x |
-| | IMX323 | | | | x | | | |
-| | IMX326 | | | | | x | | |
-| | IMX327 | | | | | x | x | x |
-| | IMX335 | | | | | | x | x |
-| | IMX385 | | | | x | x | | |
-| | IMX390 | | | | | | x | |
-| | IMX415 | | | | | | x | |
-| | IMX458 | | | | | | x | |
-| | ICX692 | x | | | | | | |
-| **Aptina** | AR0130 | x | x | | | | | |
-| | AR0230 | | x | x | | | | |
-| | AR0237 | | | x | x | | | x |
-| | AR0330 | x | | x | | | | |
-| | MT9P006 | x | | | | | | |
-| | 9M034 | x | x | | | | | |
-| **OmniVision** | OV2718 | | x | | x | | | x |
-| | OV4689 | | | x | | x | | |
-| | OV5658 | | | x | | | | |
-| | OV9712 | x | x | | | | | |
-| | OV9732 | | x | | | | | |
-| | OV9750 | | x | | | | | |
-| | OV9752 | | x | | | | | |
-| | OS04B10 | | | | | | x | |
-| | OS05A | | | | | x | x | x |
-| | OS08A | | | | | x | x | |
-| **SmartSens** | SC1135 | | x | | | | | |
-| | SC2035 | | x | | | | | |
-| | SC2135 | | x | | | | | |
-| | SC2235 | | x | | x | | | x |
-| | SC4210 | | | | | | x | |
-| | SC4236 | | | x | | | | x |
-| **Panasonic** | MN34031 | x | | | | | | |
-| | MN34041 | x | | | | | | |
-| | MN34220 | | | x | | | x | |
-| | MN34222 | | x | | | | | |
-| **Silicon Optronics (JX)** | JXH22 | x | | | | | | |
-| | JXH42 | x | x | | | | | |
-| | JXH63 | | | | | | | x |
-| | JXF22 | | x | | x | | | |
-| | JXF23 | | x | | | | | |
-| | JXF37 | | | | | | | x |
-| **GalaxyCore** | GC2053 | | | | | | x | x |
+| Manufacturer | Sensor | CV100 | CV200 | AV100 | CV300 | 3519V101 | CV500 | EV200 | CV6xx |
+|---|---|---|---|---|---|---|---|---|---|
+| **Sony** | IMX104 | x | | | | | | | |
+| | IMX117 | | | x | | | | | |
+| | IMX122 | x | | | | | | | |
+| | IMX123 | | | x | | | | | |
+| | IMX138 | x | | | | | | | |
+| | IMX178 | | | x | | | | | |
+| | IMX185 | | | x | | | | | |
+| | IMX222 | | x | | | | | | |
+| | IMX226 | | | | | x | | | |
+| | IMX236 | x | | | | | | | |
+| | IMX274 | | | | | x | | | |
+| | IMX290 | | | | x | x | | x | |
+| | IMX307 | | | | x | | x | x | |
+| | IMX323 | | | | x | | | | |
+| | IMX326 | | | | | x | | | |
+| | IMX327 | | | | | x | x | x | |
+| | IMX335 | | | | | | x | x | |
+| | IMX385 | | | | x | x | | | |
+| | IMX390 | | | | | | x | | |
+| | IMX415 | | | | | | x | | |
+| | IMX458 | | | | | | x | | |
+| | ICX692 | x | | | | | | | |
+| **Aptina** | AR0130 | x | x | | | | | | |
+| | AR0230 | | x | x | | | | | |
+| | AR0237 | | | x | x | | | x | |
+| | AR0330 | x | | x | | | | | |
+| | MT9P006 | x | | | | | | | |
+| | 9M034 | x | x | | | | | | |
+| **OmniVision** | OV2718 | | x | | x | | | x | |
+| | OV4689 | | | x | | x | | | |
+| | OV5658 | | | x | | | | | |
+| | OV9712 | x | x | | | | | | |
+| | OV9732 | | x | | | | | | |
+| | OV9750 | | x | | | | | | |
+| | OV9752 | | x | | | | | | |
+| | OS04B10 | | | | | | x | | |
+| | OS04D10 | | | | | | | | x |
+| | OS05A | | | | | x | x | x | |
+| | OS08A | | | | | x | x | | |
+| **SmartSens** | SC1135 | | x | | | | | | |
+| | SC2035 | | x | | | | | | |
+| | SC2135 | | x | | | | | | |
+| | SC2235 | | x | | x | | | x | |
+| | SC4210 | | | | | | x | | |
+| | SC4236 | | | x | | | | x | |
+| | SC431HAI | | | | | | | | x |
+| | SC4336P | | | | | | | | x |
+| | SC450AI | | | | | | | | x |
+| | SC500AI | | | | | | | | x |
+| **Panasonic** | MN34031 | x | | | | | | | |
+| | MN34041 | x | | | | | | | |
+| | MN34220 | | | x | | | x | | |
+| | MN34222 | | x | | | | | | |
+| **Silicon Optronics (JX)** | JXH22 | x | | | | | | | |
+| | JXH42 | x | x | | | | | | |
+| | JXH63 | | | | | | | x | |
+| | JXF22 | | x | | x | | | | |
+| | JXF23 | | x | | | | | | |
+| | JXF37 | | | | | | | x | |
+| **GalaxyCore** | GC2053 | | | | | | x | x | |
+| | GC4023 | | | | | | | | x |
 
 Each sensor has `.so` (shared) and `.a` (static) library builds. The goal is to eventually unify sensor drivers across platforms where the same sensor model is used.
 
@@ -309,48 +319,62 @@ high-fps presets on the gk side.
 
 All modules are prefixed `open_` to distinguish from vendor SDK modules. The set of modules varies by platform generation:
 
-| Module | Function | V1 | V2 | V2A | V3 | V3A | V3.5 | V4 |
-|--------|----------|---|---|---|---|---|---|---|
-| `open_mmz` | Media memory zone | x | x | x | | | | |
-| `open_himedia` | Media device framework | | x | x | | | | |
-| `open_osal` | OS abstraction layer | | | | x | x | x | x |
-| `open_sys_config` | Pin/clock configuration | | x | | x | x | x | x |
-| `open_base` | Module registry, IPC | x | x | x | x | x | x | x |
-| `open_sys` | System control | x | x | x | x | x | x | x |
-| `open_isp` | Image Signal Processor | x | x | x | x | x | x | x |
-| `open_vi` | Video input | x | x | x | x | x | x | x |
-| `open_vpss` | Video processing | x | x | x | x | x | x | x |
-| `open_venc` | Video encoder framework | x | x | x | x | x | x | x |
-| `open_h264e` | H.264 codec engine | x | x | x | x | x | x | x |
-| `open_h265e` | H.265 codec engine | | | x | x | x | x | x |
-| `open_jpege` | JPEG encoder | x | x | x | x | x | x | x |
-| `open_rc` | Rate control | x | x | x | x | x | x | x |
-| `open_rgn` | OSD / region overlay | x | x | x | x | x | x | x |
-| `open_vgs` | Video graphics / DSU | x | x | x | x | x | x | x |
-| `open_ive` | Intelligent video engine | x | x | x | x | x | x | x |
-| `open_ive_neo` | IVE clean-room (C source) | | | | | | | x |
-| `open_tde` | 2D graphics engine | x | x | x | | x | x | x |
-| `open_aio` | Audio I/O | | x | x | x | x | x | x |
-| `open_ai` / `open_ao` | Audio input/output | x | x | x | x | x | x | x |
-| `open_aenc` / `open_adec` | Audio encode/decode | x | x | x | x | x | x | x |
-| `open_acodec` | On-chip audio codec | x | x | x | x | x | x | x |
-| `open_mipi_rx` | MIPI CSI-2 receiver | | x | x | x | x | x | x |
-| `open_sensor_i2c` | I2C sensor bus | x | x | x | x | x | x | x |
-| `open_sensor_spi` | SPI sensor bus | | x | x | x | x | | x |
-| `open_pwm` | PWM controller | x | x | x | x | x | x | x |
-| `open_wdt` | Watchdog timer | x | x | x | x | x | x | x |
-| `open_vo` | Video output | x | x | x | x | x | x | |
-| `open_cipher` | Crypto engine | | x | | | | x | |
-| `open_vedu` | Video encoder device | | | | x | x | x | x |
-| `open_hidmac` | DMA controller | x | | | | | | |
-| `open_vda` | Video detection analysis | x | | x | | | | |
-| `open_ir` | Infrared receiver | | x | x | x | x | x | |
-| `open_rtc` | Real-time clock | x | x | x | x | x | | |
-| `open_pm` | Power management | | | | | x | | |
-| `open_fisheye` | Fisheye correction | | | | | x | | |
-| `open_nnie` | Neural network engine | | | | | | x | |
-| `open_gdc` | Geometric distortion | | | | | | x | |
-| `open_dis` | Digital stabilization | | | | | | x | |
+| Module | Function | V1 | V2 | V2A | V3 | V3A | V3.5 | V4 | V5 |
+|--------|----------|---|---|---|---|---|---|---|---|
+| `open_mmz` | Media memory zone | x | x | x | | | | | x |
+| `open_himedia` | Media device framework | | x | x | | | | | |
+| `open_osal` | OS abstraction layer | | | | x | x | x | x | x |
+| `open_sys_config` | Pin/clock configuration | | x | | x | x | x | x | x |
+| `open_base` | Module registry, IPC | x | x | x | x | x | x | x | x |
+| `open_sys` | System control | x | x | x | x | x | x | x | x |
+| `open_isp` | Image Signal Processor | x | x | x | x | x | x | x | x |
+| `open_vi` | Video input | x | x | x | x | x | x | x | x |
+| `open_vb` | Video buffer pool | | | | | | | | x |
+| `open_vca` | Video capture aggregator | | | | | | | | x |
+| `open_vpp` | Video pre-processor | | | | | | | | x |
+| `open_vpss` | Video processing | x | x | x | x | x | x | x | x |
+| `open_venc` | Video encoder framework | x | x | x | x | x | x | x | x |
+| `open_h264e` | H.264 codec engine | x | x | x | x | x | x | x | x |
+| `open_h265e` | H.265 codec engine | | | x | x | x | x | x | x |
+| `open_svac3e` | SVAC v3 codec engine | | | | | | | | x |
+| `open_jpege` | JPEG encoder | x | x | x | x | x | x | x | x |
+| `open_rc` | Rate control | x | x | x | x | x | x | x | x |
+| `open_rgn` | OSD / region overlay | x | x | x | x | x | x | x | x |
+| `open_vgs` | Video graphics / DSU | x | x | x | x | x | x | x | x |
+| `open_chnl` | MPP channel router | | | | | | | | x |
+| `open_ive` | Intelligent video engine | x | x | x | x | x | x | x | x |
+| `open_ive_neo` | IVE clean-room (C source) | | | | | | | x | |
+| `open_svp_npu` | SVP NPU (V5 successor to NNIE) | | | | | | | | x |
+| `open_aiisp` | AI-assisted ISP | | | | | | | | x |
+| `open_tde` | 2D graphics engine | x | x | x | | x | x | x | |
+| `open_aio` | Audio I/O | | x | x | x | x | x | x | x |
+| `open_ai` / `open_ao` | Audio input/output | x | x | x | x | x | x | x | x |
+| `open_aenc` / `open_adec` | Audio encode/decode | x | x | x | x | x | x | x | x |
+| `open_acodec` | On-chip audio codec | x | x | x | x | x | x | x | x |
+| `open_mipi_rx` | MIPI CSI-2 receiver | | x | x | x | x | x | x | x |
+| `open_sensor_i2c` | I2C sensor bus | x | x | x | x | x | x | x | x |
+| `open_sensor_spi` | SPI sensor bus | | x | x | x | x | | x | x |
+| `open_pwm` | PWM controller | x | x | x | x | x | x | x | x |
+| `open_piris` | Programmable IRIS | | | | | | | | x |
+| `open_wdt` | Watchdog timer | x | x | x | x | x | x | x | x |
+| `open_adc` | ADC controller | | | | | | | | x |
+| `open_spi_dma_transfer` | SPI DMA transfer | | | | | | | | x |
+| `open_user` | User chrdev | | | | | | | | x |
+| `open_user_proc` | User /proc interface | | | | | | | | x |
+| `open_uvc` | USB Video Class device | | | | | | | | x |
+| `open_devstat` | Device statistics | | | | | | | | x |
+| `open_vo` | Video output | x | x | x | x | x | x | | |
+| `open_cipher` | Crypto engine | | x | | | | x | | |
+| `open_vedu` | Video encoder device | | | | x | x | x | x | |
+| `open_hidmac` | DMA controller | x | | | | | | | |
+| `open_vda` | Video detection analysis | x | | x | | | | | |
+| `open_ir` | Infrared receiver | | x | x | x | x | x | | |
+| `open_rtc` | Real-time clock | x | x | x | x | x | | | |
+| `open_pm` | Power management | | | | | x | | | x |
+| `open_fisheye` | Fisheye correction | | | | | x | | | |
+| `open_nnie` | Neural network engine | | | | | | x | | |
+| `open_gdc` | Geometric distortion | | | | | | x | | |
+| `open_dis` | Digital stabilization | | | | | | x | | |
 
 ### Module load order
 
@@ -359,6 +383,7 @@ Load order matters — see `/usr/bin/load_hisilicon` on the camera:
 - **V1**: `mmz` → `base` → `sys` → everything else
 - **V2/V2A**: `mmz` → `himedia` → (`sys_config`) → `base` → `sys` → everything else
 - **V3/V3A/V3.5/V4**: `osal` → `sys_config` → `base` → `sys` → everything else
+- **V5**: `sys_config` → `osal` → `mmz` (separate) → `base` → `vb` → `vca` → `sys` → everything else
 
 ## User-space libraries (neo)
 
