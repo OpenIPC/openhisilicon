@@ -252,15 +252,14 @@ Each sensor has `.so` (shared) and `.a` (static) library builds. The goal is to 
 
 ### IMX335 high-framerate modes (hi3516ev200 only)
 
-Encoded fps delivered by VENC (`/proc/umap/venc` `VENC SEND1` `Send`
-counter, delta over 8 s after a 6 s warm-up), measured side-by-side on
-`openipc-hi3516ev300` and `openipc-gk7205v300` with identical sensor INI
-and majestic config (4 Mbps, `video0.size = 1920x1080` for high-res
-4:3 / 16:9 sensor modes — the typical IP-cam streaming target — and
-sensor-crop-native for smaller modes; VPSS handles the downscale and
-center-crops 4:3 sensors when streaming 16:9). H.264 and H.265 produce
-identical fps in every mode at this bitrate (verified codec-by-codec on
-both boards); the encoder is not the bottleneck.
+Fps measured at the receiving end of a UDP-RTP push from camera →
+this machine (`outgoing: { enabled: true; - udp://<host>:<port> }`),
+counting RTP marker-bit transitions over a 10 s window after 2 s
+warm-up. This is the FPV-drone wire-rate, which equals everything
+downstream (sensor → VI → ISP → VPSS → VENC → RTP packetizer → UDP).
+H.265, 4 Mbps target, INCK 37.125 MHz, identical INI and yaml on
+both `openipc-hi3516ev300` and `openipc-gk7205v300`. CPU column is
+total busy% (user+sys+sirq) on the camera during the 8 s window.
 
 | Mode | Sensor crop | hi3516ev300 | gk7205v300 | Selected by |
 |------|-------------|------------|------------|-------------|
@@ -269,19 +268,62 @@ both boards); the encoder is not the bottleneck.
 | Binning | 1296×972 | 64 fps | 64 fps | `DevRect_w=1296 DevRect_h=972` |
 | Cropped 1.5x zoom | 1920×1080 | 55 fps | 55 fps | `DevRect_w=1920 DevRect_h=1080` |
 | Boost-1944p | 2592×1944 | 39 fps (`Isp_FrameRate=45`) | 31 fps (`Isp_FrameRate=36`) | `Isp_SnsMode=6` |
-| Flexible crop | arbitrary W×H | up to **147 fps** at 800×480 | up to **147 fps** at 800×480 | `Isp_SnsMode=4` + `Isp_W=...` + `Isp_H=...` |
+| Flexible crop | arbitrary W×H | up to **140 fps** at 480×352 | up to **140 fps** at 480×352 | `Isp_SnsMode=4` + `Isp_W=...` + `Isp_H=...` |
 
-Flexible-crop ceiling rises as crop shrinks; per-size points measured:
+Flexible-crop UDP-RTP wire rate, baseline (HMAX = 0x016E) vs the
+HMAX = 0x0100 patch at `imx335_sensor_ctl.c:811`. Both boards
+deliver identically:
 
-| Flex crop W×H | hi3516ev300 | gk7205v300 |
-|---|---|---|
-| 1280×720 @ 100 fps | 98 fps | 98 fps |
-| 1024×576 @ 120 fps | 118 fps | 118 fps |
-| 800×480 @ 130 fps | 128 fps | 128 fps |
-| 800×480 @ 150 fps | 147 fps | 147 fps |
+| Flex crop W×H @ req | Baseline (both) | **Patched (both)** | Lift | CPU on cam (patched) |
+|---|---|---|---|---|
+| 1280×720 @ 100 fps | 45 fps | **56 fps** | +24% | 16% |
+| 800×480 @ 130 fps  | 58 fps | **83 fps**  | +43% | 23% |
+| 800×480 @ 150 fps  | 65 fps | **94 fps**  | +43% | 26% |
+| 800×480 @ 240 fps  | 77 fps | **110 fps** | +43% | 30% |
+| 480×352 @ 240 fps  | 98 fps | **140 fps** | +43% | 35% |
 
-Set `Isp_FrameRate` in the sensor INI to request a target rate; the driver
-clamps to the per-mode sensor ceiling.
+(1024×576 omitted from the headline table — encoder produced
+anomalously small frames on the baseline at that resolution which
+inflated the apparent lift to +243%; included in
+[docs/imx335-v4-high-fps.md](docs/imx335-v4-high-fps.md) §6 with the
+raw numbers.)
+
+Three structural points the data exposes:
+
+1. **The encoder's `VENC SEND` counter overstates deliverable fps.**
+   At 480×352 the encoder produces ~290 fps internally but the RTP
+   send path drains ~140 fps, and the encoder back-pressures down to
+   match. The 290 fps "encoder ceiling" measurement is only achievable
+   if the encoded frames are *discarded* (e.g. via RTSP, which drops
+   frames at the socket boundary rather than throttling). For
+   FPV-style outgoing-RTP — where every frame must reach the wire —
+   the deliverable column is what counts.
+2. **ev and gk match identically over UDP-RTP.** The ~30% gap visible
+   under RTSP serving was an RTSP-stack artifact (ev burned more CPU
+   on RTSP framing than gk did). Strip RTSP, push raw UDP, both boards
+   produce exactly the same frames per second at the same CPU%. Same
+   silicon; no binning.
+3. **HMAX patch's value is real over UDP.** Baseline vs patched at the
+   same crop / req-fps shows +43% at every measured point above
+   480×352, dropping to +24% at 1280×720 (where the encoder rate
+   ceiling — not the sensor — is the binding constraint).
+
+Set `Isp_FrameRate` in the sensor INI to request a target rate; the
+driver clamps to the per-mode sensor ceiling. Sensor delivers
+whatever rate the HMAX register supports — requesting > the practical
+ceiling still produces the ceiling (not a fallback).
+
+Flex-crop ceiling is controlled by `HMAX = 0x0100` at
+`libraries/sensor/hi3516ev200/sony_imx335/imx335_sensor_ctl.c:811`.
+That value sweeps through an unstable band on the way down from the
+prior 0x016E default; `0x0100` is the empirically-stable peak at
+SYS_MODE=2 (891 Mbps lanes). The SYS_MODE=1 (1188 Mbps) path *might*
+unlock another 20-30% headroom but requires more than the 3-register
+patch we tried; see [docs/imx335-v4-high-fps.md](docs/imx335-v4-high-fps.md)
+for the stability map, the failed SYS_MODE=1 attempt, the AE-library
+u32FLStd race that causes encoder-side run-to-run variance, the
+RTSP-vs-UDP delivery-rate comparison, and a self-contained
+build/deploy recipe.
 
 ### IMX307 high-framerate modes (hi3516ev200 / gk7205v200)
 
