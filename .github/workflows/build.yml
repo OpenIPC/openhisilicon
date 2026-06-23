@@ -33,6 +33,8 @@ jobs:
             board: hi3516av100_lite
           - platform: hi3519v101
             board: hi3519v101_lite
+          - platform: hi3519dv500
+            board: hi3519dv500_ultimate
           - platform: hi3516ev300
             board: hi3516ev300_neo
             kernel: "7.0"
