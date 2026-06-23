@@ -4,7 +4,13 @@ ifeq ($(CHIPARCH),)
 	@echo CHIPARCH must be set
 endif
 
-ccflags-y := -D$(CHIPARCH) -DRELEASE -DUSER_BIT_32 -DKERNEL_BIT_32 -Wno-date-time -D_GNU_SOURCE
+# aarch64 SoCs (e.g. hi3519dv500) build a 64-bit kernel/userspace ABI; the
+# 32-bit families keep the historical default.
+OT_BIT_WIDTH := 32
+ifeq ($(CHIPARCH),hi3519dv500)
+    OT_BIT_WIDTH := 64
+endif
+ccflags-y := -D$(CHIPARCH) -DRELEASE -DUSER_BIT_$(OT_BIT_WIDTH) -DKERNEL_BIT_$(OT_BIT_WIDTH) -Wno-date-time -D_GNU_SOURCE
 ccflags-y += -include $(src)/compat/kernel_compat.h
 # Re-add GCC's built-in include dir (stdarg.h etc.) stripped by -nostdinc in 5.15+
 ccflags-y += -isystem $(shell $(CC) -print-file-name=include)
@@ -26,6 +32,8 @@ else ifeq ($(CHIPARCH),hi3520dv200)
     include $(src)/hi3520dv200.kbuild
 else ifeq ($(CHIPARCH),hi3516cv6xx)
     include $(src)/hi3516cv6xx.kbuild
+else ifeq ($(CHIPARCH),hi3519dv500)
+    include $(src)/hi3519dv500.kbuild
 else
 
 ccflags-y += -I$(src)/../include
