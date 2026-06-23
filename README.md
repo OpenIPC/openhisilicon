@@ -53,7 +53,7 @@ The generation **number** tracks the peripheral address map and SDK architecture
 | V3.5 | CV500 | Cortex-A7 | OSAL | Raw `.o` + init wrappers | Incremental V3, snake_case SDK symbols |
 | V4 | EV200 | Cortex-A7 | OSAL | Source-based Kbuild | Redesigned modular SDK, Goke compat, mainline kernel |
 | V5 | CV610 | Cortex-A7 | OSAL + MMZ split | Raw `.o` + vendor init wrappers | Hi3516CV610/CV608, MMZ separated from OSAL again, vendor ships init wrappers as source |
-| V5 | DV500 | Cortex-A55 (aarch64) | OSAL + MMZ split | Raw `.o` + vendor init wrappers | Hi3519DV500/Hi3516DV500, 64-bit ABI (`-DUSER_BIT_64/-DKERNEL_BIT_64`), 53 modules (42 blob + OSAL/MMZ/sys_config + peripherals + mipi_rx) |
+| V5 | DV500 | Cortex-A55 (aarch64) | OSAL + MMZ split | Raw `.o` + vendor init wrappers | Hi3519DV500/Hi3516DV500, 64-bit ABI (`-DUSER_BIT_64/-DKERNEL_BIT_64`), 59 modules (42 blob + OSAL/MMZ/sys_config + peripherals + mipi_rx/tx + gfbg + crypto cipher/km/otp/hardware_cryptodev) |
 
 ### Dealing with vendor .ko blobs
 

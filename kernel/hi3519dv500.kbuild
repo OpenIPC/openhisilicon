@@ -232,3 +232,118 @@ ccflags-y += -I$(src)/sensor_spi/hi3519dv500/hi3519dv500
 ccflags-y += -I$(src)/mipi_rx/hi3519dv500
 $(PREFIX)mipi_rx-objs := mipi_rx/hi3519dv500/mipi_rx.o mipi_rx/hi3519dv500/mipi_rx_hal.o $(DV500_SDRV_INIT)/mipi_rx_init.o
 obj-m += $(PREFIX)mipi_rx.o
+
+# MIPI TX (display output) — vendor source + init wrapper (interdrv/init/linux)
+ccflags-y += -I$(src)/mipi_tx/hi3519dv500
+$(PREFIX)mipi_tx-objs := mipi_tx/hi3519dv500/mipi_tx.o mipi_tx/hi3519dv500/mipi_tx_hal.o $(DV500_SDRV_INIT)/mipi_tx_init.o
+obj-m += $(PREFIX)mipi_tx.o
+
+# gfbg (graphics framebuffer / OSD) — full vendor source (depends on TDE headers)
+DV500_GFBG = gfbg/hi3519dv500
+# gfbg feature config (matches the vendor gfbg Makefile -D flags; e.g.
+# CONFIG_TDE_GFBG_COMPRESS_V2 gates gfbg_recalculate_stride).
+# dv500-specific gfbg flags (the `ifneq findstring hi3519dv500` branch of the
+# vendor gfbg Makefile, plus the unconditional ones). NOT CONFIG_GFBG_NOT_SUPPORT_FUNC
+# — that is the non-dv500 branch and would enable a call to the (gated-out)
+# gf_vset_g0zme_coef.
+ccflags-y += -DCONFIG_TDE_GFBG_COMPRESS_V2 -DCONFIG_COMPRESS_ECONOMIZE_MEMERY \
+	-DCONFIG_GFBG_FENCE_SUPPORT -DCONFIG_GFBG_G0_FHD_SUPPORT \
+	-DCONFIG_GFBG_LOW_DELAY_SUPPORT \
+	-DCONFIG_GFBG_RESOLUTION_SUPPORT_SQUARE -DCONFIG_TDE_CLUT_RECT_SUPPORT_G0 \
+	-DCONFIG_TDE_CLUT_RECT_V2
+ccflags-y += -I$(src)/$(DV500_GFBG)/include
+ccflags-y += -I$(src)/$(DV500_GFBG)/ext_inc
+ccflags-y += -I$(src)/$(DV500_GFBG)/drv
+ccflags-y += -I$(src)/$(DV500_GFBG)/drv/include
+ccflags-y += -I$(src)/$(DV500_GFBG)/drv/adp
+ccflags-y += -I$(src)/$(DV500_GFBG)/src
+$(PREFIX)gfbg-objs := \
+	$(DV500_GFBG)/src/gfbg_main.o \
+	$(DV500_GFBG)/src/gfbg_proc.o \
+	$(DV500_GFBG)/src/init/linux/gfbg_init.o \
+	$(DV500_GFBG)/drv/adp/gfbg_drv.o \
+	$(DV500_GFBG)/drv/adp/gfbg_comm.o \
+	$(DV500_GFBG)/drv/adp/gfbg_blit.o \
+	$(DV500_GFBG)/drv/adp/gfbg_graphics.o \
+	$(DV500_GFBG)/drv/adp/gfbg_graphics_drv.o \
+	$(DV500_GFBG)/drv/adp/gfbg_graphic_hal.o \
+	$(DV500_GFBG)/drv/adp/gfbg_rotate.o \
+	$(DV500_GFBG)/drv/adp/gfbg_rotate_tde.o
+obj-m += $(PREFIX)gfbg.o
+ccflags-y += -I$(src)/gfbg/hi3519dv500/src/init
+
+# Security subsystem — full vendor source (no blobs). Each crypto .ko pulls
+# the shared security_subsys_common framework (drv/kapi/dispatch/hal).
+DV500_SEC = security_subsys/hi3519dv500
+ccflags-y += -DCONFIG_CRYPTO_CHIP_HI3519DV500 -DCRYPTO_CTR_NON_ALIGN_SUPPORT -DCRYPTO_SYMC_ADDR_NOT_ALIGN_SUPPORT
+ccflags-y += -I$(src)/$(DV500_SEC)/security_subsys_common/include/common_include
+ccflags-y += -I$(src)/$(DV500_SEC)/security_subsys_common/include/drv_include
+ccflags-y += -I$(src)/$(DV500_SEC)/security_subsys_common/include/hal_include
+ccflags-y += -I$(src)/$(DV500_SEC)/security_subsys_common/include/ioctl_include
+ccflags-y += -I$(src)/$(DV500_SEC)/security_subsys_common/include/kapi_include
+ccflags-y += -I$(src)/$(DV500_SEC)/security_subsys_common/dispatch_code
+ccflags-y += -I$(src)/$(DV500_SEC)/security_subsys_common/drv_code
+ccflags-y += -I$(src)/$(DV500_SEC)/security_subsys_common/kapi_code
+ccflags-y += -I$(src)/$(DV500_SEC)/crypto_osal_lib
+ccflags-y += -I$(src)/$(DV500_SEC)/cipher/mkp
+ccflags-y += -I$(src)/$(DV500_SEC)
+
+DV500_SEC_COMMON := \
+	$(DV500_SEC)/security_subsys_common/drv_code/crypto_drv_common.o \
+	$(DV500_SEC)/crypto_osal_lib/crypto_osal_lib.o \
+	$(DV500_SEC)/security_subsys_common/drv_code/drv_trng.o \
+	$(DV500_SEC)/security_subsys_common/drv_code/drv_symc.o \
+	$(DV500_SEC)/security_subsys_common/drv_code/drv_symc_mac_hard.o \
+	$(DV500_SEC)/security_subsys_common/drv_code/drv_hash.o \
+	$(DV500_SEC)/security_subsys_common/drv_code/drv_pbkdf2_hard.o \
+	$(DV500_SEC)/security_subsys_common/drv_code/drv_pke.o \
+	$(DV500_SEC)/security_subsys_common/drv_code/drv_pke_ecc.o \
+	$(DV500_SEC)/security_subsys_common/drv_code/drv_pke_ecc_curve.o \
+	$(DV500_SEC)/security_subsys_common/drv_code/drv_pke_rsa.o \
+	$(DV500_SEC)/security_subsys_common/kapi_code/kapi_init.o \
+	$(DV500_SEC)/security_subsys_common/kapi_code/kapi_trng.o \
+	$(DV500_SEC)/security_subsys_common/kapi_code/kapi_symc.o \
+	$(DV500_SEC)/security_subsys_common/kapi_code/kapi_hash.o \
+	$(DV500_SEC)/security_subsys_common/kapi_code/kapi_pke.o \
+	$(DV500_SEC)/security_subsys_common/dispatch_code/crypto_dispatch.o \
+	$(DV500_SEC)/security_subsys_common/hal_code/trng_v4/hal_trng.o \
+	$(DV500_SEC)/security_subsys_common/hal_code/spacc_v4/hal_symc.o \
+	$(DV500_SEC)/security_subsys_common/hal_code/spacc_v4/hal_hash.o \
+	$(DV500_SEC)/security_subsys_common/hal_code/pke_v4/hal_pke.o
+
+$(PREFIX)cipher-objs := $(DV500_SEC)/cipher/mkp/crypto_drv_init.o $(DV500_SEC)/cipher/mkp/crypto_drv_irq.o $(DV500_SEC_COMMON)
+obj-m += $(PREFIX)cipher.o
+
+# km (key management) — disjoint subset; imports cipher's framework at load
+ccflags-y += -I$(src)/$(DV500_SEC)/security_subsys_common/hal_code/km_v4
+ccflags-y += -I$(src)/$(DV500_SEC)/security_subsys_common/hal_code/trng_v4
+ccflags-y += -I$(src)/$(DV500_SEC)/km/mkp
+$(PREFIX)km-objs := \
+	$(DV500_SEC)/km/mkp/crypto_km_drv_init.o \
+	$(DV500_SEC)/km/mkp/init_km.o \
+	$(DV500_SEC)/security_subsys_common/dispatch_code/dispatch_km.o \
+	$(DV500_SEC)/security_subsys_common/drv_code/drv_klad.o \
+	$(DV500_SEC)/security_subsys_common/drv_code/drv_keyslot.o \
+	$(DV500_SEC)/security_subsys_common/hal_code/km_v4/hal_rkp.o \
+	$(DV500_SEC)/security_subsys_common/hal_code/km_v4/hal_klad.o \
+	$(DV500_SEC)/security_subsys_common/hal_code/km_v4/hal_keyslot.o \
+	$(DV500_SEC)/security_subsys_common/kapi_code/kapi_km.o
+obj-m += $(PREFIX)km.o
+
+# otp (one-time-programmable fuses)
+ccflags-y += -I$(src)/$(DV500_SEC)/otp/mkp
+$(PREFIX)otp-objs := \
+	$(DV500_SEC)/otp/mkp/crypto_otp_drv_init.o \
+	$(DV500_SEC)/otp/mkp/init_otp.o \
+	$(DV500_SEC)/security_subsys_common/dispatch_code/dispatch_otp.o \
+	$(DV500_SEC)/security_subsys_common/kapi_code/kapi_otp.o \
+	$(DV500_SEC)/security_subsys_common/drv_code/drv_otp.o
+obj-m += $(PREFIX)otp.o
+
+# hardware_cryptodev (/dev/crypto interface) — self-contained
+ccflags-y += -I$(src)/$(DV500_SEC)/hardware_cryptodev
+$(PREFIX)hardware_cryptodev-objs := \
+	$(DV500_SEC)/hardware_cryptodev/reg_aes.o \
+	$(DV500_SEC)/hardware_cryptodev/reg_hash.o \
+	$(DV500_SEC)/hardware_cryptodev/ot_reg.o
+obj-m += $(PREFIX)hardware_cryptodev.o
