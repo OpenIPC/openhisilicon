@@ -1,0 +1,234 @@
+# hi3519dv500 SoC family (V5 — Hi3519DV500 / Hi3516DV500) build configuration
+#
+# Vendor SDK: Hi3519DV500_SDK_V1.0.1.1
+# Kernel target: openipc/linux 5.10.0, aarch64 Cortex-A55, musl
+#
+# Layout under kernel/ (mirrors hi3516cv6xx):
+#   obj/hi3519dv500/        vendor closed-source .o blobs (out/obj/mod_*.o -> hi_*.o)
+#   init/hi3519dv500/       vendor-shipped init wrapper source (out/init/src/*_init.c)
+#   include/hi3519dv500/    vendor SDK public headers (out/include/**)
+#   osal/hi3519dv500/       vendor OSAL source (osal/src/linux/kernel/*.c)
+#   osal/hi3519dv500/mmz/   vendor MMZ allocator source (common/mem/mmz/linux/*.c)
+#   sys_config/hi3519dv500/ vendor sysconfig source (interdrv/sysconfig/*.c)
+#
+# V5 ships OSAL/MMZ/sys_config + every module's init wrapper as full source;
+# only the closed MPP/ISP/codec payloads are blob-linked. This SoC is aarch64
+# (64-bit), so kernel/Kbuild sets -DUSER_BIT_64/-DKERNEL_BIT_64 for it.
+
+# --- SDK include paths ---
+ccflags-y += -I$(src)/include/hi3519dv500
+ccflags-y += -I$(src)/include/hi3519dv500/exp_inc
+ccflags-y += -I$(src)/include/hi3519dv500/module
+ccflags-y += -I$(src)/osal/hi3519dv500
+ccflags-y += -I$(src)/osal/hi3519dv500/include
+ccflags-y += -I$(src)/osal/hi3519dv500/media
+ccflags-y += -I$(src)/init/hi3519dv500
+
+ccflags-y += -DCHIP_TYPE_hi3519dv500
+ccflags-y += -DOT_TARGET_BOARD
+ccflags-y += -include $(src)/include/hi3519dv500/autoconf.h
+
+# --- OSAL module (full vendor source) ---
+DV500_OSAL_DIR = osal/hi3519dv500
+DV500_OSAL_SRCS := \
+	$(DV500_OSAL_DIR)/osal_addr.c \
+	$(DV500_OSAL_DIR)/osal_atomic.c \
+	$(DV500_OSAL_DIR)/osal_barrier.c \
+	$(DV500_OSAL_DIR)/osal_bitmap.c \
+	$(DV500_OSAL_DIR)/osal_cache.c \
+	$(DV500_OSAL_DIR)/osal_completion.c \
+	$(DV500_OSAL_DIR)/osal_debug.c \
+	$(DV500_OSAL_DIR)/osal_delayedwork.c \
+	$(DV500_OSAL_DIR)/osal_device.c \
+	$(DV500_OSAL_DIR)/osal_fileops.c \
+	$(DV500_OSAL_DIR)/osal_init.c \
+	$(DV500_OSAL_DIR)/osal_interrupt.c \
+	$(DV500_OSAL_DIR)/osal_math.c \
+	$(DV500_OSAL_DIR)/osal_mutex.c \
+	$(DV500_OSAL_DIR)/osal_notifier.c \
+	$(DV500_OSAL_DIR)/osal_platform.c \
+	$(DV500_OSAL_DIR)/osal_proc.c \
+	$(DV500_OSAL_DIR)/osal_rtc.c \
+	$(DV500_OSAL_DIR)/osal_rwlock.c \
+	$(DV500_OSAL_DIR)/osal_semaphore.c \
+	$(DV500_OSAL_DIR)/osal_spinlock.c \
+	$(DV500_OSAL_DIR)/osal_string.c \
+	$(DV500_OSAL_DIR)/osal_task.c \
+	$(DV500_OSAL_DIR)/osal_timer.c \
+	$(DV500_OSAL_DIR)/osal_wait.c \
+	$(DV500_OSAL_DIR)/osal_workqueue.c \
+	$(DV500_OSAL_DIR)/media/base.c \
+	$(DV500_OSAL_DIR)/media/ot_media.c
+$(PREFIX)osal-objs := $(DV500_OSAL_SRCS:%.c=%.o)
+obj-m += $(PREFIX)osal.o
+
+# --- MMZ module (full vendor source, separate from osal on V5) ---
+DV500_MMZ_DIR = osal/hi3519dv500/mmz
+DV500_MMZ_SRCS := \
+	$(DV500_MMZ_DIR)/media_mem.c \
+	$(DV500_MMZ_DIR)/mmz_init.c \
+	$(DV500_MMZ_DIR)/mmz_userdev.c \
+	$(DV500_MMZ_DIR)/cma_allocator.c \
+	$(DV500_MMZ_DIR)/ot_allocator.c
+$(PREFIX)mmz-objs := $(DV500_MMZ_SRCS:%.c=%.o)
+ccflags-y += -I$(src)/$(DV500_MMZ_DIR)
+ccflags-y += -I$(src)/$(DV500_MMZ_DIR)/include
+obj-m += $(PREFIX)mmz.o
+
+# --- sys_config module (full vendor source) ---
+DV500_SYS_CFG_DIR = sys_config/hi3519dv500
+DV500_SYS_CFG_SRCS := \
+	$(DV500_SYS_CFG_DIR)/sys_cfg.c \
+	$(DV500_SYS_CFG_DIR)/sys_ctrl.c \
+	$(DV500_SYS_CFG_DIR)/clk_cfg.c \
+	$(DV500_SYS_CFG_DIR)/pin_mux.c
+$(PREFIX)sys_config-objs := $(DV500_SYS_CFG_SRCS:%.c=%.o)
+ccflags-y += -I$(src)/$(DV500_SYS_CFG_DIR)
+obj-m += $(PREFIX)sys_config.o
+
+# --- Blob modules (vendor hi_<X>.o + vendor-shipped <X>_init.o) ---
+DV500_BLOB_DIR = obj/hi3519dv500
+DV500_INIT_DIR = init/hi3519dv500
+$(PREFIX)acodec-objs := $(DV500_BLOB_DIR)/hi_acodec.o $(DV500_INIT_DIR)/acodec_init.o
+$(PREFIX)adec-objs := $(DV500_BLOB_DIR)/hi_adec.o $(DV500_INIT_DIR)/adec_init.o
+$(PREFIX)aenc-objs := $(DV500_BLOB_DIR)/hi_aenc.o $(DV500_INIT_DIR)/aenc_init.o
+$(PREFIX)aiisp-objs := $(DV500_BLOB_DIR)/hi_aiisp.o $(DV500_INIT_DIR)/aiisp_init.o
+$(PREFIX)ai-objs := $(DV500_BLOB_DIR)/hi_ai.o $(DV500_INIT_DIR)/ai_init.o
+$(PREFIX)aio-objs := $(DV500_BLOB_DIR)/hi_aio.o $(DV500_INIT_DIR)/aio_init.o
+$(PREFIX)ao-objs := $(DV500_BLOB_DIR)/hi_ao.o $(DV500_INIT_DIR)/ao_init.o
+$(PREFIX)base-objs := $(DV500_BLOB_DIR)/hi_base.o $(DV500_INIT_DIR)/base_init.o
+$(PREFIX)chnl-objs := $(DV500_BLOB_DIR)/hi_chnl.o $(DV500_INIT_DIR)/chnl_init.o
+$(PREFIX)dis-objs := $(DV500_BLOB_DIR)/hi_dis.o $(DV500_INIT_DIR)/dis_init.o
+$(PREFIX)dpu_match-objs := $(DV500_BLOB_DIR)/hi_dpu_match.o $(DV500_INIT_DIR)/dpu_match_init.o
+$(PREFIX)dpu_rect-objs := $(DV500_BLOB_DIR)/hi_dpu_rect.o $(DV500_INIT_DIR)/dpu_rect_init.o
+$(PREFIX)gdc-objs := $(DV500_BLOB_DIR)/hi_gdc.o $(DV500_INIT_DIR)/gdc_init.o
+$(PREFIX)gyrodis-objs := $(DV500_BLOB_DIR)/hi_gyrodis.o $(DV500_INIT_DIR)/gyrodis_init.o
+$(PREFIX)h264e-objs := $(DV500_BLOB_DIR)/hi_h264e.o $(DV500_INIT_DIR)/h264e_init.o
+$(PREFIX)h265e-objs := $(DV500_BLOB_DIR)/hi_h265e.o $(DV500_INIT_DIR)/h265e_init.o
+$(PREFIX)isp-objs := $(DV500_BLOB_DIR)/hi_isp.o $(DV500_INIT_DIR)/isp_init.o
+$(PREFIX)ive-objs := $(DV500_BLOB_DIR)/hi_ive.o $(DV500_INIT_DIR)/ive_init.o
+$(PREFIX)jpegd-objs := $(DV500_BLOB_DIR)/hi_jpegd.o $(DV500_INIT_DIR)/jpegd_init.o
+$(PREFIX)jpege-objs := $(DV500_BLOB_DIR)/hi_jpege.o $(DV500_INIT_DIR)/jpege_init.o
+$(PREFIX)mcf-objs := $(DV500_BLOB_DIR)/hi_mcf.o $(DV500_INIT_DIR)/mcf_init.o
+$(PREFIX)motionfusion-objs := $(DV500_BLOB_DIR)/hi_motionfusion.o $(DV500_INIT_DIR)/motionfusion_init.o
+$(PREFIX)pm-objs := $(DV500_BLOB_DIR)/hi_pm.o $(DV500_INIT_DIR)/pm_init.o
+$(PREFIX)rc-objs := $(DV500_BLOB_DIR)/hi_rc.o $(DV500_INIT_DIR)/rc_init.o
+$(PREFIX)rgn-objs := $(DV500_BLOB_DIR)/hi_rgn.o $(DV500_INIT_DIR)/rgn_init.o
+$(PREFIX)smmz_agent-objs := $(DV500_BLOB_DIR)/hi_smmz_agent.o $(DV500_INIT_DIR)/smmz_agent_init.o
+$(PREFIX)svp_npu-objs := $(DV500_BLOB_DIR)/hi_svp_npu.o $(DV500_INIT_DIR)/svp_npu_init.o
+$(PREFIX)sys-objs := $(DV500_BLOB_DIR)/hi_sys.o $(DV500_INIT_DIR)/sys_init.o
+$(PREFIX)tde-objs := $(DV500_BLOB_DIR)/hi_tde.o $(DV500_INIT_DIR)/tde_init.o
+$(PREFIX)uvc-objs := $(DV500_BLOB_DIR)/hi_uvc.o $(DV500_INIT_DIR)/uvc_init.o
+$(PREFIX)vb-objs := $(DV500_BLOB_DIR)/hi_vb.o $(DV500_INIT_DIR)/vb_init.o
+$(PREFIX)vca-objs := $(DV500_BLOB_DIR)/hi_vca.o $(DV500_INIT_DIR)/vca_init.o
+$(PREFIX)vdec-objs := $(DV500_BLOB_DIR)/hi_vdec.o $(DV500_INIT_DIR)/vdec_init.o
+$(PREFIX)venc-objs := $(DV500_BLOB_DIR)/hi_venc.o $(DV500_INIT_DIR)/venc_init.o
+$(PREFIX)venc_svr-objs := $(DV500_BLOB_DIR)/hi_venc_svr.o $(DV500_INIT_DIR)/venc_svr_init.o
+$(PREFIX)vfmw-objs := $(DV500_BLOB_DIR)/hi_vfmw.o $(DV500_INIT_DIR)/vfmw_init.o
+$(PREFIX)vgs-objs := $(DV500_BLOB_DIR)/hi_vgs.o $(DV500_INIT_DIR)/vgs_init.o
+$(PREFIX)vi-objs := $(DV500_BLOB_DIR)/hi_vi.o $(DV500_INIT_DIR)/vi_init.o
+$(PREFIX)vo_dev-objs := $(DV500_BLOB_DIR)/hi_vo_dev.o $(DV500_INIT_DIR)/vo_dev_init.o
+$(PREFIX)vo-objs := $(DV500_BLOB_DIR)/hi_vo.o $(DV500_INIT_DIR)/vo_init.o
+$(PREFIX)vpp-objs := $(DV500_BLOB_DIR)/hi_vpp.o $(DV500_INIT_DIR)/vpp_init.o
+$(PREFIX)vpss-objs := $(DV500_BLOB_DIR)/hi_vpss.o $(DV500_INIT_DIR)/vpss_init.o
+obj-m += $(PREFIX)acodec.o
+obj-m += $(PREFIX)adec.o
+obj-m += $(PREFIX)aenc.o
+obj-m += $(PREFIX)aiisp.o
+obj-m += $(PREFIX)ai.o
+obj-m += $(PREFIX)aio.o
+obj-m += $(PREFIX)ao.o
+obj-m += $(PREFIX)base.o
+obj-m += $(PREFIX)chnl.o
+obj-m += $(PREFIX)dis.o
+obj-m += $(PREFIX)dpu_match.o
+obj-m += $(PREFIX)dpu_rect.o
+obj-m += $(PREFIX)gdc.o
+obj-m += $(PREFIX)gyrodis.o
+obj-m += $(PREFIX)h264e.o
+obj-m += $(PREFIX)h265e.o
+obj-m += $(PREFIX)isp.o
+obj-m += $(PREFIX)ive.o
+obj-m += $(PREFIX)jpegd.o
+obj-m += $(PREFIX)jpege.o
+obj-m += $(PREFIX)mcf.o
+obj-m += $(PREFIX)motionfusion.o
+obj-m += $(PREFIX)pm.o
+obj-m += $(PREFIX)rc.o
+obj-m += $(PREFIX)rgn.o
+obj-m += $(PREFIX)smmz_agent.o
+obj-m += $(PREFIX)svp_npu.o
+obj-m += $(PREFIX)sys.o
+obj-m += $(PREFIX)tde.o
+obj-m += $(PREFIX)uvc.o
+obj-m += $(PREFIX)vb.o
+obj-m += $(PREFIX)vca.o
+obj-m += $(PREFIX)vdec.o
+obj-m += $(PREFIX)venc.o
+obj-m += $(PREFIX)venc_svr.o
+obj-m += $(PREFIX)vfmw.o
+obj-m += $(PREFIX)vgs.o
+obj-m += $(PREFIX)vi.o
+obj-m += $(PREFIX)vo_dev.o
+obj-m += $(PREFIX)vo.o
+obj-m += $(PREFIX)vpp.o
+obj-m += $(PREFIX)vpss.o
+
+# --- Source-driven peripherals (wdt, adc, sensor_i2c, sensor_spi, pwm, piris,
+# user) — vendor bare-driver .c + reused init wrappers carrying the
+# module_init/module_exit/MODULE_LICENSE boilerplate (same V5 driver API as
+# cv6xx, so the source_drv_init wrappers are shared). ---
+ccflags-y += -I$(src)/include/hi3519dv500/isp_arch_inc
+DV500_SDRV_INIT = init/hi3519dv500/source_drv_init
+ccflags-y += -I$(src)/$(DV500_SDRV_INIT)
+
+ccflags-y += -I$(src)/wdt/hi3519dv500/arch
+$(PREFIX)wdt-objs := wdt/hi3519dv500/ot_wtdg.o $(DV500_SDRV_INIT)/wtdg_init.o
+obj-m += $(PREFIX)wdt.o
+
+ccflags-y += -I$(src)/adc/hi3519dv500/arch
+$(PREFIX)adc-objs := adc/hi3519dv500/adc.o $(DV500_SDRV_INIT)/adc_init.o
+obj-m += $(PREFIX)adc.o
+
+ccflags-y += -I$(src)/sensor_i2c/hi3519dv500/arch
+$(PREFIX)sensor_i2c-objs := sensor_i2c/hi3519dv500/sensor_i2c.o $(DV500_SDRV_INIT)/sensor_i2c_init.o
+obj-m += $(PREFIX)sensor_i2c.o
+
+ccflags-y += -I$(src)/sensor_spi/hi3519dv500/arch
+$(PREFIX)sensor_spi-objs := sensor_spi/hi3519dv500/sensor_spi.o $(DV500_SDRV_INIT)/sensor_spi_init.o
+obj-m += $(PREFIX)sensor_spi.o
+
+ccflags-y += -I$(src)/pwm/hi3519dv500/arch
+$(PREFIX)pwm-objs := pwm/hi3519dv500/pwm.o $(DV500_SDRV_INIT)/pwm_init.o
+obj-m += $(PREFIX)pwm.o
+
+ccflags-y += -I$(src)/piris/hi3519dv500/arch
+$(PREFIX)piris-objs := piris/hi3519dv500/piris.o piris/hi3519dv500/arch/piris_hal.o $(DV500_SDRV_INIT)/piris_init.o
+obj-m += $(PREFIX)piris.o
+
+ccflags-y += -I$(src)/user/hi3519dv500
+$(PREFIX)user-objs := user/hi3519dv500/otuser.o
+obj-m += $(PREFIX)user.o
+
+# extra include dirs for the peripheral HAL headers (nested arch/<chip> subdirs)
+ccflags-y += -I$(src)/include/hi3519dv500/isp_ext_inc
+ccflags-y += -I$(src)/wdt/hi3519dv500/arch/hi3519dv500
+ccflags-y += -I$(src)/adc/hi3519dv500/arch/hi3519dv500
+ccflags-y += -I$(src)/sensor_i2c/hi3519dv500
+ccflags-y += -I$(src)/sensor_spi/hi3519dv500
+ccflags-y += -I$(src)/pwm/hi3519dv500
+ccflags-y += -I$(src)/piris/hi3519dv500
+ccflags-y += -I$(src)/include/hi3519dv500/isp_mkp_inc
+ccflags-y += -I$(src)/include/hi3519dv500/isp_fw_inc
+ccflags-y += -I$(src)/include/hi3519dv500/isp_fw_arch_inc
+ccflags-y += -I$(src)/sensor_i2c/hi3519dv500/arch
+ccflags-y += -I$(src)/sensor_i2c/hi3519dv500/arch/hi3519dv500
+ccflags-y += -I$(src)/sensor_spi/hi3519dv500/arch
+ccflags-y += -I$(src)/sensor_spi/hi3519dv500/arch/hi3519dv500
+ccflags-y += -I$(src)/sensor_i2c/hi3519dv500/hi3519dv500
+ccflags-y += -I$(src)/sensor_spi/hi3519dv500/hi3519dv500
+
+# MIPI RX (vendor source self-registers via module_init in mipi_rx.c)
+ccflags-y += -I$(src)/mipi_rx/hi3519dv500
+$(PREFIX)mipi_rx-objs := mipi_rx/hi3519dv500/mipi_rx.o mipi_rx/hi3519dv500/mipi_rx_hal.o $(DV500_SDRV_INIT)/mipi_rx_init.o
+obj-m += $(PREFIX)mipi_rx.o

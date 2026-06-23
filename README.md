@@ -17,6 +17,7 @@ Replaces the proprietary SDK that HiSilicon ships to camera manufacturers. Used 
 | V4 | hi3516ev200 | hi3516ev200, hi3516ev300, hi3518ev300, hi3516dv200 | Cortex-A7 | `hi3516ev200` |
 | V4/Goke | gk7205v200 | gk7205v200, gk7205v300, gk7202v300, gk7605v100 | Cortex-A7 | `gk7205v200` |
 | V5 | hi3516cv610 | hi3516cv610, hi3516cv608 | Cortex-A7 | `hi3516cv6xx` |
+| V5 | hi3519dv500 | hi3519dv500, hi3516dv500 | Cortex-A55 (aarch64) | `hi3519dv500` |
 
 Generation labels match [qemu-hisilicon](https://github.com/widgetii/qemu-hisilicon). The hi3516ev200 and gk7205v200 are pin-compatible — the same source compiles for both via `CHIPARCH`. A [conversion script](scripts/hi2gk.sh) translates between HiSilicon and Goke naming.
 
@@ -52,6 +53,7 @@ The generation **number** tracks the peripheral address map and SDK architecture
 | V3.5 | CV500 | Cortex-A7 | OSAL | Raw `.o` + init wrappers | Incremental V3, snake_case SDK symbols |
 | V4 | EV200 | Cortex-A7 | OSAL | Source-based Kbuild | Redesigned modular SDK, Goke compat, mainline kernel |
 | V5 | CV610 | Cortex-A7 | OSAL + MMZ split | Raw `.o` + vendor init wrappers | Hi3516CV610/CV608, MMZ separated from OSAL again, vendor ships init wrappers as source |
+| V5 | DV500 | Cortex-A55 (aarch64) | OSAL + MMZ split | Raw `.o` + vendor init wrappers | Hi3519DV500/Hi3516DV500, 64-bit ABI (`-DUSER_BIT_64/-DKERNEL_BIT_64`), 53 modules (42 blob + OSAL/MMZ/sys_config + peripherals + mipi_rx) |
 
 ### Dealing with vendor .ko blobs
 
@@ -90,6 +92,7 @@ No `#ifdef` soup in driver code — the compat header handles everything. This i
 | 3.18.20 (vendor) | Production | hi3516cv300, hi3519v101 |
 | 4.9.37 (vendor) | Production | hi3516cv200, hi3516av100, hi3516cv500, hi3516ev300, gk7205v200 |
 | 5.10.221 (vendor) | Production | hi3516cv6xx |
+| 5.10.0 (vendor) | Production | hi3519dv500 |
 | 6.6 LTS | Production | hi3516ev300 (neo) |
 | 6.18 LTS | Tested | hi3516ev300 (CI-verified) |
 | 7.0-rc6 (mainline) | Production | hi3516ev300 (neo) |
@@ -105,6 +108,7 @@ No `#ifdef` soup in driver code — the compat header handles everything. This i
 │   ├── hi3516av100.kbuild       V2A monolithic build config
 │   ├── hi3519v101.kbuild        V3A monolithic build config (OSAL)
 │   ├── hi3516cv6xx.kbuild       V5 monolithic build config (OSAL + MMZ split)
+│   ├── hi3519dv500.kbuild       V5 aarch64 build config (64-bit, OSAL + MMZ split)
 │   ├── Kbuild                   Main entry — dispatches by CHIPARCH
 │   ├── compat/                  Kernel version compatibility (3.0 – 7.0)
 │   ├── obj/<chiparch>/          Pre-built vendor .o blobs
