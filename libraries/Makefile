@@ -47,6 +47,20 @@ ifeq ($(CHIPARCH),hi3516cv6xx)
     SUBDIRS := $(filter-out ./sensor/hi3516cv6xx/common/,$(SUBDIRS))
 endif
 
+# hi3519dv500 (V5, aarch64): build sensor drivers from SDK source.
+ifeq ($(CHIPARCH),hi3519dv500)
+    SUBDIRS := $(filter ./sensor/hi3519dv500/%,$(SUBDIRS))
+endif
+
+# hi3519dv500 sensors are aarch64-only — the 32-bit toolchains used by every
+# other chiparch can't compile their 64-bit-aligned vendor headers. Exclude
+# them from any non-dv500 build (chiparchs without an explicit filter above,
+# e.g. the V4 family, otherwise sweep in every sensor dir). Mirrors the
+# nnie_neo guard.
+ifneq ($(CHIPARCH),hi3519dv500)
+    SUBDIRS := $(filter-out ./sensor/hi3519dv500/%,$(SUBDIRS))
+endif
+
 all:
 	@failed=""; \
 	for dir in $(SUBDIRS); do \
