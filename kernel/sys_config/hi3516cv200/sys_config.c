@@ -609,6 +609,16 @@ static void insert_sns(void)
 
 		sys_write_reg(0x2003002c, 0xc4001);			// sensor unreset, clk 24MHz, VI 99MHz
 	}
+    else if (!strcmp(sensor, "gc2023_mipi"))
+	{
+		// MIPI variant — GC2023 wired to CSI-2 (e.g. VStarcam Hi3518EV200),
+		// uses gc2023_mipi_1080p.ini; the parallel VI pads stay unmuxed so
+		// the MIPI PHY keeps the pins
+		sys_write_reg(0x200f0040, 0x2);    			// I2C0_SCL
+		sys_write_reg(0x200f0044, 0x2);    			// I2C0_SDA
+
+		sys_write_reg(0x2003002c, 0xc4001);			// sensor unreset, clk 24MHz, VI 99MHz
+	}
     else if (!strcmp(sensor, "ov2710_dc"))
 	{
 		// DVP/parallel variant — uses libsns_ov2710_dc.so via ov2710_dc_1080p.ini
