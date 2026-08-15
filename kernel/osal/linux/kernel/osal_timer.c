@@ -27,6 +27,50 @@ int osal_hrtimer_destory(osal_hrtimer_t *phrtimer)
 }
 
 /*
+ * del_timer() returns as soon as the timer is off the list; it does not wait
+ * for a callback already running on another CPU. Deleting and then freeing --
+ * which osal_timer_destory() does -- therefore leaves that callback writing
+ * into memory that has just gone away, and a callback that re-arms itself goes
+ * on to schedule a freed timer. OpenIPC/openhisilicon#210.
+ *
+ * del_timer_sync() waits, but it cannot be used from interrupt context: it
+ * spins for the handler, which deadlocks when the handler is on this CPU.
+ * Destroying a timer from an interrupt cannot be made safe at all -- there is
+ * no way to know the handler is not running -- so keep the old behaviour there
+ * and name it, rather than trading silent corruption for a hang.
+ *
+ * del_timer_sync() on its own is still not enough for a callback that re-arms
+ * itself: it waits for that callback, which has already put the timer back on
+ * the list by the time it returns. The rtc temperature poll does exactly this
+ * and ships as a blob, so it cannot be given a stop flag. Repeat until a pass
+ * finds nothing pending -- at that point no handler is running and nothing is
+ * queued -- and bound it, because a callback re-arming with no delay would
+ * otherwise spin here forever.
+ */
+#define OSAL_TIMER_STOP_TRIES 5
+
+static void osal_timer_stop(struct timer_list *t)
+{
+	int i;
+
+	if (in_interrupt()) {
+		osal_printk(
+			"%s - called from interrupt, cannot wait for the timer callback\n",
+			__FUNCTION__);
+		del_timer(t);
+		return;
+	}
+
+	for (i = 0; i < OSAL_TIMER_STOP_TRIES; i++) {
+		if (!del_timer_sync(t))
+			return;
+	}
+
+	osal_printk("%s - timer keeps re-arming itself, gave up after %d tries\n",
+		    __FUNCTION__, OSAL_TIMER_STOP_TRIES);
+}
+
+/*
  * On kernels 4.15+, timer_setup() replaces init_timer() and the callback
  * signature changes from void(*)(unsigned long) to void(*)(struct timer_list*).
  *
@@ -99,10 +143,28 @@ int osal_del_timer(osal_timer_t *timer)
 }
 EXPORT_SYMBOL(osal_del_timer);
 
+/* Callers legitimately use osal_del_timer() from an interrupt, and from inside
+ * the timer's own callback, to mean "stop re-arming"; neither can wait. This is
+ * the variant for callers in process context that need the callback finished
+ * before they tear down what it touches. */
+int osal_del_timer_sync(osal_timer_t *timer)
+{
+	struct osal_timer_compat *ot = NULL;
+	if ((timer == NULL) || (timer->timer == NULL) ||
+	    (timer->function == NULL)) {
+		osal_printk("%s - parameter invalid!\n", __FUNCTION__);
+		return -1;
+	}
+	ot = timer->timer;
+	osal_timer_stop(&ot->tl);
+	return 0;
+}
+EXPORT_SYMBOL(osal_del_timer_sync);
+
 int osal_timer_destory(osal_timer_t *timer)
 {
 	struct osal_timer_compat *ot = timer->timer;
-	del_timer(&ot->tl);
+	osal_timer_stop(&ot->tl);
 	kfree(ot);
 	timer->timer = NULL;
 	return 0;
@@ -160,10 +222,25 @@ int osal_del_timer(osal_timer_t *timer)
 }
 EXPORT_SYMBOL(osal_del_timer);
 
+/* See the COMPAT_TIMER_SETUP branch above. */
+int osal_del_timer_sync(osal_timer_t *timer)
+{
+	struct timer_list *t = NULL;
+	if ((timer == NULL) || (timer->timer == NULL) ||
+	    (timer->function == NULL)) {
+		osal_printk("%s - parameter invalid!\n", __FUNCTION__);
+		return -1;
+	}
+	t = timer->timer;
+	osal_timer_stop(t);
+	return 0;
+}
+EXPORT_SYMBOL(osal_del_timer_sync);
+
 int osal_timer_destory(osal_timer_t *timer)
 {
 	struct timer_list *t = timer->timer;
-	del_timer(t);
+	osal_timer_stop(t);
 	kfree(t);
 	timer->timer = NULL;
 	return 0;

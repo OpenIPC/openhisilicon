@@ -534,6 +534,8 @@ extern int osal_hrtimer_destory(osal_hrtimer_t *phrtimer);
 extern int osal_timer_init(osal_timer_t *timer);
 extern int osal_set_timer(osal_timer_t *timer, unsigned long interval); // ms
 extern int osal_del_timer(osal_timer_t *timer);
+/* Waits for a callback already running; process context only. */
+extern int osal_del_timer_sync(osal_timer_t *timer);
 extern int osal_timer_destory(osal_timer_t *timer);
 
 extern unsigned long osal_msleep(unsigned int msecs);
