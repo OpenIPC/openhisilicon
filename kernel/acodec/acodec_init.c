@@ -1,6 +1,8 @@
 #include <linux/module.h>
 #include <linux/kernel.h>
 #include <linux/printk.h>
+#include <linux/jiffies.h>
+#include <linux/workqueue.h>
 
 #include "type.h"
 #include "osal.h"
@@ -57,8 +59,16 @@ module_param(rctune_watchdog, int, S_IRUGO);
 MODULE_PARM_DESC(rctune_watchdog,
 		 "retune the ADC when a clock change invalidates it (default 1)");
 
+/* Deliberately not osal_timer_t: osal_del_timer() and osal_timer_destory() are
+ * both del_timer() rather than del_timer_sync(), and destroy kfree()s the timer
+ * on top. A callback that re-arms itself -- this one does -- can then still be
+ * running while the module frees the timer and unmaps the registers underneath
+ * it, which load_goke's remove_audio would hit on every teardown. Delayed work
+ * cancels synchronously, and it runs the retune in process context rather than
+ * busy-waiting 30 us in a softirq. */
 static void *acodec_regs;
-static osal_timer_t rctune_timer;
+static struct delayed_work rctune_work;
+static bool rctune_stopping;
 static unsigned int rctune_failures;
 
 #define acodec_readl(off) osal_readl((uintptr_t)acodec_regs + (off))
@@ -73,7 +83,7 @@ static void acodec_rctune(void)
 	acodec_writel(anareg1 | ACODEC_EN_RCTUNE, ACODEC_ANAREG1);
 }
 
-static void acodec_rctune_check(unsigned long data)
+static void acodec_rctune_check(struct work_struct *work)
 {
 	unsigned long period = ACODEC_POLL_MS;
 
@@ -94,7 +104,10 @@ static void acodec_rctune_check(unsigned long data)
 			period = ACODEC_POLL_STUCK_MS;
 	}
 
-	osal_set_timer(&rctune_timer, period);
+	/* Checked before re-arming, so a cancel that lands while this callback
+	 * is running cannot be outlived by the work it queues. */
+	if (!rctune_stopping)
+		schedule_delayed_work(&rctune_work, msecs_to_jiffies(period));
 }
 
 static void acodec_rctune_watchdog_init(void)
@@ -109,15 +122,9 @@ static void acodec_rctune_watchdog_init(void)
 		return;
 	}
 
-	if (osal_timer_init(&rctune_timer)) {
-		osal_iounmap(acodec_regs);
-		acodec_regs = NULL;
-		return;
-	}
-
-	rctune_timer.function = acodec_rctune_check;
-	rctune_timer.data = 0;
-	osal_set_timer(&rctune_timer, ACODEC_POLL_MS);
+	rctune_stopping = false;
+	INIT_DELAYED_WORK(&rctune_work, acodec_rctune_check);
+	schedule_delayed_work(&rctune_work, msecs_to_jiffies(ACODEC_POLL_MS));
 }
 
 static void acodec_rctune_watchdog_exit(void)
@@ -125,8 +132,9 @@ static void acodec_rctune_watchdog_exit(void)
 	if (acodec_regs == NULL)
 		return;
 
-	osal_del_timer(&rctune_timer);
-	osal_timer_destory(&rctune_timer);
+	rctune_stopping = true;
+	cancel_delayed_work_sync(&rctune_work);
+
 	osal_iounmap(acodec_regs);
 	acodec_regs = NULL;
 }
