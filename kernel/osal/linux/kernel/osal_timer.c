@@ -49,7 +49,9 @@ int osal_hrtimer_destory(osal_hrtimer_t *phrtimer)
  */
 #define OSAL_TIMER_STOP_TRIES 5
 
-static void osal_timer_stop(struct timer_list *t)
+/* 0 when the timer is off the list with no callback running, -1 when that could
+ * not be established -- the caller must not free it in that case. */
+static int osal_timer_stop(struct timer_list *t)
 {
 	int i;
 
@@ -58,16 +60,17 @@ static void osal_timer_stop(struct timer_list *t)
 			"%s - called from interrupt, cannot wait for the timer callback\n",
 			__FUNCTION__);
 		del_timer(t);
-		return;
+		return -1;
 	}
 
 	for (i = 0; i < OSAL_TIMER_STOP_TRIES; i++) {
 		if (!del_timer_sync(t))
-			return;
+			return 0;
 	}
 
 	osal_printk("%s - timer keeps re-arming itself, gave up after %d tries\n",
 		    __FUNCTION__, OSAL_TIMER_STOP_TRIES);
+	return -1;
 }
 
 /*
@@ -156,15 +159,23 @@ int osal_del_timer_sync(osal_timer_t *timer)
 		return -1;
 	}
 	ot = timer->timer;
-	osal_timer_stop(&ot->tl);
-	return 0;
+	return osal_timer_stop(&ot->tl);
 }
 EXPORT_SYMBOL(osal_del_timer_sync);
 
 int osal_timer_destory(osal_timer_t *timer)
 {
 	struct osal_timer_compat *ot = timer->timer;
-	osal_timer_stop(&ot->tl);
+
+	if (osal_timer_stop(&ot->tl)) {
+		/* Leaking the wrapper is the lesser fault: freeing one that is
+		 * still queued, or whose callback may still be running, is the
+		 * use-after-free this exists to prevent. */
+		osal_printk("%s - timer still live, leaked rather than freed\n",
+			    __FUNCTION__);
+		return -1;
+	}
+
 	kfree(ot);
 	timer->timer = NULL;
 	return 0;
@@ -232,15 +243,21 @@ int osal_del_timer_sync(osal_timer_t *timer)
 		return -1;
 	}
 	t = timer->timer;
-	osal_timer_stop(t);
-	return 0;
+	return osal_timer_stop(t);
 }
 EXPORT_SYMBOL(osal_del_timer_sync);
 
 int osal_timer_destory(osal_timer_t *timer)
 {
 	struct timer_list *t = timer->timer;
-	osal_timer_stop(t);
+
+	if (osal_timer_stop(t)) {
+		/* See the COMPAT_TIMER_SETUP branch above. */
+		osal_printk("%s - timer still live, leaked rather than freed\n",
+			    __FUNCTION__);
+		return -1;
+	}
+
 	kfree(t);
 	timer->timer = NULL;
 	return 0;
