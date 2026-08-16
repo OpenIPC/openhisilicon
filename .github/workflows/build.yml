@@ -679,7 +679,7 @@ jobs:
   #
   # qemu-ive-ops
   #
-  # Builds QEMU with HiSilicon machine models from widgetii/qemu-hisilicon
+  # Builds QEMU with HiSilicon machine models from OpenIPC/qemu-hisilicon
   # (cached by pinned SHA), builds the vendored kernel/ive_neo/test/qemu
   # register test as a static ARM binary, wraps in cpio, boots under
   # qemu-system-arm -M hi3516ev300 with a downloaded OpenIPC kernel, and
@@ -706,9 +706,9 @@ jobs:
             ive_base: '0x11230000'
             # CV500 family (cv500/av300): IVE @ 0x11230000.
     env:
-      # Pinned SHA of widgetii/qemu-hisilicon. Bump this when upstream
+      # Pinned SHA of OpenIPC/qemu-hisilicon. Bump this when upstream
       # changes machine-model register semantics. The cv500 machine
-      # gained hisi-ive at 0x11230000 in widgetii/qemu-hisilicon#99 —
+      # gained hisi-ive at 0x11230000 in OpenIPC/qemu-hisilicon#99 —
       # cv500 regression coverage requires that SHA or later.
       QEMU_HISILICON_SHA: master
     steps:
@@ -725,7 +725,7 @@ jobs:
 
       - name: Clone qemu-hisilicon
         run: |
-          git clone --depth 1 https://github.com/widgetii/qemu-hisilicon.git /tmp/qemu-hisilicon
+          git clone --depth 1 https://github.com/OpenIPC/qemu-hisilicon.git /tmp/qemu-hisilicon
           cd /tmp/qemu-hisilicon
           echo "SHA=$(git rev-parse HEAD)" >> $GITHUB_ENV
 
@@ -798,7 +798,7 @@ jobs:
   #
   # Mirrors qemu-ive-ops for the NNIE block: boots an ARM initramfs
   # under qemu-system-arm with the hisi-nnie machine model
-  # (widgetii/qemu-hisilicon, added alongside hisi-ive) and runs a
+  # (OpenIPC/qemu-hisilicon, added alongside hisi-ive) and runs a
   # register-level smoke test against it.
   #
   # The test binary (kernel/nnie_neo/test/qemu/test-nnie-forward.c) is
@@ -821,7 +821,7 @@ jobs:
           - machine: hi3516cv500
             firmware: hi3516cv500
     env:
-      # Bump when widgetii/qemu-hisilicon changes the hisi-nnie model.
+      # Bump when OpenIPC/qemu-hisilicon changes the hisi-nnie model.
       QEMU_HISILICON_SHA: master
     steps:
       - uses: actions/checkout@v4
@@ -837,7 +837,7 @@ jobs:
 
       - name: Clone qemu-hisilicon
         run: |
-          git clone --depth 1 https://github.com/widgetii/qemu-hisilicon.git /tmp/qemu-hisilicon
+          git clone --depth 1 https://github.com/OpenIPC/qemu-hisilicon.git /tmp/qemu-hisilicon
           cd /tmp/qemu-hisilicon
           echo "SHA=$(git rev-parse HEAD)" >> $GITHUB_ENV
 
@@ -1060,7 +1060,7 @@ jobs:
 
       - name: Clone qemu-hisilicon
         run: |
-          git clone --depth 1 https://github.com/widgetii/qemu-hisilicon.git /tmp/qemu-hisilicon
+          git clone --depth 1 https://github.com/OpenIPC/qemu-hisilicon.git /tmp/qemu-hisilicon
           cd /tmp/qemu-hisilicon
           echo "SHA=$(git rev-parse HEAD)" >> $GITHUB_ENV
 
