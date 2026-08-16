@@ -6,7 +6,7 @@
 #
 # Requirements:
 #   - qemu-system-arm binary with HiSilicon machine models
-#     (from widgetii/qemu-hisilicon; not bundled here).
+#     (from OpenIPC/qemu-hisilicon; not bundled here).
 #     Pass the path via QEMU=... or make sure it's on PATH.
 #   - uImage.hi3516ev300 kernel image (from OpenIPC firmware release).
 #     Pass via KERNEL=... or place it next to this script.
