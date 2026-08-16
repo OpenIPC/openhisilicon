@@ -63,7 +63,7 @@ start the CPU there. This is end-to-end evidence the reversal matches
 what the silicon does, not just plausible-looking C.
 
 Requires qemu-hisilicon with the maskrom -bios path
-(widgetii/qemu-hisilicon#98 or later):
+(OpenIPC/qemu-hisilicon#98 or later):
 
   cd ~/git/qemu-hisilicon && bash qemu/setup.sh   # one-time
 
@@ -109,7 +109,7 @@ CI gate
 A `bootrom RE compile-gate` job in this repo's .github/workflows/build.yml
 builds re.elf and diffs its function-symbol set against
 .expected-symbols (drift in either direction fails the diff). A
-separate `maskrom-av300` job in widgetii/qemu-hisilicon runs the two
+separate `maskrom-av300` job in OpenIPC/qemu-hisilicon runs the two
 end-to-end QEMU checks above on every PR — handshake-pattern match
 and ACK-advance — gating any future qemu-hisilicon change against
 silently breaking the bootrom path.

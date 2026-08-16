@@ -19,7 +19,7 @@ Replaces the proprietary SDK that HiSilicon ships to camera manufacturers. Used 
 | V5 | hi3516cv610 | hi3516cv610, hi3516cv608 | Cortex-A7 | `hi3516cv6xx` |
 | V5 | hi3519dv500 | hi3519dv500, hi3516dv500 | Cortex-A55 (aarch64) | `hi3519dv500` |
 
-Generation labels match [qemu-hisilicon](https://github.com/widgetii/qemu-hisilicon). The hi3516ev200 and gk7205v200 are pin-compatible — the same source compiles for both via `CHIPARCH`. A [conversion script](scripts/hi2gk.sh) translates between HiSilicon and Goke naming.
+Generation labels match [qemu-hisilicon](https://github.com/OpenIPC/qemu-hisilicon). The hi3516ev200 and gk7205v200 are pin-compatible — the same source compiles for both via `CHIPARCH`. A [conversion script](scripts/hi2gk.sh) translates between HiSilicon and Goke naming.
 
 ## How HiSilicon SDK modules work
 
@@ -430,7 +430,7 @@ Every push and PR runs **22 jobs**:
 
 Plus 3 mainline kernel builds for hi3516ev300_neo (6.6, 6.18, 7.0).
 
-**QEMU boot smoke-tests** (8 platforms): CV100, CV200, AV100, CV300, 3519V101, CV500, EV200, GK7205V200 — boots OpenIPC firmware under [qemu-hisilicon](https://github.com/widgetii/qemu-hisilicon) and verifies the kernel reaches userspace.
+**QEMU boot smoke-tests** (8 platforms): CV100, CV200, AV100, CV300, 3519V101, CV500, EV200, GK7205V200 — boots OpenIPC firmware under [qemu-hisilicon](https://github.com/OpenIPC/qemu-hisilicon) and verifies the kernel reaches userspace.
 
 **Library checks** (3 jobs): header syntax + ABI struct sizes, ARM cross-compile + symbol verification, QEMU IVE register regression.
 
