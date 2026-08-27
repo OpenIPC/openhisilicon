@@ -1705,7 +1705,17 @@ hi_s32 drv_symc_wait_done(hi_u32 chn_num, hi_u32 timeout)
             module_disable(CRYPTO_MODULE_ID_SM4);
         }
 
-        if ((ret <= 0x00) && (ret != -ERESTARTSYS)) {
+        /*
+         * -ERESTARTSYS was excluded here, which let a wait cut short by a
+         * signal fall through to HI_SUCCESS below. crypto_queue_wait_timeout
+         * is wait_event_interruptible_timeout, so that is reachable whenever
+         * the calling thread takes a signal -- and the caller then copies out
+         * a buffer the engine may not have finished writing, with no error
+         * anywhere. Ciphertext is meant to look like noise, so nothing
+         * downstream can tell. Report it instead and let the caller retry or
+         * fall back.
+         */
+        if (ret <= 0x00) {
             HI_LOG_ERROR("wait done timeout, chn=%d\n", chn_num);
             HI_LOG_PRINT_FUNC_ERR(crypto_queue_wait_timeout, ret);
             drv_symc_get_err_code(chn_num);
