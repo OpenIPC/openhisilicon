@@ -127,6 +127,14 @@ static int symc_proc_open(struct inode *inode, struct file *file)
     return single_open(file, symc_proc_read, NULL);
 }
 
+#ifdef COMPAT_USE_PROC_OPS
+static const struct proc_ops DRV_CIPHER_ProcFops = {
+    .proc_open		= symc_proc_open,
+    .proc_read		= seq_read,
+    .proc_lseek		= seq_lseek,
+    .proc_release	= single_release,
+};
+#else
 static const struct file_operations DRV_CIPHER_ProcFops = {
     .owner		= THIS_MODULE,
     .open		= symc_proc_open,
@@ -134,6 +142,7 @@ static const struct file_operations DRV_CIPHER_ProcFops = {
     .llseek		= seq_lseek,
     .release	= single_release,
 };
+#endif
 
 static hi_void symc_proc_init(hi_void)
 {
@@ -246,7 +255,11 @@ int cipher_drv_mod_init(void)
     /* dma data structure shall be initialised before being used in Kernel 4.9
      * or else call dma_set_coherent_mask/dma_alloc_coherent will return error
      */
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(4, 18, 0)
+    of_dma_configure(cipher_dev.this_device, cipher_dev.this_device->of_node, true);
+#else
     of_dma_configure(cipher_dev.this_device, cipher_dev.this_device->of_node);
+#endif
 
     ret = crypto_entry();
     if (ret != HI_SUCCESS) {

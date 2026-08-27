@@ -63,11 +63,11 @@ static int hi35xx_cipher_probe(struct platform_device *pdev)
     return 0;
 }
 
-static int hi35xx_cipher_remove(struct platform_device *pdev)
+static compat_platform_remove_ret hi35xx_cipher_remove(struct platform_device *pdev)
 {
     cipher_drv_mod_exit();
 
-    return 0;
+    compat_platform_remove_return;
 }
 
 static const struct of_device_id hi35xx_cipher_match[] = {
