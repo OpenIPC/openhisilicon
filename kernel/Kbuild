@@ -61,6 +61,9 @@ include $(src)/sensor_i2c/Kbuild
 include $(src)/sensor_spi/Kbuild
 include $(src)/mipi_rx/Kbuild
 include $(src)/openipc_frame_ts/Kbuild
+# Guarded on CHIPARCH inside; only hi3516ev200 builds a cipher module here,
+# and hi3516cv500 builds its own from hi3516cv500.kbuild.
+include $(src)/cipher/Kbuild
 #+user
 
 ifneq ($(filter $(CHIPARCH),hi3516ev200 gk7205v200),)
