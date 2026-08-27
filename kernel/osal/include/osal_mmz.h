@@ -325,16 +325,30 @@ int mmz_flush_dcache_all(void);
  */
 typedef mmz_mmb_t hil_mmb_t;
 
+/*
+ * The functions are declarations, not #defines, and that distinction is not
+ * cosmetic. On 6.4+ EXPORT_COMPAT_MMZ emits
+ *
+ *	typeof(mmz_x) hil_x __attribute__((alias("mmz_x")));
+ *
+ * which writes hil_x as a real identifier. A #define would rewrite that token
+ * and redefine mmz_x on top of itself -- media-mem.c stops compiling, and only
+ * on 6.4+, because the pre-6.4 branch builds its aliases out of strings and
+ * never spells hil_x as an identifier at all.
+ *
+ * typeof() rather than repeating each prototype, so these cannot drift from
+ * the definitions above.
+ */
 #define hil_mmb_phys(p)		mmz_mmb_phys(p)
 #define hil_mmb_freeby_phys(a)	mmz_mmb_freeby_phys(a)
 
-#define hil_mmb_alloc		mmz_mmb_alloc
-#define hil_mmb_free		mmz_mmb_free
-#define hil_mmb_getby_phys	mmz_mmb_getby_phys
-#define hil_mmb_getby_phys_2	mmz_mmb_getby_phys_2
-#define hil_mmb_getby_kvirt	mmz_mmb_getby_kvirt
-#define hil_mmb_map2kern	mmz_mmb_map2kern
-#define hil_mmb_unmap		mmz_mmb_unmap
-#define hil_map_mmz_check_phys	mmz_map_mmz_check_phys
+extern typeof(mmz_mmb_alloc) hil_mmb_alloc;
+extern typeof(mmz_mmb_free) hil_mmb_free;
+extern typeof(mmz_mmb_getby_phys) hil_mmb_getby_phys;
+extern typeof(mmz_mmb_getby_phys_2) hil_mmb_getby_phys_2;
+extern typeof(mmz_mmb_getby_kvirt) hil_mmb_getby_kvirt;
+extern typeof(mmz_mmb_map2kern) hil_mmb_map2kern;
+extern typeof(mmz_mmb_unmap) hil_mmb_unmap;
+extern typeof(mmz_map_mmz_check_phys) hil_map_mmz_check_phys;
 
 #endif
