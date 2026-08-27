@@ -21,7 +21,7 @@ register layout the driver expects will fail this test.
 
 ## Upstream
 
-- **Source**: `widgetii/qemu-hisilicon`, path `qemu-boot/test-ive-ops.c`
+- **Source**: `OpenIPC/qemu-hisilicon`, path `qemu-boot/test-ive-ops.c`
 - **Last synced**: commit `9e1ea1d` ("Add IVE register tests to CI:
   19 ops verified on every push")
 - **Upstream license**: same as the clean-room driver (GPL-2.0)
@@ -59,14 +59,14 @@ KERNEL=/path/to/uImage.hi3516ev300 \
 ```
 
 You can get `qemu-system-arm` with the HiSilicon machine models from
-[widgetii/qemu-hisilicon](https://github.com/widgetii/qemu-hisilicon).
+[OpenIPC/qemu-hisilicon](https://github.com/OpenIPC/qemu-hisilicon).
 An `openipc.hi3516ev300-nor-lite.tgz` with a matching kernel is in
 every OpenIPC firmware release.
 
 ## Running in CI
 
 `.github/workflows/build.yml` has a `qemu-ive-ops` job that:
-1. Builds `qemu-system-arm` from `widgetii/qemu-hisilicon` (cached)
+1. Builds `qemu-system-arm` from `OpenIPC/qemu-hisilicon` (cached)
 2. Downloads an `openipc.hi3516ev300-nor-lite.tgz` release tarball
 3. Runs `make` in this directory to build the cpio
 4. Launches QEMU with the kernel + cpio and greps for `Result: N/N passed`
