@@ -1,0 +1,91 @@
+#
+# kernel/cipher — the Cipher (crypto) engine, for chips built by the generic
+# branch of kernel/Kbuild rather than by their own <chip>.kbuild.
+#
+# hi3516cv500 builds this module from its own kbuild and does not come through
+# here. This file exists for hi3516ev200 (and so hi3516ev300), whose firmware
+# has never packaged a cipher module at all: the vendor prebuilt from the
+# Hi3516EV200 SDK cannot load against an OpenIPC rootfs, and there was no
+# source build to fall back on.
+#
+# ITS OWN TREE, like every other chip under kernel/cipher/. Reusing cv500's
+# source with -DCHIP_TYPE_hi3516ev200 was tried first and is a worse idea than
+# it looks: cv500's tree is a later SDK vintage (the 2019 rewrite), the two
+# differ by some 30k lines, and it carries no drv_osal_hi3516ev200.h at all.
+# The tree here is the one from Hi3516EV200_SDK_V1.0.1.2 that was built and
+# checked on an hi3516ev300 -- 600 differential AES-CTR cases byte-identical
+# to mbedTLS -- so it is the version known to drive this silicon correctly.
+# Only include/ and src/ are vendored; the SDK's sample/, buildin/ and patch/
+# trees are not built here.
+#
+# WHAT IT IS FOR. AES-128-CTR at SRTP packet sizes, where a userspace streamer
+# would otherwise do it on the CPU. Measured on an hi3516ev300 against the
+# mbedTLS 2.25 the rootfs ships, 1100-byte buffers: 87.6 us of CPU in software
+# against 42.0 through the engine, a 52% cut. More is saved in CPU than in
+# wall clock, because the driver sleeps on its completion interrupt and hands
+# the core back while the block works -- which is the scarce resource on these
+# parts. The engine also carries a TRNG and RSA that nothing uses yet.
+#
+# Not built for gk7205v200, which shares this branch: it is the same
+# generation on paper, but Goke ships its cipher as a differently-named module
+# against a different userspace, and nothing here has been measured on one.
+#
+
+ifeq ($(CHIPARCH),hi3516ev200)
+
+EV200_CIPHER = cipher/hi3516ev200/src
+
+$(PREFIX)cipher-objs := \
+	$(EV200_CIPHER)/drv/cipher_initdevice.o \
+	$(EV200_CIPHER)/drv/cipher_v1.0/drivers/core/drv_symc_v100.o \
+	$(EV200_CIPHER)/drv/cipher_v1.0/drivers/core/drv_symc_v200.o \
+	$(EV200_CIPHER)/drv/cipher_v1.0/drivers/core/drv_hash_v100.o \
+	$(EV200_CIPHER)/drv/cipher_v1.0/drivers/core/drv_hash_v200.o \
+	$(EV200_CIPHER)/drv/cipher_v1.0/drivers/core/drv_ifep_rsa_v100.o \
+	$(EV200_CIPHER)/drv/cipher_v1.0/drivers/core/drv_trng_v100.o \
+	$(EV200_CIPHER)/drv/cipher_v1.0/drivers/core/drv_trng_v200.o \
+	$(EV200_CIPHER)/drv/cipher_v1.0/drivers/core/drv_lib.o \
+	$(EV200_CIPHER)/drv/cipher_v1.0/drivers/crypto/cryp_symc.o \
+	$(EV200_CIPHER)/drv/cipher_v1.0/drivers/crypto/cryp_hash.o \
+	$(EV200_CIPHER)/drv/cipher_v1.0/drivers/crypto/cryp_trng.o \
+	$(EV200_CIPHER)/drv/cipher_v1.0/drivers/crypto/cryp_rsa.o \
+	$(EV200_CIPHER)/drv/cipher_v1.0/drivers/kapi_symc.o \
+	$(EV200_CIPHER)/drv/cipher_v1.0/drivers/kapi_hash.o \
+	$(EV200_CIPHER)/drv/cipher_v1.0/drivers/kapi_rsa.o \
+	$(EV200_CIPHER)/drv/cipher_v1.0/drivers/kapi_trng.o \
+	$(EV200_CIPHER)/drv/cipher_v1.0/drivers/kapi_dispatch.o \
+	$(EV200_CIPHER)/drv/cipher_v1.0/drivers/extend/mbedtls/bignum.o \
+	$(EV200_CIPHER)/drv/cipher_v1.0/drivers/extend/mbedtls/md.o \
+	$(EV200_CIPHER)/drv/cipher_v1.0/drivers/extend/mbedtls/rsa.o \
+	$(EV200_CIPHER)/drv/cipher_v1.0/drivers/extend/mbedtls/asn1parse.o \
+	$(EV200_CIPHER)/drv/cipher_v1.0/drivers/extend/mbedtls/oid.o \
+	$(EV200_CIPHER)/drv/cipher_v1.0/drivers/extend/mbedtls/platform_util.o \
+	$(EV200_CIPHER)/drv/cipher_v1.0/drivers/extend/mbedtls/rsa_internal.o \
+	$(EV200_CIPHER)/drv/cipher_v1.0/drivers/extend/ext_aead.o \
+	$(EV200_CIPHER)/drv/cipher_v1.0/drivers/extend/ext_hash.o \
+	$(EV200_CIPHER)/drv/cipher_v1.0/drivers/extend/ext_symc.o \
+	$(EV200_CIPHER)/drv/cipher_v1.0/drivers/extend/ext_sm3.o \
+	$(EV200_CIPHER)/drv/cipher_v1.0/drivers/extend/ext_sm4.o \
+	$(EV200_CIPHER)/drv/cipher_v1.0/osal/drv_osal_init_linux.o \
+	$(EV200_CIPHER)/drv/cipher_v1.0/osal/drv_osal_sys_linux.o \
+	$(EV200_CIPHER)/drv/cipher_v1.0/compat/hi_drv_compat.o \
+	$(EV200_CIPHER)/drv/cipher_v1.0/compat/drv_klad.o \
+	$(EV200_CIPHER)/drv/cipher_v1.0/compat/hal_efuse.o \
+	$(EV200_CIPHER)/drv/cipher_v1.0/compat/hal_otp.o
+
+# Self-contained: hi_type.h is vendored into the tree above rather than
+# borrowed from include/hi3516cv500, which looks interchangeable and is not --
+# HI_PHYS_ADDR_T is signed there and unsigned here. Borrowing it also let
+# include/hi3516cv500/hi_types.h shadow this tree's own, which is where the
+# HI_HANDLE_* macros live.
+ccflags-y += -I$(src)/cipher/hi3516ev200/include
+ccflags-y += -I$(src)/cipher/hi3516ev200/src/drv/cipher_v1.0/osal/include
+ccflags-y += -I$(src)/cipher/hi3516ev200/src/drv/cipher_v1.0/drivers/core/include
+ccflags-y += -I$(src)/cipher/hi3516ev200/src/drv/cipher_v1.0/drivers/crypto/include
+ccflags-y += -I$(src)/cipher/hi3516ev200/src/drv/cipher_v1.0/drivers/extend/include
+ccflags-y += -I$(src)/cipher/hi3516ev200/src/drv/cipher_v1.0/compat
+ccflags-y += -DCHIP_TYPE_hi3516ev200 -DAMP_NONSECURE_VERSION
+
+obj-m += $(PREFIX)cipher.o
+
+endif

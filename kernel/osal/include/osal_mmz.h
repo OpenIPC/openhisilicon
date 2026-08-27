@@ -307,4 +307,48 @@ int mmz_userdev_init(void);
 void mmz_userdev_exit(void);
 int mmz_flush_dcache_all(void);
 
+/*
+ * hil_ compatibility, the compile-time half of what EXPORT_COMPAT_MMZ does at
+ * link time in mmz/media-mem.c.
+ *
+ * Those aliases were enough while the only consumers were vendor .o blobs,
+ * which reference hil_ symbols and carry no headers. A driver built from
+ * vendor SOURCE needs the names to exist for the compiler too: kernel/cipher/
+ * hi3516ev200 is the first of those, and its drv_osal_lib.h opens with
+ * `#include "osal_mmz.h"` followed by a bare hil_mmb_t.
+ *
+ * Aliases only. Every name here is the mmz_ one under its vendor spelling,
+ * and nothing below allocates, frees or otherwise behaves differently. The
+ * per-chip headers under kernel/include/<chip>/osal_mmz.h already carry these
+ * names natively; a chip using one of those never reaches this file, because
+ * the two share a basename and the include path picks one.
+ */
+typedef mmz_mmb_t hil_mmb_t;
+
+/*
+ * The functions are declarations, not #defines, and that distinction is not
+ * cosmetic. On 6.4+ EXPORT_COMPAT_MMZ emits
+ *
+ *	typeof(mmz_x) hil_x __attribute__((alias("mmz_x")));
+ *
+ * which writes hil_x as a real identifier. A #define would rewrite that token
+ * and redefine mmz_x on top of itself -- media-mem.c stops compiling, and only
+ * on 6.4+, because the pre-6.4 branch builds its aliases out of strings and
+ * never spells hil_x as an identifier at all.
+ *
+ * typeof() rather than repeating each prototype, so these cannot drift from
+ * the definitions above.
+ */
+#define hil_mmb_phys(p)		mmz_mmb_phys(p)
+#define hil_mmb_freeby_phys(a)	mmz_mmb_freeby_phys(a)
+
+extern typeof(mmz_mmb_alloc) hil_mmb_alloc;
+extern typeof(mmz_mmb_free) hil_mmb_free;
+extern typeof(mmz_mmb_getby_phys) hil_mmb_getby_phys;
+extern typeof(mmz_mmb_getby_phys_2) hil_mmb_getby_phys_2;
+extern typeof(mmz_mmb_getby_kvirt) hil_mmb_getby_kvirt;
+extern typeof(mmz_mmb_map2kern) hil_mmb_map2kern;
+extern typeof(mmz_mmb_unmap) hil_mmb_unmap;
+extern typeof(mmz_map_mmz_check_phys) hil_map_mmz_check_phys;
+
 #endif
