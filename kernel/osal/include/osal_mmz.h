@@ -307,4 +307,34 @@ int mmz_userdev_init(void);
 void mmz_userdev_exit(void);
 int mmz_flush_dcache_all(void);
 
+/*
+ * hil_ compatibility, the compile-time half of what EXPORT_COMPAT_MMZ does at
+ * link time in mmz/media-mem.c.
+ *
+ * Those aliases were enough while the only consumers were vendor .o blobs,
+ * which reference hil_ symbols and carry no headers. A driver built from
+ * vendor SOURCE needs the names to exist for the compiler too: kernel/cipher/
+ * hi3516ev200 is the first of those, and its drv_osal_lib.h opens with
+ * `#include "osal_mmz.h"` followed by a bare hil_mmb_t.
+ *
+ * Aliases only. Every name here is the mmz_ one under its vendor spelling,
+ * and nothing below allocates, frees or otherwise behaves differently. The
+ * per-chip headers under kernel/include/<chip>/osal_mmz.h already carry these
+ * names natively; a chip using one of those never reaches this file, because
+ * the two share a basename and the include path picks one.
+ */
+typedef mmz_mmb_t hil_mmb_t;
+
+#define hil_mmb_phys(p)		mmz_mmb_phys(p)
+#define hil_mmb_freeby_phys(a)	mmz_mmb_freeby_phys(a)
+
+#define hil_mmb_alloc		mmz_mmb_alloc
+#define hil_mmb_free		mmz_mmb_free
+#define hil_mmb_getby_phys	mmz_mmb_getby_phys
+#define hil_mmb_getby_phys_2	mmz_mmb_getby_phys_2
+#define hil_mmb_getby_kvirt	mmz_mmb_getby_kvirt
+#define hil_mmb_map2kern	mmz_mmb_map2kern
+#define hil_mmb_unmap		mmz_mmb_unmap
+#define hil_map_mmz_check_phys	mmz_map_mmz_check_phys
+
 #endif

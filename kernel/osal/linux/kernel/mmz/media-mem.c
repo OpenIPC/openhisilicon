@@ -773,7 +773,15 @@ mmz_mmb_t *mmz_mmb_getby_phys_2(unsigned long addr, unsigned long *Outoffset)
 	up(&mmz_lock);
 	return p;
 }
-EXPORT_SYMBOL(mmz_mmb_getby_phys_2);
+/*
+ * EXPORT_COMPAT_MMZ, like every other mmb_ function above and below, rather
+ * than a plain EXPORT_SYMBOL: the hil_ spelling is the name vendor drivers
+ * link against. The per-chip osal_mmz.h headers declare hil_mmb_getby_phys_2
+ * and the cipher driver calls it, so without the alias open_cipher.ko cannot
+ * load at all ("Unknown symbol hil_mmb_getby_phys_2") on any chip whose osal
+ * comes from this generic tree.
+ */
+EXPORT_COMPAT_MMZ(mmb_getby_phys_2);
 
 mmz_mmz_t *mmz_mmz_find(unsigned long gfp, const char *mmz_name)
 {
