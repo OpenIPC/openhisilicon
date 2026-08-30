@@ -23,6 +23,7 @@
 
 #endif
 #include "gk_api_isp.h"
+#include "hicompat.h"
 const unsigned char gc2053_i2c_addr = 0x6e; /* I2C Address of GC2053 */
 const unsigned int gc2053_addr_byte = 1;
 const unsigned int gc2053_data_byte = 1;

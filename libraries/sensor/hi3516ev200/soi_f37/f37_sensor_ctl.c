@@ -11,6 +11,7 @@
 #include "comm_video.h"
 #include "sns_ctrl.h"
 #include "gk_api_isp.h"
+#include "hicompat.h"
 
 #ifdef GPIO_I2C
 #include "gpioi2c_ex.h"

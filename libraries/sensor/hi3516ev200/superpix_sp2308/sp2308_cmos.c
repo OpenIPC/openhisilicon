@@ -14,6 +14,7 @@
 #include "gk_api_isp.h"
 #include "gk_api_ae.h"
 #include "gk_api_awb.h"
+#include "hicompat.h"
 #include "sp2308_cmos_ex.h"
 #include "sp2308_cmos.h"
 

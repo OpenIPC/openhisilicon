@@ -10,6 +10,7 @@
 #include "gk_api_isp.h"
 #include "gk_api_ae.h"
 #include "gk_api_awb.h"
+#include "hicompat.h"
 
 #define GC5603_ID   5603
 
