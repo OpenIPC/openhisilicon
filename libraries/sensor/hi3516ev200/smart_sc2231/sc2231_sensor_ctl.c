@@ -23,6 +23,7 @@
 #endif
 
 #include "gk_api_isp.h"
+#include "hicompat.h"
 const unsigned char sc2231_i2c_addr = 0x60; /* I2C Address of sc2231 */
 const unsigned int sc2231_addr_byte = 2;
 const unsigned int sc2231_data_byte = 1;

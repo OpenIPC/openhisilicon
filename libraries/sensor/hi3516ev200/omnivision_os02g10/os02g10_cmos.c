@@ -12,6 +12,7 @@
 #include "gk_api_isp.h"
 #include "gk_api_ae.h"
 #include "gk_api_awb.h"
+#include "hicompat.h"
 #include "os02g10_cmos_ex.h"
 #include "os02g10_cmos.h"
 
