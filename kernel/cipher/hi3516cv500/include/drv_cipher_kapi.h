@@ -125,7 +125,14 @@ typedef enum {
 #define CRYPTO_CMD_TRNG                crypto_iowr(0x0d, sizeof(trng_t))
 #define CRYPTO_CMD_SYMC_GET_CONFIG     crypto_iowr(0x0e, sizeof(symc_get_cfg_t))
 #define CRYPTO_CMD_KLAD_KEY            crypto_iowr(0x0f, sizeof(klad_key_t))
-#define CRYPTO_CMD_COUNT               0x10
+/*
+ * OpenIPC extension, see symc_encrypt_via_multi_t. Appended rather than
+ * inserted: the command number encodes sizeof(payload) and its position, so
+ * every number above stays what the vendor library computes.
+ */
+#define CRYPTO_CMD_SYMC_ENCRYPT_VIA_MULTI \
+                                       crypto_iow (0x10, sizeof(symc_encrypt_via_multi_t))
+#define CRYPTO_CMD_COUNT               0x11
 
 #define crypto_chk_err_exit(_expr) \
     do { \
@@ -277,6 +284,41 @@ typedef struct {
     hi_u32 pack_num;        /* Number of package infomation */
     hi_u32 operation;       /* Decrypt or encrypt */
 } symc_encrypt_multi_t;
+
+/*
+ * OpenIPC extension: batched encrypt from user virtual addresses, each package
+ * under its OWN IV.
+ *
+ * The vendor's multi-package call (CRYPTO_CMD_SYMC_ENCRYPTMULTI) describes a
+ * package as hi_cipher_data -- source, destination, length, odd/even key
+ * selector -- and no IV, so every package in a submission runs under the one
+ * IV the last CONFIGHANDLE left in the channel. That suits chaining one long
+ * buffer and is useless for SRTP, where each packet's IV comes from its own
+ * sequence number. It also takes physical (MMZ) addresses, which a streamer's
+ * heap is not.
+ *
+ * The silicon has no such limit: drv_symc_add_inbuf() writes an IV into EVERY
+ * descriptor node it builds, and HI_CIPHER_IV_CHG_ALL_PACK makes the block
+ * reload it per node -- the driver simply had no way to be told a different
+ * one per package. This carries them.
+ *
+ * One ioctl, one DMA buffer, one hardware start and ONE completion interrupt
+ * for a whole burst, instead of two ioctls and one sleep each.
+ */
+typedef struct {
+    compat_addr src;       /* Virtual address of the input data */
+    compat_addr dst;       /* Virtual address of the output data */
+    hi_u32 length;         /* Length of this package */
+    hi_u32 reserve;        /* Alignment, must be zero */
+    hi_u8 iv[16];          /* This package's own IV */
+} symc_via_pkg;
+
+typedef struct {
+    hi_u32 id;             /* Id of soft channel */
+    compat_addr pkg;       /* User address of a symc_via_pkg[pkg_num] */
+    hi_u32 pkg_num;        /* Number of packages */
+    hi_u32 operation;      /* Decrypt or encrypt */
+} symc_encrypt_via_multi_t;
 
 /* struct of Symmetric cipher get tag */
 typedef struct {
@@ -474,6 +516,14 @@ hi_s32 kapi_symc_crypto_via(symc_encrypt_t *crypt, hi_u32 is_from_user);
  * return           0 if successful
  */
 hi_s32 kapi_symc_crypto_multi(hi_u32 id, const hi_void *pack, hi_u32 pack_num, hi_u32 operation, hi_u32 last);
+
+/*
+ * OpenIPC extension: batched encryption from user virtual addresses, one IV
+ * per package. Returns HI_ERR_CIPHER_UNSUPPORTED where the configured
+ * algorithm has no per-node IV support, and the caller should fall back to
+ * the single-package call.
+ */
+hi_s32 kapi_symc_crypto_via_multi(hi_u32 id, const hi_void *pkg, hi_u32 pkg_num, hi_u32 operation);
 
 /*
  * brief          SYMC multiple buffer encryption/decryption.

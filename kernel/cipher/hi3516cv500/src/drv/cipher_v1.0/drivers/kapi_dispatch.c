@@ -125,6 +125,28 @@ static hi_s32 dispatch_symc_encrypt(hi_void *argp)
     return HI_SUCCESS;
 }
 
+/*
+ * OpenIPC extension, see symc_encrypt_via_multi_t. Deliberately thin: every
+ * bound is checked in kapi_symc_crypto_via_multi(), against the same limits
+ * the buffer is sized from, rather than half here and half there.
+ */
+static hi_s32 dispatch_symc_encrypt_via_multi(hi_void *argp)
+{
+    hi_s32 ret;
+    symc_encrypt_via_multi_t *batch = argp;
+
+    hi_log_func_enter();
+
+    ret = kapi_symc_crypto_via_multi(batch->id, addr_via(batch->pkg), batch->pkg_num, batch->operation);
+    if (ret != HI_SUCCESS) {
+        hi_log_print_func_err(kapi_symc_crypto_via_multi, ret);
+        return ret;
+    }
+
+    hi_log_func_exit();
+    return HI_SUCCESS;
+}
+
 static hi_s32 dispatch_symc_encrypt_multi(hi_void *argp)
 {
     hi_s32 ret;
@@ -718,6 +740,15 @@ static crypto_dispatch_func g_dispatch_func[CRYPTO_CMD_COUNT] = {
     {"TRNG",          dispatch_trng_get_random,     CRYPTO_CMD_TRNG},
     {"GetSymcConfig", dispatch_symc_get_cfg,        CRYPTO_CMD_SYMC_GET_CONFIG},
     {"KladKey",       dispatch_klad_key,            CRYPTO_CMD_KLAD_KEY},
+    /*
+     * LAST, and it must stay last: crypto_ioctl() indexes this table by the
+     * command's nr and then checks g_dispatch_func[nr].cmd == cmd, so a row
+     * inserted anywhere but the end shifts every command after it onto the
+     * wrong handler. That check is the only thing that catches it, and what
+     * it reports is "copy data from user failed" -- a lie about a table that
+     * is simply off by one.
+     */
+    {"EncryptViaMulti", dispatch_symc_encrypt_via_multi, CRYPTO_CMD_SYMC_ENCRYPT_VIA_MULTI},
 };
 
 hi_s32 crypto_ioctl(hi_u32 cmd, hi_void *argp)
