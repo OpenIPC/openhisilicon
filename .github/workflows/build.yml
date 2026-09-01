@@ -268,6 +268,47 @@ jobs:
       # in either path: a missing `include ive_neo/Kbuild` in
       # hi3516cv500.kbuild would skip the .ko without failing the build,
       # and a chip-ops mis-selection would bake the wrong chip= log line.
+      # open_cipher.ko is built from a guard inside kernel/cipher/Kbuild
+      # (V4) or hi3516cv500.kbuild, so a broken guard skips the module
+      # WITHOUT failing the build — the same silent-skip shape the ive_neo
+      # check below exists for. And the batched command is the part that
+      # can regress invisibly: it is reached through a dispatch table
+      # indexed by command number, so a row added anywhere but the end
+      # binds every later command to the wrong handler and still links.
+      # Its name is a string literal in that table, which makes it a
+      # cheap thing to look for.
+      - name: Verify open_cipher built for this platform
+        if: matrix.platform == 'hi3516ev200' || matrix.platform == 'gk7205v200' || matrix.platform == 'hi3516cv500'
+        run: |
+          KO=$(find ../firmware/output -name open_cipher.ko 2>/dev/null | head -1)
+          if [ -z "$KO" ] || [ ! -f "$KO" ]; then
+              echo "FAIL: open_cipher.ko not built for ${{ matrix.platform }}" >&2
+              find ../firmware/output -name 'open_*.ko' 2>/dev/null | head -20 >&2 || true
+              exit 1
+          fi
+          echo "ok: $KO ($(stat -c%s "$KO") bytes)"
+
+          # The DT binding the module will actually match. Goke and
+          # HiSilicon spell it differently and the match table derives it
+          # from PLATFORM_NAME/HISI_PRX, so a compat.h regression shows up
+          # here as the wrong string rather than as a build error.
+          case "${{ matrix.platform }}" in
+              gk7205v200) EXPECT="goke,cipher" ;;
+              *)          EXPECT="hisilicon,hisi-cipher" ;;
+          esac
+          if ! strings "$KO" | grep -qx "$EXPECT"; then
+              echo "FAIL: $KO does not carry compatible '$EXPECT'" >&2
+              strings "$KO" | grep -E '^(goke|hisilicon),' >&2 || true
+              exit 1
+          fi
+          echo "ok: $KO matches '$EXPECT'"
+
+          if ! strings "$KO" | grep -qx "EncryptViaMulti"; then
+              echo "FAIL: $KO has no batched encrypt command — dispatch table regression?" >&2
+              exit 1
+          fi
+          echo "ok: $KO carries the batched encrypt command"
+
       - name: Verify ive_neo built for this platform
         if: matrix.platform == 'hi3516ev200' || matrix.platform == 'gk7205v200' || matrix.platform == 'hi3516cv500'
         run: |

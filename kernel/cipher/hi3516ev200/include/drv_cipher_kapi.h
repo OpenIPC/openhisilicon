@@ -365,6 +365,19 @@ typedef struct {
     hi_u32 operation;      /*!<  Decrypt or encrypt */
 } symc_encrypt_via_multi_t;
 
+/*
+ * THESE TWO LAYOUTS ARE THE ABI, not merely its description: the command
+ * number encodes sizeof(payload), so changing either makes every userspace
+ * transcription compute a command this driver does not recognise. What the
+ * driver then reports is "copy data from user failed", which names neither
+ * the struct nor the size -- so the mismatch is worth catching here instead
+ * of on a camera. majestic asserts the same two numbers on its side, in
+ * include/majestic/hisi/cipher_abi.h.
+ */
+_Static_assert(sizeof(symc_via_pkg) == 40, "symc_via_pkg is ABI");
+_Static_assert(sizeof(symc_encrypt_via_multi_t) == 24,
+               "symc_encrypt_via_multi_t is ABI");
+
 /*! \struct of Symmetric cipher get tag */
 typedef struct {
     hi_u32 id;                            /*!<  Id of soft channel */
