@@ -926,6 +926,20 @@ hi_s32 kapi_symc_crypto_via_multi(hi_u32 id, const void *pkg, hi_u32 pkg_num,
         return HI_ERR_CIPHER_UNSUPPORTED;
     }
 
+    /* CTR ONLY, and the reason is the padding below rather than the IV list.
+     * Every package is rounded up to a whole block and only the requested
+     * bytes are handed back, which is invisible in a stream cipher and wrong
+     * in every other mode: a CBC caller would get ciphertext truncated
+     * mid-block on the way out, and a decrypt would run over fabricated zero
+     * bytes. The block itself rejects an unaligned length outside CTR
+     * (drv_symc_node_check), so padding here would be quietly relaxing a
+     * check the hardware makes. Widening this needs a per-mode length rule,
+     * not just a flag. */
+    if (ctx->ctrl.work_mode != HI_CIPHER_WORK_MODE_CTR) {
+        HI_LOG_INFO("batch is CTR only, mode %d\n", ctx->ctrl.work_mode);
+        return HI_ERR_CIPHER_UNSUPPORTED;
+    }
+
     ret = crypto_copy_from_user(desc, pkg, sizeof(symc_via_pkg) * pkg_num);
     if (ret != HI_SUCCESS) {
         HI_LOG_PRINT_FUNC_ERR(crypto_copy_from_user, ret);
@@ -933,6 +947,19 @@ hi_s32 kapi_symc_crypto_via_multi(hi_u32 id, const void *pkg, hi_u32 pkg_num,
     }
 
     KAPI_SYMC_LOCK();
+
+    /* Everything above was read without the lock, which is the shape the
+     * vendor's own crypto paths use. It is not good enough here: destroy()
+     * frees the batch buffer and the crypto context under this same lock, and
+     * create() may then hand the slot to somebody else — so a request that
+     * waited would arrive holding conclusions about a channel that no longer
+     * exists. Re-checked, cheaply, now that nothing can move. */
+    if ((ctx->open != HI_TRUE) || (ctx->config != HI_TRUE) ||
+        (ctx->func == HI_NULL) || (ctx->func->setivlist == HI_NULL) ||
+        (ctx->cryp_ctx == HI_NULL)) {
+        KAPI_SYMC_UNLOCK();
+        return HI_ERR_CIPHER_INVALID_HANDLE;
+    }
 
     if (ctx->batch_size == 0) {
         ret = crypto_mem_create(&ctx->batch, SEC_MMZ, "AES_BATCH",

@@ -1206,6 +1206,17 @@ static hi_s32 cryp_register_symc(symc_func *func)
         return HI_ERR_CIPHER_INVALID_PARAM;
     }
 
+    /*
+     * The per-node IV list is read by exactly one crypto(), so tie the setter
+     * to it here rather than asking every registration to remember. The
+     * software registrations below call cryp_register_symc_default() and then
+     * swap in an mbedTLS create()/crypto() pair, so an inherited setter would
+     * cast their context to cryp_symc_context and write into it. Derived,
+     * that cannot drift.
+     */
+    func->setivlist =
+        (func->crypto == cryp_symc_crypto) ? cryp_symc_set_iv_list : HI_NULL;
+
     /* is it already registered? */
     for (i = 0; i < SYMC_FUNC_TAB_SIZE; i++) {
         if ((g_symc_descriptor[i].valid) && (g_symc_descriptor[i].alg == func->alg) &&
@@ -1554,11 +1565,12 @@ static hi_void cryp_register_symc_default(symc_func *func, symc_alg alg, symc_mo
     func->setkey = cryp_aes_setkey;
     func->waitdone = cryp_symc_wait_done;
     /*
-     * Only the hardware paths offer it. The CCM/GCM/CTS registrations replace
-     * ->crypto with their own, which does not read the list, so they clear
-     * this again after calling here.
+     * setivlist is NOT set here. It used to be, and that was a type confusion
+     * waiting to happen: every software registration below calls this and
+     * then replaces ->create and ->crypto, so it would inherit a setter that
+     * casts its argument to cryp_symc_context and writes into an mbedTLS
+     * context. cryp_register_symc() derives it instead.
      */
-    func->setivlist = cryp_symc_set_iv_list;
     return;
 }
 
@@ -1645,7 +1657,6 @@ static hi_void cryp_register_symc_aes_cts(hi_u32 capacity, symc_mode mode)
 
         cryp_register_symc_default(&func, SYMC_ALG_AES, mode);
         func.crypto = cryp_aes_cbc_cts_crypto;
-        func.setivlist = HI_NULL;   /* CTS does not read the list */
         func.waitdone = HI_NULL;
         hi_log_debug("CTS crypto 0x%p, mode %d\n", func.crypto, mode);
         ret = cryp_register_symc(&func);
@@ -1671,7 +1682,6 @@ static hi_void cryp_register_aead_ccm(hi_u32 capacity, symc_mode mode)
         func.setadd = cryp_aead_ccm_set_aad;
         func.gettag = cryp_aead_get_tag;
         func.crypto = cryp_aead_ccm_crypto;
-        func.setivlist = HI_NULL;   /* CCM does not read the list */
         func.setiv = cryp_aead_ccm_setiv;
         ret = cryp_register_symc(&func);
         if (ret != HI_SUCCESS) {
@@ -1722,7 +1732,6 @@ static hi_void cryp_register_aead_gcm(hi_u32 capacity, symc_mode mode)
         func.setadd = cryp_aead_gcm_set_aad;
         func.gettag = cryp_aead_get_tag;
         func.crypto = cryp_aead_gcm_crypto;
-        func.setivlist = HI_NULL;   /* GCM does not read the list */
         func.setiv = cryp_aead_gcm_setiv;
         ret = cryp_register_symc(&func);
         if (ret != HI_SUCCESS) {

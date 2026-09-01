@@ -1295,6 +1295,17 @@ static hi_s32 cryp_register_symc(symc_func *func)
         return HI_ERR_CIPHER_INVALID_PARA;
     }
 
+    /* The per-node IV list is read by exactly one crypto(), so tie the setter
+     * to it here rather than asking every registration to remember. Setting
+     * it in the shared default and clearing it again in the implementations
+     * that replace crypto() is the same rule stated twice, and the software
+     * registrations below quietly broke the second half: they call the
+     * default and then swap in an mbedTLS create()/crypto() pair, so the
+     * inherited setter would cast their context to cryp_symc_context and
+     * write into it. Derived, that cannot drift. */
+    func->setivlist =
+        (func->crypto == cryp_symc_crypto) ? cryp_symc_set_iv_list : HI_NULL;
+
     /* is it already registered? */
     for (i = 0; i < SYMC_FUNC_TAB_SIZE; i++) {
         if (symc_descriptor[i].valid
@@ -1632,12 +1643,12 @@ static void cryp_register_symc_default(symc_func *func, symc_alg alg, symc_mode 
     func->setmode = cryp_symc_setmode;
     func->setkey = cryp_aes_setkey;
     func->waitdone = cryp_symc_wait_done;
-    /* Only the hardware paths offer it, and only these — the CCM/GCM/CTS
-     * registrations below replace ->crypto with their own, which does not
-     * read the list, so they must not advertise it. They overwrite ->crypto
-     * after calling this, so clearing it there is what keeps the pair
-     * honest. */
-    func->setivlist = cryp_symc_set_iv_list;
+    /* setivlist is NOT set here. It used to be, and that was a type
+     * confusion waiting to happen: every software registration below calls
+     * this and then replaces ->create and ->crypto, so it would inherit a
+     * setter that casts its argument to cryp_symc_context and writes into
+     * an mbedTLS context. cryp_register_symc() derives it instead, from the
+     * one thing that actually decides whether the list is read. */
     return;
 }
 
@@ -1727,7 +1738,6 @@ static void cryp_register_symc_aes_cts(hi_u32 capacity, symc_mode mode)
         cryp_register_symc_default(&func, SYMC_ALG_AES, mode);
         func.crypto = cryp_aes_cbc_cts_crypto;
         func.waitdone = HI_NULL;
-        func.setivlist = HI_NULL;   /* CTS does not read the list */
         HI_LOG_DEBUG("CTS crypto 0x%p, mode %d\n", func.crypto, mode);
         ret = cryp_register_symc(&func);
         if (ret != HI_SUCCESS) {
@@ -1753,7 +1763,6 @@ static void cryp_register_aead_ccm(hi_u32 capacity, symc_mode mode)
         func.gettag = cryp_aead_get_tag;
         func.crypto = cryp_aead_ccm_crypto;
         func.setiv = cryp_aead_ccm_setiv;
-        func.setivlist = HI_NULL;   /* CCM does not read the list */
         ret = cryp_register_symc(&func);
         if (ret != HI_SUCCESS) {
             HI_LOG_PRINT_FUNC_ERR(cryp_register_symc, ret);
@@ -1804,7 +1813,6 @@ static void cryp_register_aead_gcm(hi_u32 capacity, symc_mode mode)
         func.gettag = cryp_aead_get_tag;
         func.crypto = cryp_aead_gcm_crypto;
         func.setiv = cryp_aead_gcm_setiv;
-        func.setivlist = HI_NULL;   /* GCM does not read the list */
         ret = cryp_register_symc(&func);
         if (ret != HI_SUCCESS) {
             HI_LOG_PRINT_FUNC_ERR(cryp_register_symc, ret);

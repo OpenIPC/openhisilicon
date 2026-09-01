@@ -960,6 +960,20 @@ hi_s32 kapi_symc_crypto_via_multi(hi_u32 id, const hi_void *pkg, hi_u32 pkg_num,
         return HI_ERR_CIPHER_UNSUPPORTED;
     }
 
+    /*
+     * CTR ONLY, and the reason is the padding rather than the IV list. Every
+     * package is rounded up to a whole block and only the requested bytes are
+     * handed back, which is invisible in a stream cipher and wrong in every
+     * other mode: a CBC caller would get ciphertext truncated mid-block, and
+     * a decrypt would run over fabricated zero bytes. The block rejects an
+     * unaligned length outside CTR (drv_symc_node_check), so padding here
+     * would quietly relax a check the hardware makes.
+     */
+    if (ctx->ctrl.work_mode != HI_CIPHER_WORK_MODE_CTR) {
+        hi_log_info("batch is CTR only, mode %d\n", ctx->ctrl.work_mode);
+        return HI_ERR_CIPHER_UNSUPPORTED;
+    }
+
     ret = crypto_copy_from_user(desc, pkg, sizeof(symc_via_pkg) * pkg_num);
     if (ret != HI_SUCCESS) {
         hi_log_print_func_err(crypto_copy_from_user, ret);
@@ -967,6 +981,21 @@ hi_s32 kapi_symc_crypto_via_multi(hi_u32 id, const hi_void *pkg, hi_u32 pkg_num,
     }
 
     kapi_symc_lock_err_return();
+
+    /*
+     * Everything above was read without the lock, which is the shape the
+     * vendor's own crypto paths use. It is not good enough here: destroy()
+     * frees the batch buffer and the crypto context under this same lock, and
+     * create() may then hand the slot to somebody else, so a request that
+     * waited would arrive holding conclusions about a channel that no longer
+     * exists. Re-checked now that nothing can move.
+     */
+    if ((ctx->open != HI_TRUE) || (ctx->config != HI_TRUE) ||
+        (ctx->func == HI_NULL) || (ctx->func->setivlist == HI_NULL) ||
+        (ctx->cryp_ctx == HI_NULL)) {
+        kapi_symc_unlock();
+        return HI_ERR_CIPHER_INVALID_HANDLE;
+    }
 
     if (ctx->batch_size == 0) {
         ret = crypto_mem_create(&ctx->batch, SEC_MMZ, "AES_BATCH", KAPI_SYMC_BATCH_BYTES);
