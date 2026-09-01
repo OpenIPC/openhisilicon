@@ -279,6 +279,28 @@ static hi_s32 symc_add_buf(cryp_symc_context *ctx, symc_node_usage out_uasge)
 
     hi_log_func_enter();
 
+    /*
+     * OpenIPC extension: give this node its own IV before it is built.
+     * drv_symc_set_iv() only writes the channel's software context, which
+     * drv_symc_add_inbuf() then copies into the descriptor -- four word
+     * stores and no hardware access -- and HI_CIPHER_IV_CHG_ALL_PACK is what
+     * makes the block reload from each node rather than carry the chain
+     * forward. Without a list nothing changes: the single IV that
+     * cryp_symc_config() programmed stands for the whole job.
+     */
+    if (ctx->iv_list != HI_NULL && cur < ctx->iv_list_count) {
+        hi_u32 iv[AES_IV_SIZE / WORD_WIDTH];
+
+        crypto_memcpy(iv, sizeof(iv),
+                      ctx->iv_list + (hi_u32)(cur * AES_IV_SIZE), AES_IV_SIZE);
+        ret = drv_symc_set_iv(ctx->hard_chn, iv, AES_IV_SIZE,
+                              HI_CIPHER_IV_CHG_ALL_PACK);
+        if (ret != HI_SUCCESS) {
+            hi_log_print_func_err(drv_symc_set_iv, ret);
+            return ret;
+        }
+    }
+
     /* Add P in. */
     ret = drv_symc_add_inbuf(ctx->hard_chn,
                              ctx->input_list[cur],
@@ -392,7 +414,15 @@ static hi_s32 symc_add_buf_list(hi_void *ctx)
     /* compute not finished.
      * select the minimum numbers of nodes to calculate.
      */
-    nodes = crypto_min(SYMC_INT_LEVEL, hisi_ctx->total_nodes - hisi_ctx->cur_nodes);
+    /*
+     * SYMC_INT_LEVEL is one, so the vendor default starts and waits on the
+     * block once per node however many were handed in -- the 16-entry
+     * descriptor ring is never more than a sixteenth full. A caller that has
+     * armed an IV list may raise it (cryp_symc_set_iv_list), which is where
+     * the batching win actually comes from.
+     */
+    nodes = hisi_ctx->int_level > 0 ? hisi_ctx->int_level : SYMC_INT_LEVEL;
+    nodes = crypto_min(nodes, hisi_ctx->total_nodes - hisi_ctx->cur_nodes);
     total_len = 0;
 
     for (i = 0; i < nodes; i++) {
@@ -643,7 +673,41 @@ static hi_s32 cryp_symc_crypto_process(cryp_symc_context *hisi_ctx, hi_u32 wait)
     return HI_SUCCESS;
 }
 
-static hi_s32 cryp_symc_crypto(hi_void *ctx, hi_u32 operation, symc_multi_pack *pack, hi_u32 wait)
+/*
+ * OpenIPC extension, see func_symc_setivlist. Arms one IV per node for the
+ * next crypto() call and how deep to queue before waiting; both are consumed
+ * and cleared there, so this cannot outlive the array it points at.
+ */
+static hi_s32 cryp_symc_set_iv_list(hi_void *ctx, const hi_u8 *iv_list,
+                                    hi_u32 count, hi_u32 depth)
+{
+    cryp_symc_context *hisi_ctx = ctx;
+
+    hi_log_func_enter();
+    hi_log_chk_param_return(hisi_ctx == HI_NULL);
+
+    if (iv_list != HI_NULL) {
+        hi_log_chk_param_return(count == 0x00);
+        hi_log_chk_param_return(depth == 0x00);
+        /*
+         * Never past the descriptor ring: symc_add_buf_list() may still add a
+         * node beyond `nodes` to square the block-size tail, so leave it one
+         * slot of room rather than exactly filling.
+         */
+        if (depth >= SYMC_MAX_LIST_NUM) {
+            depth = SYMC_MAX_LIST_NUM - 1;
+        }
+    }
+
+    hisi_ctx->iv_list = iv_list;
+    hisi_ctx->iv_list_count = (iv_list != HI_NULL) ? count : 0;
+    hisi_ctx->int_level = (iv_list != HI_NULL) ? depth : 0;
+
+    hi_log_func_exit();
+    return HI_SUCCESS;
+}
+
+static hi_s32 cryp_symc_crypto_job(hi_void *ctx, hi_u32 operation, symc_multi_pack *pack, hi_u32 wait)
 {
     hi_s32 ret;
     cryp_symc_context *hisi_ctx = ctx;
@@ -689,6 +753,29 @@ static hi_s32 cryp_symc_crypto(hi_void *ctx, hi_u32 operation, symc_multi_pack *
 
     hi_log_func_exit();
     return HI_SUCCESS;
+}
+
+/*
+ * The armed IV list points at the caller's array and must not outlive this
+ * call, so it is disarmed on EVERY exit -- which is the whole reason the job
+ * above is wrapped rather than edited: it has several returns, and a missed
+ * one would leave a dangling pointer that only bites the next unrelated
+ * packet.
+ */
+static hi_s32 cryp_symc_crypto(hi_void *ctx, hi_u32 operation, symc_multi_pack *pack, hi_u32 wait)
+{
+    hi_s32 ret;
+    cryp_symc_context *hisi_ctx = ctx;
+
+    ret = cryp_symc_crypto_job(ctx, operation, pack, wait);
+
+    if (hisi_ctx != HI_NULL) {
+        hisi_ctx->iv_list = HI_NULL;
+        hisi_ctx->iv_list_count = 0;
+        hisi_ctx->int_level = 0;
+    }
+
+    return ret;
 }
 
 #ifdef CHIP_AES_CCM_GCM_SUPPORT
@@ -1119,6 +1206,17 @@ static hi_s32 cryp_register_symc(symc_func *func)
         return HI_ERR_CIPHER_INVALID_PARAM;
     }
 
+    /*
+     * The per-node IV list is read by exactly one crypto(), so tie the setter
+     * to it here rather than asking every registration to remember. The
+     * software registrations below call cryp_register_symc_default() and then
+     * swap in an mbedTLS create()/crypto() pair, so an inherited setter would
+     * cast their context to cryp_symc_context and write into it. Derived,
+     * that cannot drift.
+     */
+    func->setivlist =
+        (func->crypto == cryp_symc_crypto) ? cryp_symc_set_iv_list : HI_NULL;
+
     /* is it already registered? */
     for (i = 0; i < SYMC_FUNC_TAB_SIZE; i++) {
         if ((g_symc_descriptor[i].valid) && (g_symc_descriptor[i].alg == func->alg) &&
@@ -1466,6 +1564,13 @@ static hi_void cryp_register_symc_default(symc_func *func, symc_alg alg, symc_mo
     func->setmode = cryp_symc_setmode;
     func->setkey = cryp_aes_setkey;
     func->waitdone = cryp_symc_wait_done;
+    /*
+     * setivlist is NOT set here. It used to be, and that was a type confusion
+     * waiting to happen: every software registration below calls this and
+     * then replaces ->create and ->crypto, so it would inherit a setter that
+     * casts its argument to cryp_symc_context and writes into an mbedTLS
+     * context. cryp_register_symc() derives it instead.
+     */
     return;
 }
 

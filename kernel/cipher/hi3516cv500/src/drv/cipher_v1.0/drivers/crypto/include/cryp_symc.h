@@ -117,6 +117,23 @@ typedef hi_s32 (*func_symc_sm1_setround)(hi_void *ctx, hi_u32 round);
  */
 typedef hi_s32 (*func_symc_crypto)(hi_void *ctx, hi_u32 operation, symc_multi_pack *pack, hi_u32 wait);
 
+/*
+ * OpenIPC extension: arm ONE IV per node for the next crypto() call, and let
+ * it submit more than one node before waiting. Without it every node of a
+ * multi-node job runs under the single IV left in the channel by setiv(),
+ * which is what confined batching to chained modes over one buffer -- the
+ * descriptors always had room, see drv_symc_add_inbuf().
+ *
+ * iv_list must stay alive until crypto() returns and holds count entries of
+ * AES_IV_SIZE bytes in node order; depth is how many nodes may be queued
+ * before the block is started, capped at the descriptor ring. Armed for a
+ * single call and cleared by it. HI_NULL where it would not be honoured --
+ * the software paths, and CCM/GCM/CTS -- which callers must read as
+ * "batching not available here".
+ */
+typedef hi_s32 (*func_symc_setivlist)(hi_void *ctx, const hi_u8 *iv_list,
+                                      hi_u32 count, hi_u32 depth);
+
 /**
  * brief          CCM/GCM set Associated Data
  *
@@ -154,6 +171,7 @@ typedef struct {
     func_aead_set_aad setadd;   /* setadd function */
     func_aead_get_tag gettag;   /* get tag function */
     func_symc_crypto  crypto;   /* crypto function */
+    func_symc_setivlist setivlist; /* per-node IV list, HI_NULL if unsupported */
     func_symc_wait_done waitdone; /* wait done */
 } symc_func;
 

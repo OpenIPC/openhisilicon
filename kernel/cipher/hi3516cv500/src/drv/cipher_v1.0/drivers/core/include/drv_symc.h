@@ -248,6 +248,17 @@ typedef struct {
     hi_u32 *length_list;         /* length of node list */
     symc_node_usage *usage_list; /* usage of node list */
     hi_bool tdes2dma;            /* 3des with invalid key turns to dma */
+
+    /*
+     * OpenIPC extension, armed by cryp_symc_set_iv_list() for one call.
+     * iv_list is AES_IV_SIZE bytes per node in node order; int_level is how
+     * many nodes are queued before the block is started and waited on, so a
+     * batch costs one completion interrupt rather than one per packet. Both
+     * are cleared by the crypto() that consumes them.
+     */
+    const hi_u8 *iv_list;        /* per-node IV, HI_NULL for one IV per job */
+    hi_u32 iv_list_count;        /* nodes iv_list covers */
+    hi_u32 int_level;            /* nodes per hardware start, 0 = default */
 } cryp_symc_context;
 
 typedef hi_s32 (*callback_symc_isr)(hi_void *ctx);

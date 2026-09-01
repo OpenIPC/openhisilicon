@@ -145,6 +145,32 @@ typedef hi_s32 (*func_symc_crypto)(hi_void *ctx, hi_u32 operation,
                                    hi_u32 wait);
 
 /**
+ * \brief          Arm ONE IV per node for the next crypto() call, and let it
+ *                 submit more than one node before waiting.
+ *
+ * OpenIPC extension. Without it every node of a multi-node job runs under the
+ * single IV left in the channel by setiv(), which is what confined batching to
+ * chained modes over one buffer. The descriptors always had room -- see
+ * drv_symc_add_inbuf(), which copies an IV into every node it builds.
+ *
+ * `iv_list` must stay alive until crypto() returns, and holds `count` entries
+ * of AES_IV_SIZE bytes, one per node, in node order. `depth` is how many nodes
+ * may be queued before the block is started and waited on; it is capped at the
+ * descriptor ring and is what turns N completion interrupts into one.
+ *
+ * Armed for a single call and cleared by it, so a caller that forgets cannot
+ * leave a stale list pointing at a freed array. HI_NULL is offered only by
+ * hardware AES paths -- the software (mbedTLS) implementations leave the slot
+ * empty, and callers must treat that as "batching not available here".
+ *
+ * \return         0 if successful
+ */
+typedef hi_s32 (*func_symc_setivlist)(hi_void *ctx,
+                                      const hi_u8 *iv_list,
+                                      hi_u32 count,
+                                      hi_u32 depth);
+
+/**
  * \brief          CCM/GCM set Associated Data
  *
  * \param ctx      SYMC handle
@@ -182,6 +208,7 @@ typedef struct {
     func_aead_get_tag gettag;   /*!<  get tag function */
     func_symc_crypto  crypto;   /*!<  crypto function */
     func_symc_wait_done waitdone; /*!<  wait done */
+    func_symc_setivlist setivlist; /*!<  per-node IV list, HI_NULL if unsupported */
 } symc_func;
 
 /**
