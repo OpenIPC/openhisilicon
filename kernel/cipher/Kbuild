@@ -3,8 +3,9 @@
 # branch of kernel/Kbuild rather than by their own <chip>.kbuild.
 #
 # hi3516cv500 builds this module from its own kbuild and does not come through
-# here. This file exists for hi3516ev200 (and so hi3516ev300), whose firmware
-# has never packaged a cipher module at all: the vendor prebuilt from the
+# here. This file exists for hi3516ev200 (and so hi3516ev300) and for
+# gk7205v200 (and so gk7205v300, gk7202v300, gk7605v100), whose firmware has
+# never packaged a cipher module at all: the vendor prebuilt from the
 # Hi3516EV200 SDK cannot load against an OpenIPC rootfs, and there was no
 # source build to fall back on.
 #
@@ -19,19 +20,57 @@
 # trees are not built here.
 #
 # WHAT IT IS FOR. AES-128-CTR at SRTP packet sizes, where a userspace streamer
-# would otherwise do it on the CPU. Measured on an hi3516ev300 against the
-# mbedTLS 2.25 the rootfs ships, 1100-byte buffers: 87.6 us of CPU in software
-# against 42.0 through the engine, a 52% cut. More is saved in CPU than in
-# wall clock, because the driver sleeps on its completion interrupt and hands
-# the core back while the block works -- which is the scarce resource on these
-# parts. The engine also carries a TRNG and RSA that nothing uses yet.
+# would otherwise do it on the CPU, plus a TRNG and an RSA block that nothing
+# uses yet. Read the next paragraph before assuming the first of those is a
+# win.
 #
-# Not built for gk7205v200, which shares this branch: it is the same
-# generation on paper, but Goke ships its cipher as a differently-named module
-# against a different userspace, and nothing here has been measured on one.
+# WHAT IT IS WORTH DEPENDS ON HOW IT IS DRIVEN, and this file used to claim
+# more than the evidence carried. Per 1100-byte packet the engine costs half
+# the CPU of mbedTLS -- 86.4 us against 42.6 on a gk7205v200, 87.6 against
+# 42.0 on an hi3516ev300 -- because the driver sleeps on its completion
+# interrupt instead of spinning. That figure is taken with the streamer
+# stopped, and it does not survive a busy camera: on the lab gk7205v200 with
+# one WebRTC viewer at 4 Mbit/s the whole-camera saving is zero, 19.76% of a
+# core against 19.68%. The user time the engine saves comes back as system
+# time almost exactly, because these kernels have no IRQ_TIME_ACCOUNTING and
+# the completion interrupt is billed to whichever thread was running -- with
+# the streamer stopped, the idle task, which is why an idle measurement never
+# sees it.
+#
+# THE COST IS THE TRIP, NOT THE CIPHER: two ioctls, a DMA allocation, a
+# hardware start and a sleep for every packet, against about 44 us of actual
+# AES. Amortising that over a burst is what makes the engine pay, and it is
+# a change of its own -- this one builds the module, correct and available,
+# and leaves what loads it to the change that makes loading it worthwhile.
+# So nothing in a Goke image modprobes it yet, and that is the state this
+# commit intends rather than an oversight.
+#
+# gk7205v200 IS THE SAME SILICON and builds the same tree. Not "the same
+# generation on paper", which is what this file used to say and what kept it
+# off the Goke branch: the cipher block is at 0x10050000 on both, behind the
+# same CRG word at 0x120101A0, on the same SPI 34, and gk7205v200.dtsi's node
+# is byte-for-byte hi3516ev200.dtsi's but for one string -- "goke,cipher"
+# where HiSilicon says "hisilicon,hisi-cipher". That single difference is the
+# whole port, and it lives in cipher_initdevice.c's match table, spelled
+# through the PLATFORM_NAME/HISI_PRX pair that kernel/compat/compat.h already
+# keeps for exactly this.
+#
+# The "different userspace" was never an objection either. Nothing in a Goke
+# rootfs opens /dev/cipher: majestic talks to the ioctls directly rather than
+# through libhi_cipher.so, so the consumer is the same binary on both
+# families and the ABI it expects is this module's, not Goke's.
+#
+# CHECKED ON THE SILICON, lab gk7205v200 (imx307, kernel 4.9.37): the module
+# loads, /dev/cipher appears, the version register reads the same 0x2018121
+# the HiSilicon part does, and 600 differential AES-CTR cases against the
+# rootfs's own mbedTLS 2.25 -- 50 each at lengths 1 through 2048 -- come back
+# byte-identical with nothing written past the requested length. A WebRTC
+# session driven from a browser carried 1080p20 with /proc/interrupts showing
+# 499 cipher completions a second against 500 packets, so the engine really
+# was doing every packet rather than quietly falling back.
 #
 
-ifeq ($(CHIPARCH),hi3516ev200)
+ifneq ($(filter $(CHIPARCH),hi3516ev200 gk7205v200),)
 
 EV200_CIPHER = cipher/hi3516ev200/src
 
@@ -84,6 +123,9 @@ ccflags-y += -I$(src)/cipher/hi3516ev200/src/drv/cipher_v1.0/drivers/core/includ
 ccflags-y += -I$(src)/cipher/hi3516ev200/src/drv/cipher_v1.0/drivers/crypto/include
 ccflags-y += -I$(src)/cipher/hi3516ev200/src/drv/cipher_v1.0/drivers/extend/include
 ccflags-y += -I$(src)/cipher/hi3516ev200/src/drv/cipher_v1.0/compat
+# hi3516ev200 here names the silicon and the SDK the tree came from, not the
+# CHIPARCH being built: on gk7205v200 this is still the part it selects
+# drv_osal_hi3516ev200.h for, and still the right one.
 ccflags-y += -DCHIP_TYPE_hi3516ev200 -DAMP_NONSECURE_VERSION
 
 obj-m += $(PREFIX)cipher.o

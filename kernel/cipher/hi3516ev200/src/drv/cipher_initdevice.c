@@ -1,5 +1,6 @@
 #include "hi_types.h"
 #include "drv_osal_lib.h"
+#include "../../../../compat/compat.h"
 
 extern int  cipher_drv_mod_init(void);
 extern void cipher_drv_mod_exit(void);
@@ -70,8 +71,13 @@ static compat_platform_remove_ret hi35xx_cipher_remove(struct platform_device *p
     compat_platform_remove_return;
 }
 
+/* "hisilicon,hisi-cipher" on HiSilicon, "goke,cipher" on Goke -- the same node
+ * at the same address with the same interrupt, renamed. Spelled through the
+ * compat.h pair rather than listed twice so it cannot drift: HISI_PRX is
+ * "hisi-" on one family and empty on the other, which is the entire
+ * difference between the two DT bindings. */
 static const struct of_device_id hi35xx_cipher_match[] = {
-    { .compatible = "hisilicon,hisi-cipher" },
+    { .compatible = PLATFORM_NAME "," HISI_PRX "cipher" },
     {},
 };
 MODULE_DEVICE_TABLE(of, hi35xx_cipher_match);
