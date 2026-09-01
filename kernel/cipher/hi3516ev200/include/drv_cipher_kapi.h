@@ -145,7 +145,12 @@ typedef enum {
 #define CRYPTO_CMD_TRNG                CRYPTO_IOWR(0x0d, sizeof(trng_t))
 #define CRYPTO_CMD_SYMC_GET_CONFIG     CRYPTO_IOWR(0x0e, sizeof(symc_get_config_t))
 #define CRYPTO_CMD_KLAD_KEY            CRYPTO_IOWR(0x0f, sizeof(klad_key_t))
-#define CRYPTO_CMD_COUNT               0x10
+/* OpenIPC extension, see symc_encrypt_via_multi_t. Appended rather than
+ * inserted: the command number encodes sizeof(payload) and its position, so
+ * every number below this line stays what the vendor library computes. */
+#define CRYPTO_CMD_SYMC_ENCRYPT_VIA_MULTI \
+                                       CRYPTO_IOW (0x10, sizeof(symc_encrypt_via_multi_t))
+#define CRYPTO_CMD_COUNT               0x11
 
 #define CHECK_EXIT(_expr) \
     do { \
@@ -318,6 +323,47 @@ typedef struct {
     hi_u32 pkg_num;        /*!<  Number of package infomation */
     hi_u32 operation;      /*!<  Decrypt or encrypt */
 } symc_encrypt_multi_t;
+
+/* OpenIPC extension: batched encrypt from user virtual addresses, each package
+ * under its OWN IV.
+ *
+ * WHY IT DOES NOT ALREADY EXIST. The vendor's multi-package call
+ * (CRYPTO_CMD_SYMC_ENCRYPTMULTI) describes a package as hi_cipher_data --
+ * source, destination, length, odd/even key selector -- and no IV, so every
+ * package in a submission runs under the one IV the last CONFIGHANDLE left in
+ * the channel. That is fine for chaining one long buffer and useless for
+ * SRTP, where each packet's IV is derived from its own sequence number. It
+ * also takes physical (MMZ) addresses, which a streamer's heap is not.
+ *
+ * The silicon has no such limit. drv_symc_add_inbuf() writes an IV into EVERY
+ * descriptor node it builds, and CIPHER_IV_CHANGE_ALL_PKG makes the block
+ * reload it per node -- the driver simply had no way to be told a different
+ * one per package. This carries them.
+ *
+ * WHAT IT IS FOR. One ioctl, one DMA buffer, one hardware start and ONE
+ * completion interrupt for a whole frame's worth of packets, instead of two
+ * ioctls and one sleep each. On a gen 4 part the per-packet fixed cost is
+ * ~37.8 us against ~44 us of actual AES for an 1100-byte packet, so a camera
+ * sending 5000 packets a second spends most of the engine's cost on getting
+ * to it. See kernel/cipher/Kbuild.
+ *
+ * ENCRYPT ONLY IN THE SENSE THAT MATTERS: operation is the same 0/1 the
+ * single-package call takes. The addresses are always user virtual -- there
+ * is no physical variant, because the caller this exists for has no MMZ. */
+typedef struct {
+    compat_addr src;       /*!<  Virtual address of the input data */
+    compat_addr dst;       /*!<  Virtual address of the output data */
+    hi_u32 length;         /*!<  Length of this package */
+    hi_u32 reserve;        /*!<  Alignment, must be zero */
+    hi_u8 iv[16];          /*!<  This package's own IV */
+} symc_via_pkg;
+
+typedef struct {
+    hi_u32 id;             /*!<  Id of soft channel */
+    compat_addr pkg;       /*!<  User address of a symc_via_pkg[pkg_num] */
+    hi_u32 pkg_num;        /*!<  Number of packages */
+    hi_u32 operation;      /*!<  Decrypt or encrypt */
+} symc_encrypt_via_multi_t;
 
 /*! \struct of Symmetric cipher get tag */
 typedef struct {
@@ -548,6 +594,26 @@ hi_s32 kapi_symc_crypto_via(hi_u32 id, compat_addr input,
 hi_s32 kapi_symc_crypto_multi(hi_u32 id, const hi_void *pkg,
                               hi_u32 pkg_num, hi_u32 operation,
                               hi_u32 last);
+
+/**
+ * \brief            OpenIPC extension: batched encryption from user virtual
+ *                   addresses, one IV per package.
+ *
+ * One ioctl, one persistent DMA buffer, one hardware start and one completion
+ * interrupt for the whole batch — see symc_encrypt_via_multi_t for why the
+ * vendor's multi-package call cannot express this and why the block can.
+ *
+ * \param[in] id     The channel number.
+ * \param pkg        Kernel pointer to the user address of symc_via_pkg[]
+ * \param pkg_num    Number of packages, at most KAPI_SYMC_BATCH_MAX_PKG
+ * \param operation  decrypt or encrypt
+ *
+ * \return           0 if successful, HI_ERR_CIPHER_UNSUPPORTED if the
+ *                   configured algorithm has no per-node IV support (the
+ *                   caller should fall back to the single-package call).
+ */
+hi_s32 kapi_symc_crypto_via_multi(hi_u32 id, const hi_void *pkg,
+                                  hi_u32 pkg_num, hi_u32 operation);
 
 /**
  * \brief          SYMC multiple buffer encryption/decryption.

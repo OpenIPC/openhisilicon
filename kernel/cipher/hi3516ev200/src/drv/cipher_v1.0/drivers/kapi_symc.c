@@ -28,7 +28,22 @@ typedef struct {
     void *cryp_ctx;                  /*!<  Context of cryp instance */
     crypto_owner owner;              /*!<  user ID */
     hi_cipher_ctrl  ctrl;        /*!<  control infomation */
+    /* OpenIPC extension: the batch path's DMA bounce buffer, allocated on
+     * first use and held until the channel is destroyed. The single-package
+     * virtual path (kapi_symc_crypto_via) does a dma_alloc_coherent and a
+     * free around EVERY packet, which at video packet rates is most of what
+     * the engine costs. Batching would be pointless if it kept paying that. */
+    crypto_mem batch;
+    hi_u32 batch_size;               /*!<  bytes in batch, 0 = not allocated */
 } kapi_symc_ctx;
+
+/* How many packets one batched call may carry, and how much data. The node
+ * count is bounded by the descriptor ring (SYMC_MAX_LIST_NUM, 16) less the
+ * slot symc_add_buf_list() may need to square a block-size tail; the byte
+ * budget is that many SRTP packets rounded up. */
+#define KAPI_SYMC_BATCH_MAX_PKG     (15)
+#define KAPI_SYMC_BATCH_MAX_LEN     (2048)
+#define KAPI_SYMC_BATCH_BYTES       (KAPI_SYMC_BATCH_MAX_PKG * KAPI_SYMC_BATCH_MAX_LEN)
 
 /*! Context of cipher */
 static kapi_symc_ctx kapi_ctx[CRYPTO_HARD_CHANNEL_MAX];
@@ -199,6 +214,14 @@ hi_s32 kapi_symc_destroy(hi_u32 id)
     CHECK_OWNER(&ctx->owner);
 
     KAPI_SYMC_LOCK();
+
+    /* Before the instance goes: this is the only owner of that buffer, and
+     * with eight channels on the chip a leak here is eight batches' worth of
+     * coherent DMA memory that nothing will ever reclaim. */
+    if (ctx->batch_size != 0) {
+        crypto_mem_destory(&ctx->batch);
+        ctx->batch_size = 0;
+    }
 
     cryp_symc_free_chn(soft_id);
 
@@ -764,6 +787,167 @@ exit:
         HI_ERR_PRINT_S32(ret);
         return ret_exit;
     }
+
+    HI_LOG_FUNC_EXIT();
+    return ret;
+}
+
+/* OpenIPC extension: one ioctl, one DMA buffer, one hardware start and one
+ * completion interrupt for a whole burst of packets, each under its own IV.
+ * See symc_encrypt_via_multi_t for why the vendor's multi-package call cannot
+ * do this and why the silicon can.
+ *
+ * SHAPE OF THE WORK, because it is what the cost is made of. Per package the
+ * old path pays: two ioctls, a dma_alloc_coherent/free pair, a
+ * copy_from_user, a hardware start, a sleep on the completion IRQ and a
+ * copy_to_user. Here the ioctl, the allocation, the start and the sleep are
+ * paid once for the batch; only the two copies stay per package, and those
+ * are a memcpy each.
+ *
+ * EVERY PACKAGE IS PADDED TO THE BLOCK SIZE, and that is not cosmetic.
+ * symc_add_buf_list() squares a job whose total length is not a multiple of
+ * the block size by SPLITTING a node in two — which under a per-node IV list
+ * would run the second half under the next packet's IV and produce a
+ * plausible, wrong keystream. Padding each package makes every total aligned,
+ * so the splitting path is never entered. CTR is a stream cipher, so the
+ * padding costs bytes and changes nothing. */
+static hi_s32 kapi_symc_crypto_via_multi_run(kapi_symc_ctx *ctx,
+                                             const symc_via_pkg *pkg,
+                                             hi_u32 pkg_num,
+                                             hi_u32 operation)
+{
+    hi_s32 ret = HI_FAILURE;
+    compat_addr input[KAPI_SYMC_BATCH_MAX_PKG];
+    compat_addr output[KAPI_SYMC_BATCH_MAX_PKG];
+    hi_u32 length[KAPI_SYMC_BATCH_MAX_PKG];
+    symc_node_usage usage[KAPI_SYMC_BATCH_MAX_PKG];
+    hi_u8 ivs[KAPI_SYMC_BATCH_MAX_PKG][AES_IV_SIZE];
+    hi_u32 offset[KAPI_SYMC_BATCH_MAX_PKG];
+    hi_u32 i, used = 0;
+
+    for (i = 0; i < pkg_num; i++) {
+        const hi_u32 len = pkg[i].length;
+        const hi_u32 padded =
+            (len + AES_BLOCK_SIZE - 1) / AES_BLOCK_SIZE * AES_BLOCK_SIZE;
+
+        if ((len == 0) || (len > KAPI_SYMC_BATCH_MAX_LEN)) {
+            HI_LOG_ERROR("batch pkg %d: bad length 0x%x\n", i, len);
+            return HI_ERR_CIPHER_INVALID_LENGTH;
+        }
+        if ((used + padded > ctx->batch_size) || (used + padded < used)) {
+            HI_LOG_ERROR("batch overflows its buffer at pkg %d\n", i);
+            return HI_ERR_CIPHER_INVALID_LENGTH;
+        }
+        if (ADDR_VIA(pkg[i].src) == HI_NULL ||
+            ADDR_VIA(pkg[i].dst) == HI_NULL) {
+            return HI_ERR_CIPHER_INVALID_POINT;
+        }
+
+        ret = crypto_copy_from_user((hi_u8 *)ctx->batch.dma_virt + used,
+                                    ADDR_VIA(pkg[i].src), len);
+        if (ret != HI_SUCCESS) {
+            HI_LOG_PRINT_FUNC_ERR(crypto_copy_from_user, ret);
+            return ret;
+        }
+        if (padded > len) {
+            crypto_memset((hi_u8 *)ctx->batch.dma_virt + used + len,
+                          padded - len, 0, padded - len);
+        }
+
+        crypto_memcpy(ivs[i], AES_IV_SIZE, pkg[i].iv, AES_IV_SIZE);
+        offset[i] = used;
+        length[i] = padded;
+        usage[i] = SYMC_NODE_USAGE_NORMAL;
+        ADDR_U64(input[i]) = ADDR_U64(ctx->batch.dma_addr) + used;
+        ADDR_U64(output[i]) = ADDR_U64(ctx->batch.dma_addr) + used;
+        used += padded;
+    }
+
+    /* In place: the engine reads and writes the same node, which halves the
+     * buffer and costs nothing — the block reads a node before it writes it. */
+    ret = ctx->func->setivlist(ctx->cryp_ctx, (const hi_u8 *)ivs, pkg_num,
+                               pkg_num);
+    if (ret != HI_SUCCESS) {
+        HI_LOG_PRINT_FUNC_ERR(ctx->func->setivlist, ret);
+        return ret;
+    }
+
+    ret = ctx->func->crypto(ctx->cryp_ctx, operation, input, output, length,
+                            usage, pkg_num, HI_TRUE);
+    if (ret != HI_SUCCESS) {
+        HI_LOG_PRINT_FUNC_ERR(ctx->func->crypto, ret);
+        return ret;
+    }
+
+    /* Only the requested length goes back, so the padding never reaches the
+     * caller's buffer — the same contract the single-package path keeps. */
+    for (i = 0; i < pkg_num; i++) {
+        ret = crypto_copy_to_user(ADDR_VIA(pkg[i].dst),
+                                  (hi_u8 *)ctx->batch.dma_virt + offset[i],
+                                  pkg[i].length);
+        if (ret != HI_SUCCESS) {
+            HI_LOG_PRINT_FUNC_ERR(crypto_copy_to_user, ret);
+            return ret;
+        }
+    }
+
+    return HI_SUCCESS;
+}
+
+hi_s32 kapi_symc_crypto_via_multi(hi_u32 id, const void *pkg, hi_u32 pkg_num,
+                                  hi_u32 operation)
+{
+    hi_s32 ret = HI_FAILURE;
+    kapi_symc_ctx *ctx = HI_NULL;
+    symc_via_pkg desc[KAPI_SYMC_BATCH_MAX_PKG];
+    hi_u32 soft_id = 0;
+
+    HI_LOG_FUNC_ENTER();
+
+    KAPI_SYMC_CHECK_HANDLE(id);
+    soft_id = HI_HANDLE_GET_CHNID(id);
+    ctx = &kapi_ctx[soft_id];
+    CHECK_OWNER(&ctx->owner);
+    HI_LOG_CHECK_PARAM(ctx->config != HI_TRUE);
+    HI_LOG_CHECK_PARAM(pkg == HI_NULL);
+    HI_LOG_CHECK_PARAM(pkg_num == 0x00);
+    HI_LOG_CHECK_PARAM(pkg_num > KAPI_SYMC_BATCH_MAX_PKG);
+    HI_LOG_CHECK_PARAM((operation != 0x00) && (operation != 0x01));
+    HI_LOG_CHECK_PARAM(ctx->func == HI_NULL);
+    HI_LOG_CHECK_PARAM(ctx->func->crypto == HI_NULL);
+
+    /* The software (mbedTLS) implementations register no list setter, and
+     * CCM/GCM/CTS clear theirs because their crypto() does not read it. So a
+     * NULL here is "this algorithm cannot be batched", not a bug — the caller
+     * falls back to the single-package call, as it would on a camera with no
+     * engine at all. */
+    if (ctx->func->setivlist == HI_NULL) {
+        HI_LOG_INFO("batch unsupported for this alg/mode\n");
+        return HI_ERR_CIPHER_UNSUPPORTED;
+    }
+
+    ret = crypto_copy_from_user(desc, pkg, sizeof(symc_via_pkg) * pkg_num);
+    if (ret != HI_SUCCESS) {
+        HI_LOG_PRINT_FUNC_ERR(crypto_copy_from_user, ret);
+        return ret;
+    }
+
+    KAPI_SYMC_LOCK();
+
+    if (ctx->batch_size == 0) {
+        ret = crypto_mem_create(&ctx->batch, SEC_MMZ, "AES_BATCH",
+                                KAPI_SYMC_BATCH_BYTES);
+        if (ret != HI_SUCCESS) {
+            HI_LOG_PRINT_FUNC_ERR(crypto_mem_create, ret);
+            KAPI_SYMC_UNLOCK();
+            return ret;
+        }
+        ctx->batch_size = KAPI_SYMC_BATCH_BYTES;
+    }
+
+    ret = kapi_symc_crypto_via_multi_run(ctx, desc, pkg_num, operation & 0x01);
+
+    KAPI_SYMC_UNLOCK();
 
     HI_LOG_FUNC_EXIT();
     return ret;
