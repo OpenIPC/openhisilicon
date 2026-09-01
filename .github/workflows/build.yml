@@ -1166,7 +1166,11 @@ jobs:
           # those rmmods fail silently. The previous QEMU assertion (just "crond
           # reached userspace") missed it because the script exits cleanly when
           # SENSOR=unknown and crond starts regardless.
-          if grep -qE "^rmmod: can't unload" qemu-output.txt; then
+          # Unanchored (and -a) for the same reason as the mod-count grep
+          # below: console writers interleave, so a real "rmmod: can't
+          # unload" can arrive with another daemon's output already on the
+          # line. A ^-anchored pattern would then miss the regression.
+          if grep -qaE "rmmod: can't unload" qemu-output.txt; then
               fail_with "rmmod failure during boot — vendor name does not match loaded module name (#62)"
           fi
           if grep -qF "Error: There's something wrong, please check!" qemu-output.txt; then
@@ -1178,8 +1182,9 @@ jobs:
           # OpenIPC/firmware#2059: load_hisilicon mis-parses kernel cmdline
           # mem=NM as os_mem_size on V4+CMA boards (where mem= is total RAM,
           # not the OS-only slice), trips the "os_mem >= total_mem" guard, and
-          # exits before any insmod. Manifests with this exact stderr line.
-          if grep -qE "^\[err\] os_mem\[[0-9]+\], over total_mem\[[0-9]+\]" qemu-output.txt; then
+          # exits before any insmod. Manifests with this exact stderr line
+          # (unanchored for the interleave reason noted above).
+          if grep -qaE "\[err\] os_mem\[[0-9]+\], over total_mem\[[0-9]+\]" qemu-output.txt; then
               fail_with "load_hisilicon: cmdline mem= misread as OS-only memory (firmware#2059)"
           fi
 
@@ -1217,10 +1222,35 @@ jobs:
               fi
           fi
 
-          if grep -qE "Starting crond: OK" qemu-output.txt; then
+          # Final gate: the boot reached userspace. Two accepted markers,
+          # because the obvious one is a race — OpenIPC/openhisilicon#218.
+          #
+          # The init script prints "Starting crond: ", forks the daemon, then
+          # prints "OK". busybox crond writes its own startup banner to the
+          # same console from the forked child, so whether that banner lands
+          # *between* the two writes is a coin flip. When it does, the tokens
+          # are no longer on one line and a single-line grep misses them on a
+          # fully booted image:
+          #
+          #   pass:  Starting crond: OK
+          #          crond[344]: crond (busybox 1.36.1) started, log level 8
+          #   fail:  Starting crond: crond[344]: crond (busybox 1.36.1) ...
+          #          OK
+          #
+          # Same image, same crond, same PID. Seen on hi3516av100_neo (a row
+          # with no allow-failure, so it gated every PR) at main@001096ae and
+          # twice on #217. The daemon's own banner is the stronger evidence
+          # anyway — printed by crond itself rather than by the wrapper — so
+          # accept either. Not every platform reaches the console with it
+          # (syslogd may swallow it), hence the OR rather than a swap.
+          #
+          # General shape to watch for: any "Starting X: OK" is two writes
+          # with a fork in between. Never assert on it as one string.
+          if grep -qaE "Starting crond: OK" qemu-output.txt ||
+             grep -qaE "crond \(busybox [0-9.]+\) started" qemu-output.txt; then
               echo "PASS: ${{ matrix.machine }} kernel booted to userspace, no module-load regressions"
           else
-              fail_with "no 'Starting crond: OK' in QEMU output"
+              fail_with "boot never reached crond (no 'Starting crond: OK' and no crond startup banner)"
           fi
 
       - name: Upload QEMU output
