@@ -105,7 +105,14 @@ extern int imx307_read_register(VI_PIPE ViPipe, int addr);
 	(1) /* make real fps less than stand fps because NVR require */
 
 #define IMX307_VMAX_1080P30_LINEAR (1125 + IMX307_INCREASE_LINES)
-#define IMX307_VMAX_1080P60TO30_WDR (1220 + IMX307_INCREASE_LINES) // 10bit
+/* 2-lane and 4-lane WDR runs differ in VMAX baseline (datasheet pp.56/62):
+ * 4-lane → 1220, 2-lane → 1125. Picked at runtime by .so basename. */
+extern int imx307_is_2lane_mode(void);
+static inline GK_U32 imx307_vmax_1080p60to30_wdr(void)
+{
+	return (imx307_is_2lane_mode() ? 1125 : 1220) + IMX307_INCREASE_LINES;
+}
+#define IMX307_VMAX_1080P60TO30_WDR (imx307_vmax_1080p60to30_wdr()) // 10bit
 #define IMX307_VMAX_720P60_LINEAR  (750)
 
 // sensor fps mode
@@ -1598,6 +1605,13 @@ ISP_SNS_OBJ_S stSnsImx307Obj = {
 	.pfnSetBusInfo = imx307_set_bus_info,
 	.pfnSetInit = sensor_set_init
 };
+
+/* 2-lane build (libsns_imx307_2L.so) is a symlink to the 4-lane .so;
+ * streamers that dlsym this name resolve to the same registration object.
+ * Per-mode register sequences branch internally via imx307_is_2lane_mode(),
+ * which reads dli_fname through dladdr(). */
+extern ISP_SNS_OBJ_S stSnsImx307_2l_Obj
+	__attribute__((alias("stSnsImx307Obj")));
 
 #ifdef __cplusplus
 #if __cplusplus
