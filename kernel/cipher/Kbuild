@@ -20,9 +20,36 @@
 # trees are not built here.
 #
 # WHAT IT IS FOR. AES-128-CTR at SRTP packet sizes, where a userspace streamer
-# would otherwise do it on the CPU, plus a TRNG and an RSA block that nothing
-# uses yet. Read the next paragraph before assuming the first of those is a
-# win.
+# would otherwise do it on the CPU, the key ladder the recorder's chip-bound
+# mode wraps clip keys with, and a TRNG. Read the next paragraph before
+# assuming the first of those is a win.
+#
+# WHAT IS NOT BUILT, and why the object list below is shorter than the vendor's
+# build.mak. The SDK tree is a whole crypto stack, and a kernel module gets no
+# dead-code elimination: `ld -r` takes every object named here, reachable or
+# not, so an unused subsystem is not free, it is shipped. Two of them were,
+# and together they were half the module -- 39 KB of RSA (the IFEP hardware
+# driver plus a software mbedTLS bignum/RSA/ASN.1 fallback compiled into the
+# kernel) and 14 KB of hash (SHA-1 through SHA-512, HMAC, SM3). Neither has a
+# caller: majestic is the only thing that opens /dev/cipher on these boards and
+# it uses symc, klad and the TRNG -- its cipher_abi.h says why not the other
+# two, the engine's HMAC-SHA1 being five times slower than mbedTLS and its RSA
+# being a once-per-clip operation userspace already does. Also gone are the
+# _v100 cores and the ext_* extensions, which this part's CHIP_TYPE compiles
+# down to empty objects -- no bytes, but no reason to name them either.
+#
+# Measured, same toolchain and kernel, gk7205v200: open_cipher.ko as installed
+# (INSTALL_MOD_STRIP=1) goes from 172,328 to 96,188 bytes, -44.2%, and about
+# 23 KB off an xz squashfs rootfs. For scale, gk7205v300_lite failed CI on
+# 2026-09-06 four kilobytes over its 5120 KB partition.
+#
+# The vendor sources stay in the tree untouched; drivers/kapi_hash_rsa_absent.c
+# supplies the twelve entry points kapi_dispatch.c needs, and only those twelve
+# -- nothing else in the module reaches into either subsystem. Restoring one is
+# putting its objects back on this list and taking that file off, not a merge.
+# hi3516cv500's own kbuild still builds the full stack: its tree is the later
+# SDK vintage with different kapi signatures, so the same trim is a separate
+# file and a separate check.
 #
 # WHAT IT IS WORTH DEPENDS ON HOW IT IS DRIVEN, and this file used to claim
 # more than the evidence carried. Per 1100-byte packet the engine costs half
@@ -76,35 +103,15 @@ EV200_CIPHER = cipher/hi3516ev200/src
 
 $(PREFIX)cipher-objs := \
 	$(EV200_CIPHER)/drv/cipher_initdevice.o \
-	$(EV200_CIPHER)/drv/cipher_v1.0/drivers/core/drv_symc_v100.o \
 	$(EV200_CIPHER)/drv/cipher_v1.0/drivers/core/drv_symc_v200.o \
-	$(EV200_CIPHER)/drv/cipher_v1.0/drivers/core/drv_hash_v100.o \
-	$(EV200_CIPHER)/drv/cipher_v1.0/drivers/core/drv_hash_v200.o \
-	$(EV200_CIPHER)/drv/cipher_v1.0/drivers/core/drv_ifep_rsa_v100.o \
-	$(EV200_CIPHER)/drv/cipher_v1.0/drivers/core/drv_trng_v100.o \
 	$(EV200_CIPHER)/drv/cipher_v1.0/drivers/core/drv_trng_v200.o \
 	$(EV200_CIPHER)/drv/cipher_v1.0/drivers/core/drv_lib.o \
 	$(EV200_CIPHER)/drv/cipher_v1.0/drivers/crypto/cryp_symc.o \
-	$(EV200_CIPHER)/drv/cipher_v1.0/drivers/crypto/cryp_hash.o \
 	$(EV200_CIPHER)/drv/cipher_v1.0/drivers/crypto/cryp_trng.o \
-	$(EV200_CIPHER)/drv/cipher_v1.0/drivers/crypto/cryp_rsa.o \
 	$(EV200_CIPHER)/drv/cipher_v1.0/drivers/kapi_symc.o \
-	$(EV200_CIPHER)/drv/cipher_v1.0/drivers/kapi_hash.o \
-	$(EV200_CIPHER)/drv/cipher_v1.0/drivers/kapi_rsa.o \
 	$(EV200_CIPHER)/drv/cipher_v1.0/drivers/kapi_trng.o \
 	$(EV200_CIPHER)/drv/cipher_v1.0/drivers/kapi_dispatch.o \
-	$(EV200_CIPHER)/drv/cipher_v1.0/drivers/extend/mbedtls/bignum.o \
-	$(EV200_CIPHER)/drv/cipher_v1.0/drivers/extend/mbedtls/md.o \
-	$(EV200_CIPHER)/drv/cipher_v1.0/drivers/extend/mbedtls/rsa.o \
-	$(EV200_CIPHER)/drv/cipher_v1.0/drivers/extend/mbedtls/asn1parse.o \
-	$(EV200_CIPHER)/drv/cipher_v1.0/drivers/extend/mbedtls/oid.o \
-	$(EV200_CIPHER)/drv/cipher_v1.0/drivers/extend/mbedtls/platform_util.o \
-	$(EV200_CIPHER)/drv/cipher_v1.0/drivers/extend/mbedtls/rsa_internal.o \
-	$(EV200_CIPHER)/drv/cipher_v1.0/drivers/extend/ext_aead.o \
-	$(EV200_CIPHER)/drv/cipher_v1.0/drivers/extend/ext_hash.o \
-	$(EV200_CIPHER)/drv/cipher_v1.0/drivers/extend/ext_symc.o \
-	$(EV200_CIPHER)/drv/cipher_v1.0/drivers/extend/ext_sm3.o \
-	$(EV200_CIPHER)/drv/cipher_v1.0/drivers/extend/ext_sm4.o \
+	$(EV200_CIPHER)/drv/cipher_v1.0/drivers/kapi_hash_rsa_absent.o \
 	$(EV200_CIPHER)/drv/cipher_v1.0/osal/drv_osal_init_linux.o \
 	$(EV200_CIPHER)/drv/cipher_v1.0/osal/drv_osal_sys_linux.o \
 	$(EV200_CIPHER)/drv/cipher_v1.0/compat/hi_drv_compat.o \
