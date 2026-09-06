@@ -214,38 +214,33 @@ obj-m += $(PREFIX)ir.o
 #obj-m += $(PREFIX)hi_user.o
 
 # --- Cipher module (source driver) ---
+#
+# The object list is shorter than the vendor's build.mak, and the reasoning is
+# in kernel/cipher/Kbuild, which does the same for the hi3516ev200 tree: a
+# kernel module gets no dead-code elimination, so every object named here
+# ships whether or not an ioctl reaches it, and the hash and RSA subsystems
+# were about half of open_cipher.ko for no caller. majestic is the only thing
+# that opens /dev/cipher and it uses symc, klad and the TRNG. Verified against
+# this tree's own objects rather than assumed from the other one: the two
+# subsystems are reached through exactly twelve symbols, all of them from
+# kapi_dispatch.c, which drivers/kapi_hash_rsa_absent.c now supplies.
+#
+# Measured on hi3516cv500, same toolchain and kernel: open_cipher.ko as
+# installed goes from 171,380 to 97,208 bytes, -43.3%, and 52,468 to 29,476
+# compressed. Restoring a subsystem is putting its objects back on this list
+# and taking that file off, not a merge; the vendor sources are untouched.
 CV500_CIPHER = cipher/hi3516cv500/src
 $(PREFIX)cipher-objs := \
 	$(CV500_CIPHER)/drv/cipher_initdevice.o \
-	$(CV500_CIPHER)/drv/cipher_v1.0/drivers/core/drv_symc_v100.o \
 	$(CV500_CIPHER)/drv/cipher_v1.0/drivers/core/drv_symc_v200.o \
-	$(CV500_CIPHER)/drv/cipher_v1.0/drivers/core/drv_hash_v100.o \
-	$(CV500_CIPHER)/drv/cipher_v1.0/drivers/core/drv_hash_v200.o \
-	$(CV500_CIPHER)/drv/cipher_v1.0/drivers/core/drv_ifep_rsa_v100.o \
-	$(CV500_CIPHER)/drv/cipher_v1.0/drivers/core/drv_trng_v100.o \
 	$(CV500_CIPHER)/drv/cipher_v1.0/drivers/core/drv_trng_v200.o \
 	$(CV500_CIPHER)/drv/cipher_v1.0/drivers/core/drv_lib.o \
 	$(CV500_CIPHER)/drv/cipher_v1.0/drivers/crypto/cryp_symc.o \
-	$(CV500_CIPHER)/drv/cipher_v1.0/drivers/crypto/cryp_hash.o \
 	$(CV500_CIPHER)/drv/cipher_v1.0/drivers/crypto/cryp_trng.o \
-	$(CV500_CIPHER)/drv/cipher_v1.0/drivers/crypto/cryp_rsa.o \
 	$(CV500_CIPHER)/drv/cipher_v1.0/drivers/kapi_symc.o \
-	$(CV500_CIPHER)/drv/cipher_v1.0/drivers/kapi_hash.o \
-	$(CV500_CIPHER)/drv/cipher_v1.0/drivers/kapi_rsa.o \
 	$(CV500_CIPHER)/drv/cipher_v1.0/drivers/kapi_trng.o \
 	$(CV500_CIPHER)/drv/cipher_v1.0/drivers/kapi_dispatch.o \
-	$(CV500_CIPHER)/drv/cipher_v1.0/drivers/extend/mbedtls/bignum.o \
-	$(CV500_CIPHER)/drv/cipher_v1.0/drivers/extend/mbedtls/md.o \
-	$(CV500_CIPHER)/drv/cipher_v1.0/drivers/extend/mbedtls/rsa.o \
-	$(CV500_CIPHER)/drv/cipher_v1.0/drivers/extend/mbedtls/asn1parse.o \
-	$(CV500_CIPHER)/drv/cipher_v1.0/drivers/extend/mbedtls/oid.o \
-	$(CV500_CIPHER)/drv/cipher_v1.0/drivers/extend/mbedtls/platform_util.o \
-	$(CV500_CIPHER)/drv/cipher_v1.0/drivers/extend/mbedtls/rsa_internal.o \
-	$(CV500_CIPHER)/drv/cipher_v1.0/drivers/extend/ext_aead.o \
-	$(CV500_CIPHER)/drv/cipher_v1.0/drivers/extend/ext_hash.o \
-	$(CV500_CIPHER)/drv/cipher_v1.0/drivers/extend/ext_symc.o \
-	$(CV500_CIPHER)/drv/cipher_v1.0/drivers/extend/ext_sm3.o \
-	$(CV500_CIPHER)/drv/cipher_v1.0/drivers/extend/ext_sm4.o \
+	$(CV500_CIPHER)/drv/cipher_v1.0/drivers/kapi_hash_rsa_absent.o \
 	$(CV500_CIPHER)/drv/cipher_v1.0/osal/drv_osal_init_linux.o \
 	$(CV500_CIPHER)/drv/cipher_v1.0/osal/drv_osal_sys_linux.o \
 	$(CV500_CIPHER)/drv/cipher_v1.0/compat/hi_drv_compat.o \

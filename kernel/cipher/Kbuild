@@ -47,9 +47,12 @@
 # supplies the twelve entry points kapi_dispatch.c needs, and only those twelve
 # -- nothing else in the module reaches into either subsystem. Restoring one is
 # putting its objects back on this list and taking that file off, not a merge.
-# hi3516cv500's own kbuild still builds the full stack: its tree is the later
-# SDK vintage with different kapi signatures, so the same trim is a separate
-# file and a separate check.
+# hi3516cv500 is trimmed the same way from its own kbuild, with its own copy of
+# that file: the two trees are different SDK vintages and the kapi signatures
+# differ, so the boundary was re-checked there rather than assumed from here.
+# The other chips that name cipher objects build no cipher module (av100,
+# cv200, cv100) or build a different, small driver (hi3520dv200's V2-era
+# hi_cipher, hi3519dv500's V5 security_subsys) with none of this weight.
 #
 # WHAT IT IS WORTH DEPENDS ON HOW IT IS DRIVEN, and this file used to claim
 # more than the evidence carried. Per 1100-byte packet the engine costs half
