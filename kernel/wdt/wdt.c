@@ -74,6 +74,8 @@ volatile static unsigned int dog_state = 0;
 static osal_atomic_t driver_open;
 //static int orphan_timer = 0;
 static unsigned int options = WDIOS_ENABLECARD;
+/* Set by a "V" through dog_write(): the caller means the next close. */
+static int expect_close = 0;
 
 #ifndef MHZ
 #define MHZ (1000 * 1000)
@@ -81,17 +83,46 @@ static unsigned int options = WDIOS_ENABLECARD;
 
 static unsigned long rate = 3 * MHZ;
 
+/*
+ * The counter is loaded with half a margin's worth of ticks, because the
+ * SP805 runs the load value twice before it resets anything: reaching zero
+ * raises the interrupt and reloads, and only reaching zero a second time with
+ * that interrupt still pending drives the reset. Loading a whole margin made
+ * every timeout mean twice itself — a margin of 30 s reset the board at 60 —
+ * so nothing a caller set through WDIOC_SETTIMEOUT was the time it got. Same
+ * arithmetic as drivers/watchdog/sp805_wdt.c.
+ */
+/*
+ * Half of the counter's range. The load has to be added back to report the
+ * time left, so keeping the sum inside 32 bits is what lets that arithmetic
+ * stay 32-bit on every part this builds for — and 0x7fffffff / (rate / 2) is
+ * 1431 s at 3 MHz, exactly where this driver has always put its ceiling.
+ */
+#define WDT_LOAD_MAX 0x7fffffffU
+
+static unsigned int dog_max_margin(void)
+{
+	return (unsigned int)(WDT_LOAD_MAX / (rate / 2));
+}
+
+static unsigned int dog_load_val(unsigned int nr)
+{
+	if (nr == 0 || nr > dog_max_margin())
+		return WDT_LOAD_MAX;
+
+	return (unsigned int)(nr * (rate / 2)) - 1;
+}
+
+static unsigned int load_val = WDT_LOAD_MAX;
+
 static void dog_set_timeout(unsigned int nr)
 {
-	unsigned long cnt = (~0x0UL) / rate; /* max cnt */
 	unsigned long flags;
+	unsigned int cnt = dog_load_val(nr);
 
 	osal_spin_lock_irqsave(&dog_lock, &flags);
 
-	if (nr == 0 || nr > cnt)
-		cnt = ~0x0;
-	else
-		cnt = nr * rate;
+	load_val = cnt;
 	/* unlock watchdog registers */
 	wdt_writel(WDT_UNLOCK_VAL, WDT_LOCK);
 	wdt_writel(cnt, WDT_LOAD);
@@ -101,21 +132,28 @@ static void dog_set_timeout(unsigned int nr)
 	osal_spin_unlock_irqrestore(&dog_lock, &flags);
 };
 
+/*
+ * A ping restarts the timer, which is what WDIOC_KEEPALIVE means and all a
+ * caller can be expected to assume.
+ *
+ * This used to read WDT_RIS first and return without touching anything when
+ * no interrupt was pending — so a ping did nothing at all until the counter
+ * had already run out once. The deadline therefore stayed where the previous
+ * accepted ping had put it, which made the honest cadence of one ping per
+ * half-margin worth exactly one accepted ping per cycle: miss it and a
+ * process that had been feeding the device all along got the board reset
+ * under it. Writing the load and clearing the interrupt is unconditional in
+ * sp805_wdt.c for the same reason.
+ */
 static void dog_feed(void)
 {
 	unsigned long flags;
 
-	/* read the RIS state of current wdg */
-	unsigned int v = 0;
-	v = (unsigned int)wdt_readl(WDT_RIS);
-	v &= 0x1;
-	if (0 == v) /*no INT on current wdg */
-		return;
-
 	osal_spin_lock_irqsave(&dog_lock, &flags);
 	/* unlock watchdog registers */
 	wdt_writel(WDT_UNLOCK_VAL, WDT_LOCK);
-	/* clear watchdog */
+	/* reload the counter, and clear an interrupt if one is already up */
+	wdt_writel(load_val, WDT_LOAD);
 	wdt_writel(0x00, WDT_INTCLR);
 	/* lock watchdog registers */
 	wdt_writel(0, WDT_LOCK);
@@ -124,20 +162,8 @@ static void dog_feed(void)
 
 static int dog_set_heartbeat(int t)
 {
-	int ret = 0;
-	unsigned int cnt = (~0x0UL) / rate;
-
-	if (t == 0) {
-		osal_printk(
-			"set heartbeat to 0, heartbeat will not be changed.\n");
-		t = cur_margin;
-		ret = 1;
-	} else if (t > cnt) {
-		osal_printk("set heartbeat range error, t = %d\n", t);
-		osal_printk("force heartbeat to %d\n", cnt);
-		t = cnt;
-		ret = -1;
-	}
+	if (t <= 0 || (unsigned int)t > dog_max_margin())
+		return -EINVAL;
 
 	cur_margin = t;
 
@@ -147,7 +173,7 @@ static int dog_set_heartbeat(int t)
 	//if(NULL != task_dog_deamon)
 	//    osal_wake_up_process(task_dog_deamon);
 
-	return ret;
+	return 0;
 }
 
 static int dog_keepalive(void)
@@ -218,6 +244,7 @@ static int dog_open(void *private_data)
 	//orphan_timer = 0;
 
 	dog_state = DOG_EXTCLR;
+	expect_close = 0;
 
 	/*
      *    Activate timer
@@ -235,19 +262,25 @@ static int dog_release(void *private_data)
 	}
 
 	/*
-     *    Shut off the timer.
-     *     Lock it in if it's a module and we set nowayout
+     *    Shut off the timer, if the caller said it meant to.
      */
-	//    if (nowayout == 0) {
-	//cur_margin = default_margin;
 	dog_state = DOG_SELFCLR;
-	dog_set_heartbeat(cur_margin);
+
+	if (expect_close) {
+		dog_stop();
+		expect_close = 0;
+	} else {
+		/* Standard: a close without the magic character keeps the
+		 * watchdog running. Here the kernel-side feeder takes it back
+		 * — but only if there is one, so say so either way rather than
+		 * leave a silently unfed device behind. */
+		osal_printk("Unexpected close, not stopping watchdog!\n");
+		dog_set_heartbeat(cur_margin);
+		if (nodeamon)
+			osal_printk(
+				"nodeamon=1 and nothing is feeding the watchdog\n");
+	}
 	//osal_module_put(&__this_module);
-	//    } else {
-	//        osal_printk("Unexpected close, not stopping watchdog!\n");
-	//orphan_timer = 1;
-	//        dog_keepalive();
-	//    }
 
 	if (options == WDIOS_DISABLECARD)
 		osal_printk("Watchdog is disabled!\n");
@@ -255,36 +288,42 @@ static int dog_release(void *private_data)
 	return 0;
 }
 
-#if 0
+/*
+ * ident.options has advertised WDIOF_MAGICCLOSE all along while this was
+ * compiled out, so a caller doing the documented thing — write "V", then
+ * close, to say the shutdown is deliberate — got EINVAL from the write and no
+ * way at all to stop the device it had started. A write is also the other
+ * documented way to ping.
+ */
 static int dog_write(const char *data, int len, long *ppos, void *private_data)
 {
-    /*
+	/*
      *Refresh the timer.
      */
-    if(len) {
-        int i;
+	if (len) {
+		int i;
 
-        nowayout = 0;
+		expect_close = 0;
 
-        for (i = 0; i != len; i++) {
-            char c;
-            if (osal_copy_from_user(&c, data + i, sizeof(char)))
-                return -1;
-            if (c == 'V')
-                nowayout = 1;
-        }
-        dog_keepalive();
-    }
+		for (i = 0; i != len; i++) {
+			char c;
+			if (osal_copy_from_user(&c, data + i, sizeof(char)))
+				return -EFAULT;
+			if (c == 'V')
+				expect_close = 1;
+		}
+		dog_keepalive();
+	}
 
-    return len;
+	return len;
 }
-#endif
 
 static long dog_ioctl(unsigned int cmd, unsigned long arg, void *private_data)
 {
 	void *argp = (void *)(uintptr_t)arg;
 	int *p = argp;
 	int new_margin;
+	int ret;
 	unsigned int new_options;
 
 	switch (cmd) {
@@ -303,14 +342,35 @@ static long dog_ioctl(unsigned int cmd, unsigned long arg, void *private_data)
 
 	case WDIOC_SETTIMEOUT:
 		new_margin = *p;
-		if (dog_set_heartbeat(new_margin))
-			return -1;
+		ret = dog_set_heartbeat(new_margin);
+		if (ret)
+			return ret;
 		dog_keepalive();
+		/* Falls through to GETTIMEOUT, as the watchdog core does: the
+		 * caller reads back the margin the device is running at. */
+		*p = cur_margin;
 		return 0;
 
 	case WDIOC_GETTIMEOUT:
 		*p = cur_margin;
 		return 0;
+
+	case WDIOC_GETTIMELEFT: {
+		unsigned long flags;
+		unsigned long left;
+
+		osal_spin_lock_irqsave(&dog_lock, &flags);
+		left = wdt_readl(WDT_VALUE);
+		/* The counter is loaded with half a margin and run twice, so
+		 * with no interrupt pending there is still a whole load to go
+		 * after this one. */
+		if (!(wdt_readl(WDT_RIS) & 0x1))
+			left += (unsigned long)load_val + 1;
+		osal_spin_unlock_irqrestore(&dog_lock, &flags);
+
+		*p = (int)(left / rate);
+		return 0;
+	}
 
 	case WDIOC_SETOPTIONS:
 		new_options = *p;
@@ -322,10 +382,10 @@ static long dog_ioctl(unsigned int cmd, unsigned long arg, void *private_data)
 			dog_stop();
 			return 0;
 		} else
-			return -WDIOS_UNKNOWN;
+			return -EINVAL;
 
 	default:
-		return -1;
+		return -ENOTTY;
 	}
 }
 
@@ -348,7 +408,7 @@ static int dog_notifier_sys(struct osal_notifier_block *this, unsigned long code
  */
 
 static struct osal_fileops dog_fops = {
-	//   .write        = dog_write,
+	.write = dog_write,
 	//    .ioctl        = dog_ioctl,
 	.unlocked_ioctl = dog_ioctl,
 	.open = dog_open,
@@ -366,8 +426,12 @@ static struct osal_notifier_block dog_notifier = {
 static char banner[] =
 	"Watchdog Timer: 0.01 initialized. default_margin=%d sec (nodeamon= %d)\n";
 
+#define DOG_DEAMON_MAX_SLEEP_MS 30000
+
 static int dog_deamon(void *data)
 {
+	unsigned int period;
+
 #ifdef __LITEOS__
 	prctl(PR_SET_NAME, "dog_deamon", 0, 0, 0);
 #endif
@@ -383,8 +447,18 @@ static int dog_deamon(void *data)
 			break;
 		}
 		/* sleep */
-		/* when self feed dog, only use the default margin */
-		osal_msleep(default_margin * 1000 / 2 + 10);
+		/*
+		 * Half of the margin in force, not half of the module's
+		 * default. Userspace can change the margin and hand the
+		 * device back, and a feeder slower than the margin it is
+		 * feeding resets the board on a cycle nobody configured.
+		 * Capped so that a long margin does not make module unload
+		 * wait out a whole sleep.
+		 */
+		period = (unsigned int)cur_margin * 1000 / 2;
+		if (period > DOG_DEAMON_MAX_SLEEP_MS)
+			period = DOG_DEAMON_MAX_SLEEP_MS;
+		osal_msleep(period + 10);
 	}
 
 	return 0;
@@ -456,8 +530,8 @@ int watchdog_init(void)
 		default_margin = DOG_TIMER_MARGIN;
 		dog_set_heartbeat(DOG_TIMER_MARGIN);
 		osal_printk(
-			"default_margin value must be 0<default_margin<%lu, using %d\n",
-			(~0x0UL) / rate, DOG_TIMER_MARGIN);
+			"default_margin value must be 0<default_margin<=%u, using %d\n",
+			dog_max_margin(), DOG_TIMER_MARGIN);
 	}
 #if 0
     ret = osal_register_reboot_notifier(&dog_notifier);

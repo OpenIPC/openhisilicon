@@ -13,7 +13,7 @@ extern int default_margin;
 module_param(default_margin, int, 0);
 MODULE_PARM_DESC(
 	default_margin,
-	"Watchdog default_margin in seconds. (0<default_margin<80, default=" __MODULE_STRING(
+	"Watchdog default_margin in seconds. (default=" __MODULE_STRING(
 		DOG_TIMER_MARGIN) ")");
 
 //extern int nowayout;
