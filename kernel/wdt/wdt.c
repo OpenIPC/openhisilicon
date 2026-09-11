@@ -630,10 +630,19 @@ static void dog_exit(void)
 
 void watchdog_exit(void)
 {
-	dog_exit();
-
+	/*
+	 * Unregister before tearing anything down. dog_exit() sets DOG_EXIT
+	 * and then blocks in kthread_stop() waiting for the feeder to notice,
+	 * and the feeder's loop condition is dog_state -- which dog_open()
+	 * sets back to DOG_EXTCLR. With the device still registered at that
+	 * point, one open() racing the unload left the thread looping for
+	 * ever and rmmod stuck in D state holding module_mutex, unkillable
+	 * and not survivable by a clean reboot. Observed on a gk7205v200.
+	 */
 	osal_deregisterdevice(dog_miscdev);
 	osal_destroydev(dog_miscdev);
+
+	dog_exit();
 	//osal_unregister_reboot_notifier(&dog_notifier);
 	//osal_iounmap(reg_ctl_base_va);
 	//reg_ctl_base_va = NULL;

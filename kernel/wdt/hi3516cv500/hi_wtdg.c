@@ -582,10 +582,18 @@ static void hidog_exit(void)
 
 void watchdog_exit(void)
 {
-    hidog_exit();
-
+    /*
+     * Unregister before tearing anything down. hidog_exit() sets HIDOG_EXIT
+     * and then blocks in kthread_stop() waiting for the feeder to notice, and
+     * the feeder's loop condition is g_hidog_state -- which hidog_open() sets
+     * back to HIDOG_EXTCLR. With the device still registered at that point,
+     * one open() racing the unload left the thread looping for ever and rmmod
+     * stuck in D state holding module_mutex.
+     */
     osal_deregisterdevice(g_hidog_miscdev);
     osal_destroydev(g_hidog_miscdev);
+
+    hidog_exit();
     if (g_need_iounmap) {
         osal_iounmap((void *)g_wtdg_reg_base);
         g_need_iounmap = 0;
