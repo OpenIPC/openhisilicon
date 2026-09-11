@@ -154,7 +154,9 @@ obj-m += $(PREFIX)vfmw.o
 obj-m += $(PREFIX)jpegd.o
 
 # --- Watchdog module (source driver) ---
-$(PREFIX)wdt-objs := wdt/hi3516cv500/hi_wtdg.o $(CV500_INIT_DIR)/wtdg_init.o
+# --- WDT module (the one driver in wdt/, anchored at this SoC's map) ---
+ccflags-y += -DWDT_BASE=0x12051000 -DWDT_OSAL_HI
+$(PREFIX)wdt-objs := wdt/wdt.o wdt/wdt_init.o
 obj-m += $(PREFIX)wdt.o
 
 # --- MIPI TX module (source driver) ---

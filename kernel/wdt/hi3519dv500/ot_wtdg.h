@@ -31,6 +31,7 @@ struct watchdog_info {
 #define WDIOC_KEEPALIVE      _IO(WATCHDOG_IOCTL_BASE, 5)
 #define WDIOC_SETTIMEOUT     _IOWR(WATCHDOG_IOCTL_BASE, 6, int)
 #define WDIOC_GETTIMEOUT     _IOR(WATCHDOG_IOCTL_BASE, 7, int)
+#define WDIOC_GETTIMELEFT    _IOR(WATCHDOG_IOCTL_BASE, 10, int)
 
 #define WDIOF_UNKNOWN        (-1)    /* Unknown flag error */
 #define WDIOS_UNKNOWN        (-1)    /* Unknown status error */

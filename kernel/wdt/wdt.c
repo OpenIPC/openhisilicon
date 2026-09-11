@@ -2,7 +2,17 @@
  * Copyright (c) Hunan Goke,Chengdu Goke,Shandong Goke. 2021. All rights reserved.
  */
 
+/*
+ * The OSAL API header is not called the same thing in every vendor tree: the
+ * V3 and hi3516cv500 SDKs put it in hi_osal.h and keep an unrelated osal.h
+ * beside it, while in the V4/Goke tree osal/include/osal.h is the API. The
+ * per-chip kbuild says which by defining WDT_OSAL_HI.
+ */
+#ifdef WDT_OSAL_HI
+#include "hi_osal.h"
+#else
 #include "osal.h"
+#endif
 #include <linux/types.h>
 #include "watchdog.h"
 #ifdef __LITEOS__
@@ -14,8 +24,18 @@
 #define NULL ((void *)0)
 #endif
 
-/* define watchdog IO */
+/*
+ * define watchdog IO
+ *
+ * One driver, every HiSilicon/Goke generation that carries this SP805. The
+ * per-chip kbuild supplies WDT_BASE; it anchors the register offsets (where it
+ * cancels out, the mapping coming from the device tree) and is the address the
+ * ioremap fallback uses on the parts that have no DT node for the watchdog.
+ * The V4 map is the default because that is where this file started.
+ */
+#ifndef WDT_BASE
 #define WDT_BASE 0x12030000
+#endif
 #define WDT_REG(x) (WDT_BASE + (x))
 
 #define WDT_LOAD 0x000
@@ -33,6 +53,19 @@
 volatile void *gpWtdgAllReg = NULL;
 #define IO_WDT_ADDRESS(x) ((uintptr_t)(gpWtdgAllReg) + ((x) - (WDT_BASE)))
 
+#ifdef WDT_SCTL_BASE
+/*
+ * The V2-era parts (0x20040000 map: hi3516cv100/cv200, hi3516av100,
+ * hi3520dv200) gate the watchdog's 3 MHz clock in the system controller, and
+ * the counter does not run until dog_start() ungates it. Later generations
+ * have it on already, which is why this arrived here commented out.
+ */
+static volatile void *reg_ctl_base_va = NULL;
+#endif
+
+/* Set when the ioremap above was ours, so watchdog_exit() knows to undo it. */
+static int need_iounmap = 0;
+
 #define wdt_readl(x) osal_readl(IO_WDT_ADDRESS(WDT_REG(x)))
 #define wdt_writel(v, x) osal_writel(v, IO_WDT_ADDRESS(WDT_REG(x)))
 
@@ -41,7 +74,6 @@ volatile void *gpWtdgAllReg = NULL;
 #define dog_dbg(params...) osal_printk(DOG_PFX params)
 
 /* module param */
-#define DOG_TIMER_MARGIN 60
 int default_margin = DOG_TIMER_MARGIN; /* in seconds */
 #define DOG_TIMER_DEMULTIPLY 9
 
@@ -76,6 +108,17 @@ static osal_atomic_t driver_open;
 static unsigned int options = WDIOS_ENABLECARD;
 /* Set by a "V" through dog_write(): the caller means the next close. */
 static int expect_close = 0;
+
+/*
+ * The V3 OSAL predates the stop flag -- osal_kthread_destory() takes the task
+ * alone there and always stops it, which is the only thing this driver ever
+ * asks for. Later trees added the flag.
+ */
+#ifdef WDT_OSAL_NO_KTHREAD_STOP_FLAG
+#define wdt_kthread_destroy(t) osal_kthread_destory(t)
+#else
+#define wdt_kthread_destroy(t) osal_kthread_destory((t), 1)
+#endif
 
 #ifndef MHZ
 #define MHZ (1000 * 1000)
@@ -185,7 +228,9 @@ static int dog_keepalive(void)
 static void dog_start(void)
 {
 	unsigned long flags;
-	//unsigned long t;
+#ifdef WDT_SCTL_BASE
+	unsigned long t;
+#endif
 
 	osal_spin_lock_irqsave(&dog_lock, &flags);
 	/* unlock watchdog registers */
@@ -195,9 +240,11 @@ static void dog_start(void)
 	wdt_writel(0x03, WDT_CTRL);
 	/* lock watchdog registers */
 	wdt_writel(0, WDT_LOCK);
+#ifdef WDT_SCTL_BASE
 	/* enable watchdog clock --- set the frequency to 3MHz */
-	//t = osal_readl(reg_ctl_base_va);
-	//osal_writel(t & ~0x00800000, reg_ctl_base_va);
+	t = osal_readl(reg_ctl_base_va);
+	osal_writel(t & ~0x00800000, reg_ctl_base_va);
+#endif
 	osal_spin_unlock_irqrestore(&dog_lock, &flags);
 
 	options = WDIOS_ENABLECARD;
@@ -524,6 +571,10 @@ int watchdog_init(void)
 		goto watchdog_init_err0;
 	}
 
+	/*
+	 * Non-NULL already means a platform probe handed us a devm mapping,
+	 * which the device frees. Only what we map here is ours to unmap.
+	 */
 	if (gpWtdgAllReg == NULL) {
 		gpWtdgAllReg = (volatile void *)osal_ioremap(WDT_BASE, 0x1000);
 
@@ -531,14 +582,16 @@ int watchdog_init(void)
 			osal_printk("osal_ioremap err. \n");
 			goto watchdog_init_err1;
 		}
+		need_iounmap = 1;
 	}
-	// reg_ctl_base_va = (void *)OSAL_IO_ADDRESS(SCTL_BASE);
-	// if (NULL == reg_ctl_base_va)
-	// {
-	//     osal_printk("function %s line %u failed\n",
-	//         __FUNCTION__, __LINE__);
-	//     goto watchdog_init_err2;
-	// }
+#ifdef WDT_SCTL_BASE
+	reg_ctl_base_va = (volatile void *)osal_ioremap(WDT_SCTL_BASE, 0x4);
+	if (reg_ctl_base_va == NULL) {
+		osal_printk("function %s line %u failed\n", __FUNCTION__,
+			    __LINE__);
+		goto watchdog_init_err2;
+	}
+#endif
 
 	cur_margin = default_margin;
 
@@ -590,12 +643,16 @@ watchdog_init_err5:
 	osal_destroydev(dog_miscdev);
 watchdog_init_err4:
 	//  osal_unregister_reboot_notifier(&dog_notifier);
-#if 0
-watchdog_init_err3:
-    //osal_iounmap(reg_ctl_base_va);
+#ifdef WDT_SCTL_BASE
+	osal_iounmap((void *)reg_ctl_base_va);
+	reg_ctl_base_va = NULL;
 watchdog_init_err2:
-    //osal_iounmap(gpWtdgAllReg);
 #endif
+	if (need_iounmap) {
+		osal_iounmap((void *)gpWtdgAllReg);
+		gpWtdgAllReg = NULL;
+		need_iounmap = 0;
+	}
 watchdog_init_err1:
 	osal_spin_lock_destory(&dog_lock);
 watchdog_init_err0:
@@ -616,7 +673,7 @@ static void dog_exit(void)
 		if (p_dog == NULL)
 			return;
 		//osal_wake_up_process(p_dog);
-		osal_kthread_destory(p_dog, 1);
+		wdt_kthread_destroy(p_dog);
 #endif
 		osal_yield();
 	}
@@ -643,11 +700,17 @@ void watchdog_exit(void)
 	osal_destroydev(dog_miscdev);
 
 	dog_exit();
+
+#ifdef WDT_SCTL_BASE
+	osal_iounmap((void *)reg_ctl_base_va);
+	reg_ctl_base_va = NULL;
+#endif
+	if (need_iounmap) {
+		osal_iounmap((void *)gpWtdgAllReg);
+		gpWtdgAllReg = NULL;
+		need_iounmap = 0;
+	}
 	//osal_unregister_reboot_notifier(&dog_notifier);
-	//osal_iounmap(reg_ctl_base_va);
-	//reg_ctl_base_va = NULL;
-	//osal_iounmap(gpWtdgAllReg);
-	//gpWtdgAllReg = NULL;
 	osal_spin_lock_destory(&dog_lock);
 	osal_atomic_destory(&driver_open);
 	osal_printk("wtdg exit ok.\n");

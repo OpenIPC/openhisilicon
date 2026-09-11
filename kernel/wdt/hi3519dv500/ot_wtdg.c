@@ -72,6 +72,8 @@ static osal_task *g_task_ot_dog_deamon = NULL;
 static volatile unsigned int g_ot_dog_state = 0;
 static osal_atomic g_driver_open;
 static unsigned int g_options = WDIOS_ENABLECARD;
+/* Set by a "V" through ot_dog_write(): the caller means the next close. */
+static int g_expect_close = 0;
 
 #ifndef MHZ
 #define MHZ (1000 * 1000)
@@ -93,19 +95,43 @@ void wtdg_set_module_param(int margin, int daemon, int fiq_support)
     g_fiq_support = fiq_support;
 }
 
+/*
+ * The counter is loaded with half a margin's worth of ticks, because the SP805
+ * runs the load value twice before it resets anything: reaching zero raises the
+ * interrupt and reloads, and only reaching zero a second time with that
+ * interrupt still pending drives the reset. Loading a whole margin made every
+ * timeout mean twice itself. Same arithmetic as drivers/watchdog/sp805_wdt.c.
+ *
+ * Half of the counter's range: the load has to be added back to report the
+ * time left, and keeping that sum inside 32 bits is what lets the arithmetic
+ * stay 32-bit.
+ */
+#define OT_WDT_LOAD_MAX 0x7fffffffU
+
+static unsigned int ot_dog_max_margin(void)
+{
+    return (unsigned int)(OT_WDT_LOAD_MAX / (g_rate / 2));
+}
+
+static unsigned int ot_dog_load_val(unsigned int nr)
+{
+    if (nr == 0 || nr > ot_dog_max_margin()) {
+        return OT_WDT_LOAD_MAX;
+    }
+
+    return (unsigned int)(nr * (g_rate / 2)) - 1;
+}
+
+static unsigned int g_load_val = OT_WDT_LOAD_MAX;
+
 static void ot_dog_set_timeout(unsigned int nr)
 {
-    unsigned int cnt_0 = ~0x0;
-    unsigned int cnt = cnt_0 / g_rate;  /* max cnt */
+    unsigned int cnt = ot_dog_load_val(nr);
     unsigned long flags;
 
     osal_spin_lock_irqsave(&g_ot_dog_lock, &flags);
 
-    if (nr == 0 || nr > cnt) {
-        cnt = ~0x0;
-    } else {
-        cnt = nr * g_rate;
-    }
+    g_load_val = cnt;
     /* unlock watchdog registers */
     ot_wdt_writel(OT_WDT_UNLOCK_VAL, OT_WDT_LOCK);
     ot_wdt_writel(cnt, OT_WDT_LOAD);
@@ -115,51 +141,53 @@ static void ot_dog_set_timeout(unsigned int nr)
     osal_spin_unlock_irqrestore(&g_ot_dog_lock, &flags);
 }
 
+/*
+ * A ping restarts the timer, which is what WDIOC_KEEPALIVE means and all a
+ * caller can be expected to assume.
+ *
+ * This used to read OT_WDT_RIS first and return without touching anything when
+ * no interrupt was pending -- so a ping did nothing at all until the counter
+ * had already run out once, and even then only cleared the interrupt without
+ * reloading. The deadline therefore stayed where the previous accepted ping had
+ * put it, which made the honest cadence of one ping per half-margin worth
+ * exactly one accepted ping per cycle: miss it and a process that had been
+ * feeding the device all along got the board reset under it. Writing the load
+ * and clearing the interrupt is unconditional in sp805_wdt.c for the same
+ * reason.
+ */
 void ot_dog_feed(void)
 {
     unsigned long flags;
-    if (!g_fiq_support) {
-        /* read the RIS state of current wdg */
-        unsigned int v = (unsigned int)ot_wdt_readl(OT_WDT_RIS);
-        v &= 0x1; /* 0x1: get INT bit [1] */
-        if (v == 0) { /* no INT on current wdg */
-            return;
-        }
-    }
+
     osal_spin_lock_irqsave(&g_ot_dog_lock, &flags);
     /* unlock watchdog registers */
     ot_wdt_writel(OT_WDT_UNLOCK_VAL, OT_WDT_LOCK);
-    /* clear watchdog */
+    /* reload the counter, and clear an interrupt if one is already up */
+    ot_wdt_writel(g_load_val, OT_WDT_LOAD);
     ot_wdt_writel(0x00, OT_WDT_INTCLR);
     /* lock watchdog registers */
     ot_wdt_writel(0, OT_WDT_LOCK);
     osal_spin_unlock_irqrestore(&g_ot_dog_lock, &flags);
 }
 
+/*
+ * Out of range is -EINVAL and the margin in force is left alone, as every other
+ * watchdog driver does it. Half-applying a value the caller was told was
+ * rejected -- which is what clamping here amounted to -- left the device
+ * running at a margin nobody had asked for.
+ */
 static int ot_dog_set_heartbeat(int t)
 {
-    int ret = 0;
-    int lt = t;
-    unsigned int cnt_0 = ~0x0;
-    unsigned int cnt = cnt_0 / g_rate;
-
-    if (lt <= 0) {
-        osal_printk("set heartbeat less or equal to 0, heartbeat will not be changed.\n");
-        lt = g_cur_margin;
-        ret = -1;
-    } else if ((unsigned int)t > cnt) {
-        osal_printk("set heartbeat range error, t = %d\n", t);
-        osal_printk("force heartbeat to %u\n", cnt);
-        lt = cnt;
-        ret = -1;
+    if (t <= 0 || (unsigned int)t > ot_dog_max_margin()) {
+        return -EINVAL;
     }
 
-    g_cur_margin = lt;
+    g_cur_margin = t;
 
-    ot_dog_set_timeout(lt);
+    ot_dog_set_timeout(t);
     ot_dog_feed();
 
-    return ret;
+    return 0;
 }
 
 static int ot_dog_keepalive(void)
@@ -214,6 +242,26 @@ static int ot_dog_open(void *private_data)
         return -1;
     }
 
+    /*
+     * The kernel-side feeder exists to cover the window between module load,
+     * where ot_dog_init() arms the hardware, and the first open. Once userspace
+     * has taken the device that window is over for good, so this transition is
+     * one-way: ot_dog_release() does not put it back. It used to, and that is
+     * why the watchdog never reset anything -- the process being guarded died,
+     * its descriptor was closed for it, and the driver itself went on feeding
+     * the dog for the rest of the board's life. See OpenIPC/firmware#1803.
+     */
+    g_ot_dog_state = OT_DOG_EXTCLR;
+    g_expect_close = 0;
+
+    /*
+     * "When the device is opened, the watchdog is started" -- the API says so
+     * unconditionally, and that held here only for as long as nothing had
+     * stopped the counter. A magic close, or WDIOS_DISABLECARD, clears
+     * OT_WDT_CTRL, and neither the ping below nor WDIOC_SETTIMEOUT puts it
+     * back.
+     */
+    ot_dog_start();
     ot_dog_keepalive();
 
     return ret;
@@ -227,13 +275,54 @@ static int ot_dog_release(void *private_data)
         return 0;
     }
 
-    g_ot_dog_state = OT_DOG_SELFCLR;
-    ot_dog_set_heartbeat(g_cur_margin);
+    /*
+     * WDIOF_MAGICCLOSE is advertised, and it means a close without a preceding
+     * "V" leaves the timer running and unfed -- the reset the caller is owed
+     * when the process being guarded dies.
+     */
+    if (g_expect_close) {
+        ot_dog_stop();
+        g_expect_close = 0;
+    } else if (g_options & WDIOS_ENABLECARD) {
+        osal_printk("Unexpected close, watchdog left running!\n");
+    }
 
     if (g_options == WDIOS_DISABLECARD) {
         osal_printk("Watchdog is disabled!\n");
     }
     return 0;
+}
+
+/*
+ * g_ident.options has advertised WDIOF_MAGICCLOSE all along while there was no
+ * write handler at all, so a caller doing the documented thing -- write "V",
+ * then close, to say the shutdown is deliberate -- got EINVAL from the write
+ * and no way at all to stop the device it had started. A write is also the
+ * other documented way to ping.
+ */
+static int ot_dog_write(const char *buf, int size, long *offset, void *private_data)
+{
+    wtdg_unused(offset);
+    wtdg_unused(private_data);
+
+    if (size) {
+        int i;
+
+        g_expect_close = 0;
+
+        for (i = 0; i != size; i++) {
+            char c;
+            if (osal_copy_from_user(&c, buf + i, sizeof(char))) {
+                return -EFAULT;
+            }
+            if (c == 'V') {
+                g_expect_close = 1;
+            }
+        }
+        ot_dog_keepalive();
+    }
+
+    return size;
 }
 
 static int ot_dog_set_options(unsigned int new_options)
@@ -284,12 +373,18 @@ static int ot_dog_ioctl_keep_alive(unsigned int cmd, void *arg, void *private_da
 
 static int ot_dog_ioctl_set_timeout(unsigned int cmd, void *arg, void *private_data)
 {
+    int ret;
+
     wtdg_unused(cmd);
     wtdg_unused(private_data);
-    if (ot_dog_set_heartbeat(*(int *)arg)) {
-        return -1;
+    ret = ot_dog_set_heartbeat(*(int *)arg);
+    if (ret) {
+        return ret;
     }
     ot_dog_keepalive();
+    /* Falls through to GETTIMEOUT, as the watchdog core does: the caller reads
+     * back the margin the device is running at. */
+    *(int *)arg = g_cur_margin;
     return 0;
 }
 
@@ -298,6 +393,27 @@ static int ot_dog_ioctl_get_timeout(unsigned int cmd, void *arg, void *private_d
     wtdg_unused(cmd);
     wtdg_unused(private_data);
     *(int *)arg = g_cur_margin;
+    return 0;
+}
+
+static int ot_dog_ioctl_get_time_left(unsigned int cmd, void *arg, void *private_data)
+{
+    unsigned long flags;
+    unsigned long left;
+
+    wtdg_unused(cmd);
+    wtdg_unused(private_data);
+
+    osal_spin_lock_irqsave(&g_ot_dog_lock, &flags);
+    left = ot_wdt_readl(OT_WDT_VALUE);
+    /* The counter is loaded with half a margin and run twice, so with no
+     * interrupt pending there is still a whole load to go after this one. */
+    if (!(ot_wdt_readl(OT_WDT_RIS) & 0x1)) {
+        left += (unsigned long)g_load_val + 1;
+    }
+    osal_spin_unlock_irqrestore(&g_ot_dog_lock, &flags);
+
+    *(int *)arg = (int)(left / g_rate);
     return 0;
 }
 
@@ -315,6 +431,7 @@ static osal_ioctl_cmd g_ot_dog_ioctl_cmd_list[] = {
     { WDIOC_KEEPALIVE, ot_dog_ioctl_keep_alive },
     { WDIOC_SETTIMEOUT, ot_dog_ioctl_set_timeout },
     { WDIOC_GETTIMEOUT, ot_dog_ioctl_get_timeout },
+    { WDIOC_GETTIMELEFT, ot_dog_ioctl_get_time_left },
     { WDIOC_SETOPTIONS, ot_dog_ioctl_set_options },
 };
 
@@ -322,6 +439,7 @@ static osal_ioctl_cmd g_ot_dog_ioctl_cmd_list[] = {
 static osal_fileops g_ot_dog_fops = {
     .open     = ot_dog_open,
     .release  = ot_dog_release,
+    .write    = ot_dog_write,
     .cmd_list = g_ot_dog_ioctl_cmd_list,
     .cmd_cnt  = sizeof(g_ot_dog_ioctl_cmd_list) / sizeof(g_ot_dog_ioctl_cmd_list[0]),
 };
@@ -341,6 +459,29 @@ static inline void dog_feed(void)
     }
 }
 
+#define OT_DOG_DEAMON_MAX_SLEEP_MS 30000
+
+/*
+ * Half of the margin in force, not half of the module's default. Userspace can
+ * change the margin and hand the device back, and a feeder slower than the
+ * margin it is feeding resets the board on a cycle nobody configured. Capped so
+ * that a long margin does not make module unload wait out a whole sleep.
+ */
+static unsigned int ot_dog_deamon_period(void)
+{
+    unsigned int period = (unsigned int)g_cur_margin * 1000 / 2;
+
+    if (period > OT_DOG_DEAMON_MAX_SLEEP_MS) {
+        period = OT_DOG_DEAMON_MAX_SLEEP_MS;
+    }
+    return period + 10;
+}
+
+/*
+ * Feeds the dog from module load until the first open, and never again --
+ * ot_dog_open() latches OT_DOG_EXTCLR. Anything else would mean the driver
+ * guarding itself.
+ */
 int ot_dog_deamon(void *data)
 {
     wtdg_unused(data);
@@ -358,7 +499,7 @@ int ot_dog_deamon(void *data)
                 break;
         }
         /* sleep; when self feed dog, only use the default margin */
-        osal_msleep(g_default_margin * 1000 / 2 + 10); /* sleep (60*1000/2 + 10)->30.01s */
+        osal_msleep(ot_dog_deamon_period());
     }
 
     return 0;
@@ -404,8 +545,8 @@ static int get_margin(void)
     if (ot_dog_set_heartbeat(g_default_margin)) {
         g_default_margin = OT_DOG_TIMER_MARGIN;
         ot_dog_set_heartbeat(OT_DOG_TIMER_MARGIN);
-        osal_printk("g_default_margin value must be 0<g_default_margin<%lu, using %d\n",
-            (~0x0UL) / g_rate, OT_DOG_TIMER_MARGIN);
+        osal_printk("default_margin value must be 0<default_margin<=%u, using %d\n",
+            ot_dog_max_margin(), OT_DOG_TIMER_MARGIN);
     }
 
     return ret;
@@ -508,10 +649,18 @@ static void ot_dog_exit(void)
 
 void watchdog_exit(void)
 {
-    ot_dog_exit();
-
+    /*
+     * Unregister before tearing anything down. ot_dog_exit() sets OT_DOG_EXIT
+     * and then waits for the feeder to notice, and the feeder's loop condition
+     * is g_ot_dog_state -- which ot_dog_open() sets back to OT_DOG_EXTCLR. With
+     * the device still registered at that point, one open() racing the unload
+     * left the thread looping for ever and rmmod stuck in D state holding
+     * module_mutex. Observed on a gk7205v200 running the same logic.
+     */
     osal_dev_unregister(g_ot_dog_miscdev);
     osal_dev_destroy(g_ot_dog_miscdev);
+
+    ot_dog_exit();
     osal_atomic_set(&g_driver_open, 0);
     if (g_need_iounmap) {
         osal_iounmap((void *)g_wtdg_reg_base, WDT_REGS_LENGTH);
