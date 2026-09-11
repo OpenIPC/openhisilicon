@@ -74,6 +74,8 @@ struct osal_task *g_task_hidog_deamon = NULL;
 volatile static unsigned int g_hidog_state = 0;
 static osal_atomic_t g_driver_open;
 static unsigned int g_options = WDIOS_ENABLECARD;
+/* Set by a "V" through hidog_write(): the caller means the next close. */
+static int g_expect_close = 0;
 
 #ifndef MHZ
 #define MHZ (1000 * 1000)
@@ -81,19 +83,45 @@ static unsigned int g_options = WDIOS_ENABLECARD;
 
 static const unsigned long g_rate = 3 * MHZ; /* 3MHZ */
 
+/*
+ * The counter is loaded with half a margin's worth of ticks, because the
+ * SP805 runs the load value twice before it resets anything: reaching zero
+ * raises the interrupt and reloads, and only reaching zero a second time with
+ * that interrupt still pending drives the reset. Loading a whole margin made
+ * every timeout mean twice itself, so nothing a caller set through
+ * WDIOC_SETTIMEOUT was the time it got. Same arithmetic as
+ * drivers/watchdog/sp805_wdt.c.
+ *
+ * Half of the counter's range: the load has to be added back to report the
+ * time left, and keeping that sum inside 32 bits is what lets the arithmetic
+ * stay 32-bit.
+ */
+#define HIWDT_LOAD_MAX 0x7fffffffU
+
+static unsigned int hidog_max_margin(void)
+{
+    return (unsigned int)(HIWDT_LOAD_MAX / (g_rate / 2));
+}
+
+static unsigned int hidog_load_val(unsigned int nr)
+{
+    if (nr == 0 || nr > hidog_max_margin()) {
+        return HIWDT_LOAD_MAX;
+    }
+
+    return (unsigned int)(nr * (g_rate / 2)) - 1;
+}
+
+static unsigned int g_load_val = HIWDT_LOAD_MAX;
+
 static void hidog_set_timeout(unsigned int nr)
 {
-    unsigned int cnt_0 = ~0x0;
-    unsigned int cnt = cnt_0 / g_rate;  /* max cnt */
+    unsigned int cnt = hidog_load_val(nr);
     unsigned long flags;
 
     osal_spin_lock_irqsave(&g_hidog_lock, &flags);
 
-    if (nr == 0 || nr > cnt) {
-        cnt = ~0x0;
-    } else {
-        cnt = nr * g_rate;
-    }
+    g_load_val = cnt;
     /* unlock watchdog registers */
     hiwdt_writel(HIWDT_UNLOCK_VAL, HIWDT_LOCK);
     hiwdt_writel(cnt, HIWDT_LOAD);
@@ -103,42 +131,45 @@ static void hidog_set_timeout(unsigned int nr)
     osal_spin_unlock_irqrestore(&g_hidog_lock, &flags);
 }
 
+/*
+ * A ping restarts the timer, which is what WDIOC_KEEPALIVE means and all a
+ * caller can be expected to assume.
+ *
+ * This used to read HIWDT_RIS first and return without touching anything when
+ * no interrupt was pending -- so a ping did nothing at all until the counter
+ * had already run out once, and even then only cleared the interrupt without
+ * reloading. The deadline therefore stayed where the previous accepted ping
+ * had put it, which made the honest cadence of one ping per half-margin worth
+ * exactly one accepted ping per cycle: miss it and a process that had been
+ * feeding the device all along got the board reset under it. Writing the load
+ * and clearing the interrupt is unconditional in sp805_wdt.c for the same
+ * reason.
+ */
 static void hidog_feed(void)
 {
     unsigned long flags;
 
-    /* read the RIS state of current wdg */
-    unsigned int v = (unsigned int)hiwdt_readl(HIWDT_RIS);
-    v &= 0x1; /* 0x1: get INT bit [1] */
-    if (v == 0) { /* no INT on current wdg */
-        return;
-    }
-
     osal_spin_lock_irqsave(&g_hidog_lock, &flags);
     /* unlock watchdog registers */
     hiwdt_writel(HIWDT_UNLOCK_VAL, HIWDT_LOCK);
-    /* clear watchdog */
+    /* reload the counter, and clear an interrupt if one is already up */
+    hiwdt_writel(g_load_val, HIWDT_LOAD);
     hiwdt_writel(0x00, HIWDT_INTCLR);
     /* lock watchdog registers */
     hiwdt_writel(0, HIWDT_LOCK);
     osal_spin_unlock_irqrestore(&g_hidog_lock, &flags);
 }
 
+/*
+ * Out of range is -EINVAL and the margin in force is left alone, as every
+ * other watchdog driver does it. Half-applying a value the caller was told
+ * was rejected -- which is what clamping here amounted to -- left the device
+ * running at a margin nobody had asked for.
+ */
 static int hidog_set_heartbeat(int t)
 {
-    int ret = 0;
-    unsigned int cnt_0 = ~0x0;
-    unsigned int cnt = cnt_0 / g_rate;
-
-    if (t <= 0) {
-        osal_printk("set heartbeat less or equal to 0, heartbeat will not be changed.\n");
-        t = g_cur_margin;
-        ret = -1;
-    } else if (t > cnt) {
-        osal_printk("set heartbeat range error, t = %d\n", t);
-        osal_printk("force heartbeat to %u\n", cnt);
-        t = cnt;
-        ret = -1;
+    if (t <= 0 || (unsigned int)t > hidog_max_margin()) {
+        return -EINVAL;
     }
 
     g_cur_margin = t;
@@ -146,7 +177,7 @@ static int hidog_set_heartbeat(int t)
     hidog_set_timeout(t);
     hidog_feed();
 
-    return ret;
+    return 0;
 }
 
 static int hidog_keepalive(void)
@@ -200,6 +231,27 @@ static int hidog_open(void *private_data)
         return -1;
     }
 
+    /*
+     * The kernel-side feeder exists to cover the window between module load,
+     * where hidog_init() arms the hardware, and the first open. Once
+     * userspace has taken the device that window is over for good, so this
+     * transition is one-way: hidog_release() does not put it back. It used
+     * to, and that is why the watchdog never reset anything -- the process
+     * being guarded died, its descriptor was closed for it, and the driver
+     * itself went on feeding the dog for the rest of the board's life. See
+     * OpenIPC/firmware#1803.
+     */
+    g_hidog_state = HIDOG_EXTCLR;
+    g_expect_close = 0;
+
+    /*
+     * "When the device is opened, the watchdog is started" -- the API says so
+     * unconditionally, and that held here only for as long as nothing had
+     * stopped the counter. A magic close, or WDIOS_DISABLECARD, clears
+     * HIWDT_CTRL, and neither the ping below nor WDIOC_SETTIMEOUT puts it
+     * back.
+     */
+    hidog_start();
     hidog_keepalive();
 
     return ret;
@@ -212,13 +264,51 @@ static int hidog_release(void *private_data)
         return 0;
     }
 
-    g_hidog_state = HIDOG_SELFCLR;
-    hidog_set_heartbeat(g_cur_margin);
+    /*
+     * WDIOF_MAGICCLOSE is advertised, and it means a close without a
+     * preceding "V" leaves the timer running and unfed -- the reset the
+     * caller is owed when the process being guarded dies.
+     */
+    if (g_expect_close) {
+        hidog_stop();
+        g_expect_close = 0;
+    } else if (g_options & WDIOS_ENABLECARD) {
+        osal_printk("Unexpected close, watchdog left running!\n");
+    }
 
     if (g_options == WDIOS_DISABLECARD) {
         osal_printk("Watchdog is disabled!\n");
     }
     return 0;
+}
+
+/*
+ * g_ident.options has advertised WDIOF_MAGICCLOSE all along while there was
+ * no write handler at all, so a caller doing the documented thing -- write
+ * "V", then close, to say the shutdown is deliberate -- got EINVAL from the
+ * write and no way at all to stop the device it had started. A write is also
+ * the other documented way to ping.
+ */
+static int hidog_write(const char *data, int len, long *ppos, void *private_data)
+{
+    if (len) {
+        int i;
+
+        g_expect_close = 0;
+
+        for (i = 0; i != len; i++) {
+            char c;
+            if (osal_copy_from_user(&c, data + i, sizeof(char))) {
+                return -EFAULT;
+            }
+            if (c == 'V') {
+                g_expect_close = 1;
+            }
+        }
+        hidog_keepalive();
+    }
+
+    return len;
 }
 
 static long hidog_ioctl(unsigned int cmd, unsigned long arg, void *private_data)
@@ -241,18 +331,45 @@ static long hidog_ioctl(unsigned int cmd, unsigned long arg, void *private_data)
             hidog_keepalive();
             return 0;
 
-        case WDIOC_SETTIMEOUT:
+        case WDIOC_SETTIMEOUT: {
+            int ret;
+
             osal_memcpy(&new_margin, (int *)argp, sizeof(int));
 
-            if (hidog_set_heartbeat(new_margin)) {
-                return -1;
+            ret = hidog_set_heartbeat(new_margin);
+            if (ret) {
+                return ret;
             }
             hidog_keepalive();
+            /* Falls through to GETTIMEOUT, as the watchdog core does: the
+             * caller reads back the margin the device is running at. */
+            osal_memcpy((int *)argp, &g_cur_margin, sizeof(int));
             return 0;
+        }
 
         case WDIOC_GETTIMEOUT:
             osal_memcpy((int *)argp, &g_cur_margin, sizeof(int));
             return 0;
+
+        case WDIOC_GETTIMELEFT: {
+            unsigned long flags;
+            unsigned long left;
+            int secs;
+
+            osal_spin_lock_irqsave(&g_hidog_lock, &flags);
+            left = hiwdt_readl(HIWDT_VALUE);
+            /* The counter is loaded with half a margin and run twice, so with
+             * no interrupt pending there is still a whole load to go after
+             * this one. */
+            if (!(hiwdt_readl(HIWDT_RIS) & 0x1)) {
+                left += (unsigned long)g_load_val + 1;
+            }
+            osal_spin_unlock_irqrestore(&g_hidog_lock, &flags);
+
+            secs = (int)(left / g_rate);
+            osal_memcpy((int *)argp, &secs, sizeof(int));
+            return 0;
+        }
 
         case WDIOC_SETOPTIONS:
             osal_memcpy(&new_options, (int *)argp, sizeof(int));
@@ -265,11 +382,11 @@ static long hidog_ioctl(unsigned int cmd, unsigned long arg, void *private_data)
                 hidog_stop();
                 return 0;
             } else {
-                return -WDIOS_UNKNOWN;
+                return -EINVAL;
             }
 
         default:
-            return -1;
+            return -ENOTTY;
     }
 }
 
@@ -278,14 +395,24 @@ static struct osal_fileops g_hidog_fops = {
     .unlocked_ioctl = hidog_ioctl,
     .open           = hidog_open,
     .release        = hidog_release,
+    .write          = hidog_write,
 };
 
 static struct osal_dev *g_hidog_miscdev = NULL;
 
 static char g_banner[] = "Hisilicon Watchdog Timer: 0.01 initialized. default_margin=%d sec (nodeamon= %d)\n";
 
+#define HIDOG_DEAMON_MAX_SLEEP_MS 30000
+
+/*
+ * Feeds the dog from module load until the first open, and never again --
+ * hidog_open() latches HIDOG_EXTCLR. Anything else would mean the driver
+ * guarding itself.
+ */
 static int hidog_deamon(void *data)
 {
+    unsigned int period;
+
 #ifdef __HuaweiLite__
     prctl(PR_SET_NAME, "hidog_deamon", 0, 0, 0);
 #endif
@@ -301,8 +428,18 @@ static int hidog_deamon(void *data)
             default:
                 break;
         }
-        /* sleep; when self feed dog, only use the default margin */
-        osal_msleep(default_margin * 1000 / 2 + 10);  /* sleep (60*1000/2 + 10)->30.01s */
+        /*
+         * Half of the margin in force, not half of the module's default.
+         * Userspace can change the margin and hand the device back, and a
+         * feeder slower than the margin it is feeding resets the board on a
+         * cycle nobody configured. Capped so that a long margin does not make
+         * module unload wait out a whole sleep.
+         */
+        period = (unsigned int)g_cur_margin * 1000 / 2;
+        if (period > HIDOG_DEAMON_MAX_SLEEP_MS) {
+            period = HIDOG_DEAMON_MAX_SLEEP_MS;
+        }
+        osal_msleep(period + 10);
     }
 
     return 0;
@@ -335,17 +472,15 @@ static int hidog_init(void)
 
 static int get_margin(void)
 {
-    int ret = default_margin;
-
     /* Check that the default_margin value is within it's range ; if not reset to the default */
     if (hidog_set_heartbeat(default_margin)) {
         default_margin = HIDOG_TIMER_MARGIN;
         hidog_set_heartbeat(HIDOG_TIMER_MARGIN);
-        osal_printk("default_margin value must be 0<default_margin<%lu, using %d\n",
-            (~0x0UL) / g_rate, HIDOG_TIMER_MARGIN);
+        osal_printk("default_margin value must be 0<default_margin<=%u, using %d\n",
+            hidog_max_margin(), HIDOG_TIMER_MARGIN);
     }
 
-    return ret;
+    return default_margin;
 }
 
 static int ptr_ioremap(void)
