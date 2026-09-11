@@ -243,6 +243,18 @@ static int dog_open(void *private_data)
 	//}
 	//orphan_timer = 0;
 
+	/*
+	 * The kernel-side feeder exists to cover the window between module
+	 * load, where dog_init() arms the hardware, and the first open. Once
+	 * userspace has taken the device that window is over for good, so
+	 * this transition is one-way: dog_release() does not put it back.
+	 * It used to, and that is why the watchdog never reset anything —
+	 * the process being guarded died, its descriptor was closed for it,
+	 * and the driver itself went on feeding the dog for the rest of the
+	 * board's life. See OpenIPC/firmware#1803, where the only way to get
+	 * a reset out of this driver was nodeamon=1, i.e. having no feeder
+	 * at all and therefore no boot-time cover either.
+	 */
 	dog_state = DOG_EXTCLR;
 	expect_close = 0;
 
@@ -264,21 +276,11 @@ static int dog_release(void *private_data)
 	/*
      *    Shut off the timer, if the caller said it meant to.
      */
-	dog_state = DOG_SELFCLR;
-
 	if (expect_close) {
 		dog_stop();
 		expect_close = 0;
-	} else {
-		/* Standard: a close without the magic character keeps the
-		 * watchdog running. Here the kernel-side feeder takes it back
-		 * — but only if there is one, so say so either way rather than
-		 * leave a silently unfed device behind. */
-		osal_printk("Unexpected close, not stopping watchdog!\n");
-		dog_set_heartbeat(cur_margin);
-		if (nodeamon)
-			osal_printk(
-				"nodeamon=1 and nothing is feeding the watchdog\n");
+	} else if (options & WDIOS_ENABLECARD) {
+		osal_printk("Unexpected close, watchdog left running!\n");
 	}
 	//osal_module_put(&__this_module);
 
@@ -435,6 +437,11 @@ static int dog_deamon(void *data)
 #ifdef __LITEOS__
 	prctl(PR_SET_NAME, "dog_deamon", 0, 0, 0);
 #endif
+	/*
+	 * Feeds the dog from module load until the first open, and never
+	 * again — dog_open() latches DOG_EXTCLR. Anything else would mean
+	 * the driver guarding itself.
+	 */
 	while (dog_state != DOG_EXIT) {
 		switch (dog_state) {
 		case DOG_SELFCLR:
