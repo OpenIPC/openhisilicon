@@ -260,7 +260,17 @@ static int dog_open(void *private_data)
 
 	/*
      *    Activate timer
+     *
+     * "When the device is opened, the watchdog is started" -- the API says
+     * so unconditionally, and it used to hold here only because nothing had
+     * turned the counter off yet. A magic close, or WDIOC_SETOPTIONS with
+     * WDIOS_DISABLECARD, clears WDT_CTRL; neither the ping below nor
+     * WDIOC_SETTIMEOUT touches it, so before this call the device stayed
+     * dead from the first deliberate stop until something thought to send
+     * WDIOS_ENABLECARD -- an open would succeed, the margin would be
+     * accepted, the pings would be accepted, and nothing would ever reset.
      */
+	dog_start();
 	dog_keepalive();
 
 	return ret;
