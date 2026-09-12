@@ -14,6 +14,12 @@
 
 #define WATCHDOG_IOCTL_BASE 'W'
 
+/* Margin in seconds the driver runs at until a module parameter or a
+ * WDIOC_SETTIMEOUT says otherwise. Here rather than in wdt.c so that
+ * wdt_init.c can name it in the parameter description -- which used to
+ * stringify the undefined token and print "(default=DOG_TIMER_MARGIN)". */
+#define DOG_TIMER_MARGIN 60
+
 struct watchdog_info {
 	unsigned int options; /* Options the card/driver supports */
 	unsigned int firmware_version; /* Firmware version of the card */
@@ -30,7 +36,7 @@ struct watchdog_info {
 #define WDIOC_GETTIMEOUT _IOR(WATCHDOG_IOCTL_BASE, 7, int)
 //#define    WDIOC_SETPRETIMEOUT  _IOWR(WATCHDOG_IOCTL_BASE, 8, int)
 //#define    WDIOC_GETPRETIMEOUT  _IOR(WATCHDOG_IOCTL_BASE, 9, int)
-//#define    WDIOC_GETTIMELEFT    _IOR(WATCHDOG_IOCTL_BASE, 10, int)
+#define WDIOC_GETTIMELEFT _IOR(WATCHDOG_IOCTL_BASE, 10, int)
 
 #define WDIOF_UNKNOWN -1 /* Unknown flag error */
 #define WDIOS_UNKNOWN -1 /* Unknown status error */

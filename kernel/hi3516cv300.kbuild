@@ -124,8 +124,13 @@ ifndef DISABLE_ISP
 endif
 
 # --- Watchdog module (source driver) ---
-$(PREFIX)wdt-objs := wdt/hi3516cv300/hi_wdt.o
-ccflags-y += -I$(src)/wdt/hi3516cv300
+# --- WDT module (the one driver in wdt/). This generation describes no
+# watchdog node in the device tree, so the module registers on load and maps
+# the block itself. The copy that used to live in wdt/hi3516cv300/ had no
+# module entry point at all: it loaded and did nothing, and the board came up
+# with no /dev/watchdog. ---
+ccflags-y += -DWDT_BASE=0x12080000 -DWDT_OSAL_HI -DWDT_OSAL_NO_KTHREAD_STOP_FLAG -DWDT_NO_OF
+$(PREFIX)wdt-objs := wdt/wdt.o wdt/wdt_init.o
 obj-m += $(PREFIX)wdt.o
 
 # --- MIPI RX module (source driver) ---
