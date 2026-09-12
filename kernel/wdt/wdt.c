@@ -318,7 +318,15 @@ static int dog_open(void *private_data)
      * accepted, the pings would be accepted, and nothing would ever reset.
      */
 	dog_start();
-	dog_keepalive();
+	/*
+	 * The margin, not just a ping: dog_stop() parks load_val at the maximum
+	 * (dog_set_timeout(0)), and a bare feed would write that back, so a
+	 * client that stopped the device and reopened it without setting the
+	 * timeout again would get roughly the counter's whole range while
+	 * WDIOC_GETTIMEOUT still reported what it had asked for. The
+	 * WDIOS_ENABLECARD path restores the heartbeat for the same reason.
+	 */
+	dog_set_heartbeat(cur_margin);
 
 	return ret;
 }
@@ -366,8 +374,15 @@ static int dog_write(const char *data, int len, long *ppos, void *private_data)
 
 		for (i = 0; i != len; i++) {
 			char c;
-			if (osal_copy_from_user(&c, data + i, sizeof(char)))
+			if (osal_copy_from_user(&c, data + i, sizeof(char))) {
+				/* The write failed, so nothing it carried
+				 * stands -- including a "V" already seen. The
+				 * watchdog core leaves the flag set here, but
+				 * the cost of getting it wrong is a board that
+				 * quietly stops being guarded. */
+				expect_close = 0;
 				return -EFAULT;
+			}
 			if (c == 'V')
 				expect_close = 1;
 		}
@@ -528,6 +543,12 @@ static int dog_deamon(void *data)
 	return 0;
 }
 
+/*
+ * dog_start() arms the hardware before the feeder exists, so every failure
+ * after it has to disarm again: watchdog_init() goes on to unmap the registers
+ * and return an error, and a module that failed to load has nothing left that
+ * could feed the dog. Leaving it armed resets the board one margin later.
+ */
 static int dog_init(void)
 {
 	dog_start();
@@ -538,6 +559,7 @@ static int dog_init(void)
 		if (pthread_create(&task_dog_deamon, NULL, (void *)dog_deamon,
 				   0) < 0) {
 			osal_printk("create dog_deamon failed!\n");
+			dog_stop();
 			return -1;
 		}
 #else
@@ -545,6 +567,7 @@ static int dog_init(void)
 		p_dog = osal_kthread_create(dog_deamon, NULL, "dog");
 		if (NULL == p_dog) {
 			osal_printk("create dog_deamon failed!\n");
+			dog_stop();
 			return -1;
 		}
 		task_dog_deamon = p_dog;

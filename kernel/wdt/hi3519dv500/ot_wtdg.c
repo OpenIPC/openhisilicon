@@ -262,7 +262,15 @@ static int ot_dog_open(void *private_data)
      * back.
      */
     ot_dog_start();
-    ot_dog_keepalive();
+    /*
+     * The margin, not just a ping: ot_dog_stop() parks g_load_val at the
+     * maximum (ot_dog_set_timeout(0)), and a bare feed would write that back,
+     * so a client that stopped the device and reopened it without setting the
+     * timeout again would get roughly the counter's whole range while
+     * WDIOC_GETTIMEOUT still reported what it had asked for. The
+     * WDIOS_ENABLECARD path restores the heartbeat for the same reason.
+     */
+    ot_dog_set_heartbeat(g_cur_margin);
 
     return ret;
 }
@@ -313,6 +321,11 @@ static int ot_dog_write(const char *buf, int size, long *offset, void *private_d
         for (i = 0; i != size; i++) {
             char c;
             if (osal_copy_from_user(&c, buf + i, sizeof(char))) {
+                /* The write failed, so nothing it carried stands -- including
+                 * a "V" already seen. The watchdog core leaves the flag set
+                 * here, but the cost of getting it wrong is a board that
+                 * quietly stops being guarded. */
+                g_expect_close = 0;
                 return -EFAULT;
             }
             if (c == 'V') {
@@ -505,6 +518,12 @@ int ot_dog_deamon(void *data)
     return 0;
 }
 
+/*
+ * ot_dog_start() arms the hardware before the feeder exists, so every failure
+ * after it has to disarm again: watchdog_init() goes on to unmap the registers
+ * and return an error, and a module that failed to load has nothing left that
+ * could feed the dog. Leaving it armed resets the board one margin later.
+ */
 static int ot_dog_init(void)
 {
     ot_dog_start();
@@ -514,6 +533,7 @@ static int ot_dog_init(void)
 #ifdef __LITEOS__
         if (pthread_create(&g_task_ot_dog_deamon, NULL, (void *)ot_dog_deamon, 0) < 0) {
             osal_printk("create ot_dog_deamon failed!\n");
+            ot_dog_stop();
             return -1;
         }
 #else
@@ -528,6 +548,7 @@ static int ot_dog_init(void)
             dog = osal_kthread_create(ot_dog_deamon, NULL, "ot_dog", 0);
             if (dog == NULL) {
                 osal_printk("create ot_dog_deamon failed!\n");
+                ot_dog_stop();
                 return -1;
             }
             g_task_ot_dog_deamon = dog;
