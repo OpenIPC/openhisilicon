@@ -1515,7 +1515,7 @@ void IMX335_linear_5M30_12bit_init(VI_PIPE ViPipe)
 	IMX335_write_register(ViPipe, 0x3076, 0x58); // AREA3_WIDTH_1 = Y_OUT_SIZE * 2
 	IMX335_write_register(ViPipe, 0x3077, 0x0F);
 
-	IMX335_write_register(ViPipe, 0x3050, 0x00);
+	IMX335_write_register(ViPipe, 0x3050, 0x01); /* ADBIT = 12-bit */
 
 	IMX335_write_register(ViPipe, 0x3074, 0xB0); // AREA3_ST_ADR_1 upper-left crop position
 	IMX335_write_register(ViPipe, 0x3075, 0x00);
@@ -1529,7 +1529,7 @@ void IMX335_linear_5M30_12bit_init(VI_PIPE ViPipe)
 	IMX335_write_register(ViPipe, 0x315A, 0x06);
 	IMX335_write_register(ViPipe, 0x316A, 0x7E);
 
-	IMX335_write_register(ViPipe, 0x319D, 0x00);
+	IMX335_write_register(ViPipe, 0x319D, 0x01); /* MDBIT = 12-bit */
 	IMX335_write_register(ViPipe, 0x319E, 0x02);
 	IMX335_write_register(ViPipe, 0x31A1, 0x00);
 	IMX335_write_register(ViPipe, 0x3288, 0x21);
@@ -1538,8 +1538,8 @@ void IMX335_linear_5M30_12bit_init(VI_PIPE ViPipe)
 	IMX335_write_register(ViPipe, 0x3414, 0x05);
 	IMX335_write_register(ViPipe, 0x3416, 0x18);
 
-	IMX335_write_register(ViPipe, 0x341C, 0xFF);
-	IMX335_write_register(ViPipe, 0x341D, 0x01);
+	IMX335_write_register(ViPipe, 0x341C, 0x47); /* ADBIT1 = 0x0047, 12-bit */
+	IMX335_write_register(ViPipe, 0x341D, 0x00);
 
 	IMX335_write_register(ViPipe, 0x3648, 0x01);
 	IMX335_write_register(ViPipe, 0x364A, 0x04);
