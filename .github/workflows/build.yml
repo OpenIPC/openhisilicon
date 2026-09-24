@@ -1028,13 +1028,19 @@ jobs:
             firmware: hi3516cv500
             mem: 128M
             append: "console=ttyAMA0,115200 earlyprintk mem=128M root=/dev/ram0 rootfstype=squashfs"
+          # ev200/gk7205v200 (V4 lite, mmz_allocator=hisi): open_rgn.ko
+          # oopses in RGN_Init while load_hisilicon inserts it, so late
+          # init never finishes (#227). Everything still gates except the
+          # late-init checks, which report a warning until that is fixed.
           - machine: hi3516ev200
             firmware: hi3516ev200
             mem: 128M
+            known_late_init_failure: "open_rgn RGN_Init oops (#227)"
             append: "console=ttyAMA0,115200 earlyprintk mem=96M root=/dev/ram0 rootfstype=squashfs mmz_allocator=hisi mmz=anonymous,0,0x46000000,32M"
           - machine: gk7205v200
             firmware: gk7205v200
             mem: 128M
+            known_late_init_failure: "open_rgn RGN_Init oops (#227)"
             append: "console=ttyAMA0,115200 earlyprintk mem=96M root=/dev/ram0 rootfstype=squashfs mmz_allocator=hisi mmz=anonymous,0,0x46000000,32M"
           # hi3516ev300_neo board (V4 + CMA). The bootargs match what the
           # production U-Boot passes: mem=<totalmem> with mmz_allocator=cma
@@ -1164,23 +1170,137 @@ jobs:
           echo "===CI:LSMOD_END==="
           EOS
           sudo chmod +x rfs/etc/init.d/S99lsmodprobe
+
+          # Give the camera a stored MAC, as a provisioned camera has.
+          #
+          # OpenIPC/firmware#2408 (2026-09-13) runs `extutils check_mac` from
+          # S30customizer. With no stored address -- and this rootfs has
+          # neither a fw_env.config nor a writable /etc -- it mints one with
+          # `od -N5 /dev/urandom`, which blocks until the guest CRNG is
+          # initialised. On the hi3516av100 machine model the kernel gets no
+          # arch-timer interrupt ("arch_timer: No interrupt available") and
+          # has next to no entropy, so that read measured 85 s of guest
+          # uptime: av100_neo then fell off the old fixed 90 s budget at a
+          # different init script each run, which looked like flakiness but
+          # was one deterministic stall. Every other row reaches check_mac
+          # 2-6 s after boot.
+          #
+          # Rejected: seeding the CRNG instead. These machine models have no
+          # virtio-rng, and seedrng will not credit a seed it cannot unlink,
+          # which on a read-only squashfs is every seed. mac_stored() reads
+          # /etc/ethaddr as its fallback store, so a fixed locally
+          # administered unicast address (02: prefix) short-circuits the
+          # whole path. The firmware-side bug (boot blocking on urandom on
+          # any camera whose env cannot be written) is tracked upstream.
+          echo 02:00:00:c1:00:01 | sudo tee rfs/etc/ethaddr > /dev/null
           sudo mksquashfs rfs rootfs.squashfs.${{ matrix.firmware }}.probed \
               -comp xz -all-root -noappend -no-progress >/dev/null
           sudo mv rootfs.squashfs.${{ matrix.firmware }}.probed \
                   rootfs.squashfs.${{ matrix.firmware }}
 
       - name: Boot under QEMU
-        timeout-minutes: 3
+        timeout-minutes: 6
         run: |
           QEMU=/tmp/qemu-hisilicon/qemu-src/build/qemu-system-arm
           chmod +x $QEMU
-          timeout 90 $QEMU \
+
+          # Wait for the boot, don't guess how long it takes.
+          #
+          # This used to be `timeout 90 qemu ... | tee` followed by a grep.
+          # That cannot tell a slow boot from a hung one, and when it fails
+          # the log only shows where the clock ran out, not where the time
+          # went. av100_neo spent a week red that way on one 85 s stall
+          # (see the /etc/ethaddr note in the inject step): it stopped at
+          # mdev, then network, then the DHCP lease on successive runs, and
+          # read as flakiness.
+          #
+          # Now QEMU runs in the background and is stopped as soon as the
+          # boot is proven: the crond marker (same regexes as the final
+          # gate below), then S99lsmodprobe's LSMOD_END, which is the last
+          # thing init prints, plus a few seconds for late console writers
+          # (majestic's "Cannot get chip id" is one the checks look for).
+          # Most rows now take ~15 s instead of 90. BOOT_CEILING is the
+          # hang detector, not a performance budget; the timing report
+          # below is what makes creep visible.
+          #
+          # qemu-output.txt stays the raw console, byte for byte, so the
+          # offline replay of the checks below still works on it.
+          # qemu-timed.txt is the same stream with a host timestamp per
+          # line, for the timing report only.
+          BOOT_CEILING=180
+          SETTLE_CEILING=60
+          CROND_RE='Starting crond: OK|crond \(busybox [0-9.]+\) started'
+          OOPS_RE='Internal error: Oops|Kernel panic - not syncing|Unable to handle kernel'
+
+          # Nothing stale may satisfy the first poll or name the wrong PID.
+          rm -f qemu-output.txt qemu-timed.txt qemu.pid
+          t0=$EPOCHREALTIME
+          { timeout $((BOOT_CEILING + SETTLE_CEILING + 30)) $QEMU \
               -M ${{ matrix.machine }} -m ${{ matrix.mem }} \
               -kernel /tmp/openipc/uImage.${{ matrix.firmware }} \
               -initrd /tmp/openipc/rootfs.squashfs.${{ matrix.firmware }} \
               -nographic -serial mon:stdio \
+              -pidfile qemu.pid \
               -append "${{ matrix.append }}" \
-              2>&1 | tee qemu-output.txt || true
+              < /dev/null 2>&1 || true; } |
+            tee qemu-output.txt |
+            while IFS= read -r line || [ -n "$line" ]; do
+                printf '%s\t%s\n' "$EPOCHREALTIME" "$line"
+            done > qemu-timed.txt &
+          pipe=$!
+
+          qemu_alive() { [ -s qemu.pid ] && kill -0 "$(cat qemu.pid)" 2>/dev/null; }
+          # Waits up to $1 s for regex $2 while QEMU is up; 0 if it appeared.
+          wait_for() {
+              end=$((SECONDS + $1))
+              while [ $SECONDS -lt $end ]; do
+                  grep -qaE "$2" qemu-output.txt 2>/dev/null && return 0
+                  kill -0 $pipe 2>/dev/null || break   # console hit EOF: QEMU is gone
+                  sleep 1
+              done
+              grep -qaE "$2" qemu-output.txt 2>/dev/null
+          }
+
+          if wait_for $BOOT_CEILING "$CROND_RE"; then
+              # An oops ends the wait too: the insmod that hit it never
+              # returns, so LSMOD_END will not come and the late-init
+              # check below reports it.
+              wait_for $SETTLE_CEILING "===CI:LSMOD_END===|$OOPS_RE" || true
+              sleep 3
+          else
+              echo "::warning::no crond marker within ${BOOT_CEILING}s (or QEMU exited), stopping QEMU"
+          fi
+          qemu_alive && kill "$(cat qemu.pid)"
+          wait $pipe || true
+
+          echo
+          echo "=== Boot timing ==="
+          # Seconds from QEMU start to the crond marker, and the three
+          # longest silences on the console with the line that ended each.
+          # A stall shows up here by name even when the boot still passes.
+          # Three, not one: a background writer can split a single stall
+          # (fake-hwclock's 60 s save cut av100_neo's 85 s one in two).
+          # The regex goes in through the environment: awk -v would
+          # process its backslashes and turn \( into a group.
+          CROND_RE="$CROND_RE" awk -F'\t' -v t0="$t0" '
+              function keep(g, at, l,    i, j) {
+                  for (i = 1; i <= 3; i++) if (g > G[i]) break
+                  if (i > 3) return
+                  for (j = 3; j > i; j--) { G[j] = G[j-1]; A[j] = A[j-1]; L[j] = L[j-1] }
+                  G[i] = g; A[i] = at; L[i] = l
+              }
+              NR == 1 { re = ENVIRON["CROND_RE"] }
+              { t = $1 - t0; line = substr($0, length($1) + 2); gsub(/\r/, "", line) }
+              crond == "" && line ~ re { crond = t }
+              NR > 1 { keep(t - pt, t, line) }
+              { pt = t }
+              END {
+                  if (crond != "") printf "boot reached crond in %.1f s\n", crond
+                  else             printf "boot never reached crond (console ran %.1f s)\n", pt
+                  print "longest console silences (gap, then the line that ended it):"
+                  for (i = 1; i <= 3 && i in G; i++)
+                      printf "  %5.1f s, until %6.1f s: %s\n", G[i], A[i], L[i]
+              }' qemu-timed.txt
 
           echo
           echo "=== Checking for successful boot ==="
@@ -1287,11 +1407,45 @@ jobs:
           #
           # General shape to watch for: any "Starting X: OK" is two writes
           # with a fork in between. Never assert on it as one string.
-          if grep -qaE "Starting crond: OK" qemu-output.txt ||
-             grep -qaE "crond \(busybox [0-9.]+\) started" qemu-output.txt; then
-              echo "PASS: ${{ matrix.machine }} kernel booted to userspace, no module-load regressions"
-          else
+          if ! grep -qaE "Starting crond: OK" qemu-output.txt &&
+             ! grep -qaE "crond \(busybox [0-9.]+\) started" qemu-output.txt; then
               fail_with "boot never reached crond (no 'Starting crond: OK' and no crond startup banner)"
+          fi
+
+          # Late init: crond alone is not enough. It starts at S60, before
+          # load_hisilicon inserts a single vendor module, so a row whose
+          # module load oopsed or wedged still passed the crond gate --
+          # which is how #227 sat unseen on two V4 rows. S99lsmodprobe is
+          # the last init script, so its LSMOD_END proves init ran to the
+          # end, and no kernel oops may appear anywhere in the boot.
+          #
+          # Rows with `known_late_init_failure` downgrade only these two
+          # checks, to a warning naming the known cause; every other check
+          # still gates them. allow-failure would have hidden all of them.
+          late_init_fail() {
+              known='${{ matrix.known_late_init_failure }}'
+              if [ -n "$known" ]; then
+                  late_known=1
+                  echo "::warning::KNOWN late-init failure (${{ matrix.machine }}, $known): $1"
+              else
+                  fail_with "$1"
+              fi
+          }
+          # ${OOPS_RE:?}, not $OOPS_RE: an offline replay of this block
+          # without the definition above must not grep for "" and match all.
+          if grep -qaE "${OOPS_RE:?}" qemu-output.txt; then
+              echo "--- first oops ---"
+              grep -aE -m1 -A8 "$OOPS_RE" qemu-output.txt
+              late_init_fail "kernel oops during boot: $(grep -aoE -m1 'PC is at [^ ]+( \[[^]]+\])?' qemu-output.txt || echo 'see log')"
+          fi
+          if ! grep -qa '===CI:LSMOD_END===' qemu-output.txt; then
+              late_init_fail "late init never finished (no S99lsmodprobe LSMOD_END marker after crond)"
+          fi
+
+          if [ -n "${late_known:-}" ]; then
+              echo "PASS (with known late-init failure): ${{ matrix.machine }} booted to userspace"
+          else
+              echo "PASS: ${{ matrix.machine }} kernel booted to userspace, no module-load regressions"
           fi
 
       - name: Upload QEMU output
@@ -1299,7 +1453,9 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: qemu-boot-${{ matrix.machine }}${{ matrix.variant && format('_{0}', matrix.variant) || '' }}
-          path: qemu-output.txt
+          path: |
+            qemu-output.txt
+            qemu-timed.txt
           retention-days: 7
 
   #
