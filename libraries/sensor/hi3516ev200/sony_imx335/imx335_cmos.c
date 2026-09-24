@@ -426,6 +426,22 @@ static GK_S32 cmos_get_ae_default(VI_PIPE ViPipe,
 }
 
 /* the function of sensor set fps */
+/* A frame length the VMAX field can actually hold.
+ *
+ * Applied at every point the frame length is settled rather than once, because
+ * cmos_fps_set() carries it in two variables that are written at different
+ * times: each case of the switch computes u32Lines and copies it into
+ * pstSnsState->u32FLStd, the VMAX registers are prepared from u32FLStd, and the
+ * WDR/linear block after that re-derives u32FLStd from u32Lines a second time
+ * -- doubling it in the WDR arm. Clamping one of them leaves the other free,
+ * and then the sensor is given one frame length while auto-exposure computes
+ * against another. */
+static GK_U32 imx335_clamp_full_lines(GK_U32 u32Lines)
+{
+	return (u32Lines > IMX335_FULL_LINES_MAX) ? IMX335_FULL_LINES_MAX :
+						    u32Lines;
+}
+
 static GK_VOID cmos_fps_set(VI_PIPE ViPipe, GK_FLOAT f32Fps,
 			    AE_SENSOR_DEFAULT_S *pstAeSnsDft)
 {
@@ -586,21 +602,17 @@ static GK_VOID cmos_fps_set(VI_PIPE ViPipe, GK_FLOAT f32Fps,
 		break;
 	}
 
-	/* Clamp what the rest of this function reads, which is u32FLStd.
-	 *
-	 * This guard used to assign to u32Lines, and every case above has
-	 * already copied u32Lines into pstSnsState->u32FLStd by the time it
-	 * runs -- so it wrote to a local nothing read again and clamped
-	 * nothing. The VMAX actually programmed was whatever the case
-	 * computed, which is why a 2 fps request reached the sensor as 67500
-	 * lines despite a stated 65535 limit.
+	/* The original guard here assigned to u32Lines at a point where every
+	 * case above had already copied it into pstSnsState->u32FLStd, so it
+	 * clamped nothing -- which is why a 2 fps request reached the sensor as
+	 * 67500 lines despite a stated 65535 limit.
 	 *
 	 * It matters now that the ceiling is the true 20-bit one: past it the
 	 * high nibble would be truncated by IMX335_HIG_4BITS() and the frame
-	 * would come back short instead of long. */
-	if (pstSnsState->u32FLStd > IMX335_FULL_LINES_MAX) {
-		pstSnsState->u32FLStd = IMX335_FULL_LINES_MAX;
-	}
+	 * would come back short instead of long. Binning is the mode that can
+	 * actually reach it, taking any frame rate without a lower bound. */
+	u32Lines = imx335_clamp_full_lines(u32Lines);
+	pstSnsState->u32FLStd = imx335_clamp_full_lines(pstSnsState->u32FLStd);
 
 	pstAeSnsDft->f32Fps = f32Fps;
 	pstAeSnsDft->u32LinesPer500ms = pstSnsState->u32FLStd * f32Fps / 2;
@@ -642,6 +654,11 @@ static GK_VOID cmos_fps_set(VI_PIPE ViPipe, GK_FLOAT f32Fps,
 	} else {
 		pstSnsState->u32FLStd = u32Lines;
 	}
+
+	/* Again, because the WDR arm above doubles it: a value that fitted the
+	 * field going in need not fit coming out. Everything below derives from
+	 * u32FLStd, so this is the last place it can be made honest. */
+	pstSnsState->u32FLStd = imx335_clamp_full_lines(pstSnsState->u32FLStd);
 
 	pstAeSnsDft->f32Fps = f32Fps;
 	gu32STimeFps = (GK_U32)f32Fps;
