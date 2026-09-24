@@ -111,7 +111,22 @@ extern int IMX335_read_register(VI_PIPE ViPipe, int addr);
 /****************************************************************************
  * local variables                                                            *
  ****************************************************************************/
-#define IMX335_FULL_LINES_MAX (0xFFFF)
+/* The widest frame length the sensor can be given, and so the longest exposure.
+ *
+ * VMAX (3030h-3032h) and SHR0/SHR1 (3058h-305Ah / 305Ch-305Eh) are all 20-bit
+ * fields whose top register carries bits 19:16 -- which the write paths below
+ * already honour, every one of them ending in IMX335_HIG_4BITS(). The old value
+ * here was 0xFFFF, documented as "SHR 16bit", and that is contradicted by the
+ * driver's own register map and by the datasheet: the high byte of each is a
+ * [3:0] field, not absent.
+ *
+ * Cutting the range to 16 bits cost the slow end of the frame rate, which is
+ * the only thing a long exposure is: exposure cannot exceed one frame period,
+ * so the frame length is the exposure ceiling.
+ *
+ * Kept a multiple of 4 because the WDR modes below round VMAX to 4 and must not
+ * have that undone by the clamp. */
+#define IMX335_FULL_LINES_MAX (0xFFFFC)
 
 #define IMX335_VMAX_ADDR_L (0x3030)
 #define IMX335_VMAX_ADDR_M (0x3031)
@@ -139,6 +154,14 @@ extern int IMX335_read_register(VI_PIPE ViPipe, int addr);
 #define IMX335_VMAX_5M_30FPS_10BIT_WDR (0x1194 + IMX335_INCREASE_LINES)
 #define IMX335_VMAX_4M_30FPS_10BIT_WDR (3300 + IMX335_INCREASE_LINES)//0xCE4
 #define IMX335_VMAX_4M_25FPS_10BIT_WDR (0xBB8 + IMX335_INCREASE_LINES)
+
+/* The slowest rate 20-bit VMAX can express in the 5M linear mode, and hence the
+ * longest exposure it can reach: VMAX scales as 30/fps from the 30 fps value,
+ * so the floor is the fps at which that product fills the field. Derived rather
+ * than written as a number so it follows IMX335_FULL_LINES_MAX if that moves. */
+#define IMX335_5M_LINEAR_FPS_MIN                                               \
+	((GK_FLOAT)IMX335_VMAX_5M_30FPS_12BIT_LINEAR * 30 /                    \
+	 (GK_FLOAT)IMX335_FULL_LINES_MAX)
 
 #define IMX335_VMAX_BINNING   (0x1194 + IMX335_INCREASE_LINES) //!?
 #define IMX335_VMAX_CROPPED_1080P   (0x8F8 + IMX335_INCREASE_LINES) //!? 0x8F8
@@ -320,7 +343,21 @@ static GK_S32 cmos_get_ae_default(VI_PIPE ViPipe,
 		pstAeSnsDft->enAeExpMode = AE_EXP_HIGHLIGHT_PRIOR;
 
 		pstAeSnsDft->u32MinIntTime = 2;
-		pstAeSnsDft->u32MaxIntTimeTarget = 65535;
+		/* The ceiling auto-exposure is allowed to aim for, in lines, and
+		 * the last place the old 16-bit assumption was written down: a
+		 * literal 65535 held the longest exposure to 485 ms however long
+		 * the frame actually was.
+		 *
+		 * Set to the widest the field can hold, so it never binds and the
+		 * frame length is what governs -- which is the only thing that
+		 * knows the current rate. Deliberately NOT u32MaxIntTime: that is
+		 * computed just above from the frame rate in force when this
+		 * runs, which is the mode's initial rate, and cmos_fps_set()
+		 * changes the frame length afterwards without coming back here.
+		 * MEASURED on a gk7205v300 + IMX335: tying the target to it
+		 * pinned the exposure ceiling to the initial 15 fps (66 ms) and
+		 * a later 1 fps request could not lift it. */
+		pstAeSnsDft->u32MaxIntTimeTarget = IMX335_FULL_LINES_MAX;
 		pstAeSnsDft->u32MinIntTimeTarget = pstAeSnsDft->u32MinIntTime;
 		pstAeSnsDft->stIntTimeAccu.f32Offset = -0.198;
 
@@ -389,6 +426,22 @@ static GK_S32 cmos_get_ae_default(VI_PIPE ViPipe,
 }
 
 /* the function of sensor set fps */
+/* A frame length the VMAX field can actually hold.
+ *
+ * Applied at every point the frame length is settled rather than once, because
+ * cmos_fps_set() carries it in two variables that are written at different
+ * times: each case of the switch computes u32Lines and copies it into
+ * pstSnsState->u32FLStd, the VMAX registers are prepared from u32FLStd, and the
+ * WDR/linear block after that re-derives u32FLStd from u32Lines a second time
+ * -- doubling it in the WDR arm. Clamping one of them leaves the other free,
+ * and then the sensor is given one frame length while auto-exposure computes
+ * against another. */
+static GK_U32 imx335_clamp_full_lines(GK_U32 u32Lines)
+{
+	return (u32Lines > IMX335_FULL_LINES_MAX) ? IMX335_FULL_LINES_MAX :
+						    u32Lines;
+}
+
 static GK_VOID cmos_fps_set(VI_PIPE ViPipe, GK_FLOAT f32Fps,
 			    AE_SENSOR_DEFAULT_S *pstAeSnsDft)
 {
@@ -453,7 +506,13 @@ static GK_VOID cmos_fps_set(VI_PIPE ViPipe, GK_FLOAT f32Fps,
 
 	case IMX335_60FPS_FULL_1944P_MODE:
 	case IMX335_5M_30FPS_12BIT_LINEAR_MODE:
-		if ((f32Fps <= 30.0) && (f32Fps >= 2.0)) {
+		/* The floor was a flat 2.0, which put the longest exposure this
+		 * mode could reach at half a second and refused anything slower
+		 * outright ("Not support Fps A"). Nothing about the sensor
+		 * required it: 2.0 fps is already a VMAX of 67500, past the old
+		 * 16-bit ceiling and programmed happily. The real floor is what
+		 * the 20-bit field holds. */
+		if ((f32Fps <= 30.0) && (f32Fps >= IMX335_5M_LINEAR_FPS_MIN)) {
 			u32MaxFps = 30;
 			u32Lines = IMX335_VMAX_5M_30FPS_12BIT_LINEAR * u32MaxFps / DIV_0_TO_1_FLOAT(f32Fps);
 			pstAeSnsDft->u32LinesPer500ms = IMX335_VMAX_5M_30FPS_12BIT_LINEAR * 15;
@@ -543,10 +602,17 @@ static GK_VOID cmos_fps_set(VI_PIPE ViPipe, GK_FLOAT f32Fps,
 		break;
 	}
 
-	/* SHR 16bit, So limit full_lines as 0xFFFF */
-	if (u32Lines > IMX335_FULL_LINES_MAX) {
-		u32Lines = IMX335_FULL_LINES_MAX;
-	}
+	/* The original guard here assigned to u32Lines at a point where every
+	 * case above had already copied it into pstSnsState->u32FLStd, so it
+	 * clamped nothing -- which is why a 2 fps request reached the sensor as
+	 * 67500 lines despite a stated 65535 limit.
+	 *
+	 * It matters now that the ceiling is the true 20-bit one: past it the
+	 * high nibble would be truncated by IMX335_HIG_4BITS() and the frame
+	 * would come back short instead of long. Binning is the mode that can
+	 * actually reach it, taking any frame rate without a lower bound. */
+	u32Lines = imx335_clamp_full_lines(u32Lines);
+	pstSnsState->u32FLStd = imx335_clamp_full_lines(pstSnsState->u32FLStd);
 
 	pstAeSnsDft->f32Fps = f32Fps;
 	pstAeSnsDft->u32LinesPer500ms = pstSnsState->u32FLStd * f32Fps / 2;
@@ -588,6 +654,11 @@ static GK_VOID cmos_fps_set(VI_PIPE ViPipe, GK_FLOAT f32Fps,
 	} else {
 		pstSnsState->u32FLStd = u32Lines;
 	}
+
+	/* Again, because the WDR arm above doubles it: a value that fitted the
+	 * field going in need not fit coming out. Everything below derives from
+	 * u32FLStd, so this is the last place it can be made honest. */
+	pstSnsState->u32FLStd = imx335_clamp_full_lines(pstSnsState->u32FLStd);
 
 	pstAeSnsDft->f32Fps = f32Fps;
 	gu32STimeFps = (GK_U32)f32Fps;
