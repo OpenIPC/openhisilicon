@@ -1028,13 +1028,19 @@ jobs:
             firmware: hi3516cv500
             mem: 128M
             append: "console=ttyAMA0,115200 earlyprintk mem=128M root=/dev/ram0 rootfstype=squashfs"
+          # ev200/gk7205v200 (V4 lite, mmz_allocator=hisi): open_rgn.ko
+          # oopses in RGN_Init while load_hisilicon inserts it, so late
+          # init never finishes (#227). Everything still gates except the
+          # late-init checks, which report a warning until that is fixed.
           - machine: hi3516ev200
             firmware: hi3516ev200
             mem: 128M
+            known_late_init_failure: "open_rgn RGN_Init oops (#227)"
             append: "console=ttyAMA0,115200 earlyprintk mem=96M root=/dev/ram0 rootfstype=squashfs mmz_allocator=hisi mmz=anonymous,0,0x46000000,32M"
           - machine: gk7205v200
             firmware: gk7205v200
             mem: 128M
+            known_late_init_failure: "open_rgn RGN_Init oops (#227)"
             append: "console=ttyAMA0,115200 earlyprintk mem=96M root=/dev/ram0 rootfstype=squashfs mmz_allocator=hisi mmz=anonymous,0,0x46000000,32M"
           # hi3516ev300_neo board (V4 + CMA). The bootargs match what the
           # production U-Boot passes: mem=<totalmem> with mmz_allocator=cma
@@ -1224,6 +1230,7 @@ jobs:
           BOOT_CEILING=180
           SETTLE_CEILING=60
           CROND_RE='Starting crond: OK|crond \(busybox [0-9.]+\) started'
+          OOPS_RE='Internal error: Oops|Kernel panic - not syncing|Unable to handle kernel'
 
           # Nothing stale may satisfy the first poll or name the wrong PID.
           rm -f qemu-output.txt qemu-timed.txt qemu.pid
@@ -1255,7 +1262,10 @@ jobs:
           }
 
           if wait_for $BOOT_CEILING "$CROND_RE"; then
-              wait_for $SETTLE_CEILING '===CI:LSMOD_END===' || true
+              # An oops ends the wait too: the insmod that hit it never
+              # returns, so LSMOD_END will not come and the late-init
+              # check below reports it.
+              wait_for $SETTLE_CEILING "===CI:LSMOD_END===|$OOPS_RE" || true
               sleep 3
           else
               echo "::warning::no crond marker within ${BOOT_CEILING}s (or QEMU exited), stopping QEMU"
@@ -1397,11 +1407,45 @@ jobs:
           #
           # General shape to watch for: any "Starting X: OK" is two writes
           # with a fork in between. Never assert on it as one string.
-          if grep -qaE "Starting crond: OK" qemu-output.txt ||
-             grep -qaE "crond \(busybox [0-9.]+\) started" qemu-output.txt; then
-              echo "PASS: ${{ matrix.machine }} kernel booted to userspace, no module-load regressions"
-          else
+          if ! grep -qaE "Starting crond: OK" qemu-output.txt &&
+             ! grep -qaE "crond \(busybox [0-9.]+\) started" qemu-output.txt; then
               fail_with "boot never reached crond (no 'Starting crond: OK' and no crond startup banner)"
+          fi
+
+          # Late init: crond alone is not enough. It starts at S60, before
+          # load_hisilicon inserts a single vendor module, so a row whose
+          # module load oopsed or wedged still passed the crond gate --
+          # which is how #227 sat unseen on two V4 rows. S99lsmodprobe is
+          # the last init script, so its LSMOD_END proves init ran to the
+          # end, and no kernel oops may appear anywhere in the boot.
+          #
+          # Rows with `known_late_init_failure` downgrade only these two
+          # checks, to a warning naming the known cause; every other check
+          # still gates them. allow-failure would have hidden all of them.
+          late_init_fail() {
+              known='${{ matrix.known_late_init_failure }}'
+              if [ -n "$known" ]; then
+                  late_known=1
+                  echo "::warning::KNOWN late-init failure (${{ matrix.machine }}, $known): $1"
+              else
+                  fail_with "$1"
+              fi
+          }
+          # ${OOPS_RE:?}, not $OOPS_RE: an offline replay of this block
+          # without the definition above must not grep for "" and match all.
+          if grep -qaE "${OOPS_RE:?}" qemu-output.txt; then
+              echo "--- first oops ---"
+              grep -aE -m1 -A8 "$OOPS_RE" qemu-output.txt
+              late_init_fail "kernel oops during boot: $(grep -aoE -m1 'PC is at [^ ]+( \[[^]]+\])?' qemu-output.txt || echo 'see log')"
+          fi
+          if ! grep -qa '===CI:LSMOD_END===' qemu-output.txt; then
+              late_init_fail "late init never finished (no S99lsmodprobe LSMOD_END marker after crond)"
+          fi
+
+          if [ -n "${late_known:-}" ]; then
+              echo "PASS (with known late-init failure): ${{ matrix.machine }} booted to userspace"
+          else
+              echo "PASS: ${{ matrix.machine }} kernel booted to userspace, no module-load regressions"
           fi
 
       - name: Upload QEMU output
