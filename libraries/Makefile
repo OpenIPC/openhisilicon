@@ -52,12 +52,22 @@ ifeq ($(CHIPARCH),hi3519dv500)
     SUBDIRS := $(filter ./sensor/hi3519dv500/%,$(SUBDIRS))
 endif
 
-# gk7205v500 (XMedia): sensor drivers ported to the SPC020 ISP API, built
-# against the SDK headers imported under kernel/. Nobody else's.
+# gk7205v500 (XMedia): the XMedia SPC020 sensor interface is the V4 one
+# rebranded, so the V4 drivers in sensor/hi3516ev200 build for it unchanged.
+# sensor/compat/xmedia maps their Goke names (GK_*, gk_api_*.h, hicompat.h)
+# onto the SDK's XMEDIA_* API, and it and the SDK headers imported under
+# kernel/ come first on the include path, ahead of the V4 headers the
+# per-sensor Makefiles add.
 ifeq ($(CHIPARCH),gk7205v500)
-    SUBDIRS := $(filter ./sensor/gk7205v500/%,$(SUBDIRS))
-else
-    SUBDIRS := $(filter-out ./sensor/gk7205v500/%,$(SUBDIRS))
+    SUBDIRS := $(filter ./sensor/hi3516ev200/%,$(SUBDIRS))
+    XM_INC := $(CURDIR)/../kernel/include/gk7205v500
+    XM_ISP := $(CURDIR)/../kernel/isp/gk7205v500
+    SENSOR_CFLAGS := -I$(CURDIR)/sensor/compat/xmedia -I$(XM_INC) \
+	-include $(CURDIR)/sensor/compat/xmedia/xm_gk_compat.h \
+	-I$(XM_ISP)/include -I$(XM_ISP)/include/arch/xm72050200/include \
+	-I$(XM_ISP)/kernel/arch/xm72050200/include -I$(XM_ISP)/kernel/mkp/include \
+	-I$(XM_ISP)/kernel/arch/include -I$(XM_ISP)/firmware/include \
+	-I$(XM_ISP)/firmware/arch/include -I$(XM_ISP)/ext_inc
 endif
 # hi3519dv500 sensors are aarch64-only — the 32-bit toolchains used by every
 # other chiparch can't compile their 64-bit-aligned vendor headers. Exclude
@@ -71,7 +81,7 @@ endif
 all:
 	@failed=""; \
 	for dir in $(SUBDIRS); do \
-		$(MAKE) -C $$dir CHIPARCH=$(CHIPARCH) all || failed="$$failed $$dir"; \
+		$(MAKE) -C $$dir CHIPARCH=$(CHIPARCH) $(if $(SENSOR_CFLAGS),CFLAGS="$(SENSOR_CFLAGS) $(CFLAGS)") all || failed="$$failed $$dir"; \
 	done; \
 	if [ -n "$$failed" ]; then \
 		echo; \
