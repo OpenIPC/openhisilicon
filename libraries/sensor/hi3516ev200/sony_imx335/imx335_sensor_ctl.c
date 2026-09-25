@@ -1515,7 +1515,15 @@ void IMX335_linear_5M30_12bit_init(VI_PIPE ViPipe)
 	IMX335_write_register(ViPipe, 0x3076, 0x58); // AREA3_WIDTH_1 = Y_OUT_SIZE * 2
 	IMX335_write_register(ViPipe, 0x3077, 0x0F);
 
-	IMX335_write_register(ViPipe, 0x3050, 0x00);
+	/* ADBIT = 12-bit. This mode is the one that claims RAW12, and with the
+	 * 10-bit ADC it had every sample a multiple of 4: 1024 levels in a
+	 * 4096-level container, and a dark frame with 2.2 counts of temporal
+	 * noise where the 12-bit ADC gives 1.2. hi3516cv500's driver for the same
+	 * sensor has always run it at 12 bits. Only here: at the shorter line
+	 * periods of the faster modes below (HMAX 0x1A0 and 0x16E) the 12-bit
+	 * ADC shades the frame by up to a third from left to right, and at
+	 * 0x12C it delivers no frames at all, so those stay at 10 bits. */
+	IMX335_write_register(ViPipe, 0x3050, 0x01);
 
 	IMX335_write_register(ViPipe, 0x3074, 0xB0); // AREA3_ST_ADR_1 upper-left crop position
 	IMX335_write_register(ViPipe, 0x3075, 0x00);
@@ -1529,7 +1537,7 @@ void IMX335_linear_5M30_12bit_init(VI_PIPE ViPipe)
 	IMX335_write_register(ViPipe, 0x315A, 0x06);
 	IMX335_write_register(ViPipe, 0x316A, 0x7E);
 
-	IMX335_write_register(ViPipe, 0x319D, 0x00);
+	IMX335_write_register(ViPipe, 0x319D, 0x01); // MDBIT = 12-bit output
 	IMX335_write_register(ViPipe, 0x319E, 0x02);
 	IMX335_write_register(ViPipe, 0x31A1, 0x00);
 	IMX335_write_register(ViPipe, 0x3288, 0x21);
@@ -1538,8 +1546,8 @@ void IMX335_linear_5M30_12bit_init(VI_PIPE ViPipe)
 	IMX335_write_register(ViPipe, 0x3414, 0x05);
 	IMX335_write_register(ViPipe, 0x3416, 0x18);
 
-	IMX335_write_register(ViPipe, 0x341C, 0xFF);
-	IMX335_write_register(ViPipe, 0x341D, 0x01);
+	IMX335_write_register(ViPipe, 0x341C, 0x47); // ADBIT1 = 12-bit (0x01FF is 10-bit)
+	IMX335_write_register(ViPipe, 0x341D, 0x00);
 
 	IMX335_write_register(ViPipe, 0x3648, 0x01);
 	IMX335_write_register(ViPipe, 0x364A, 0x04);
