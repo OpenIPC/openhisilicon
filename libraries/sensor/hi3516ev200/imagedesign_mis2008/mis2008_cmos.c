@@ -454,7 +454,8 @@ static GK_VOID cmos_again_calc_table(VI_PIPE ViPipe, GK_U32 *pu32AgainLin, GK_U3
 static GK_VOID cmos_dgain_calc_table(VI_PIPE ViPipe, GK_U32 *pu32DgainLin, GK_U32 *pu32DgainDb)
 {
     GK_U32 i;
-    static GK_U8 dgain_table_size = 255;
+    /* the table has 240 entries; a hard-coded 255 read 15 past its end */
+    const GK_U32 dgain_table_size = sizeof(Dgain_table) / sizeof(Dgain_table[0]);
 
     CMOS_CHECK_POINTER_VOID(pu32DgainLin);
     CMOS_CHECK_POINTER_VOID(pu32DgainDb);
