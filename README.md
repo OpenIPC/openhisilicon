@@ -16,6 +16,7 @@ Replaces the proprietary SDK that HiSilicon ships to camera manufacturers. Used 
 | V3.5 | hi3516cv500 | hi3516cv500, hi3516av300, hi3516dv300 | Cortex-A7 | `hi3516cv500` |
 | V4 | hi3516ev200 | hi3516ev200, hi3516ev300, hi3518ev300, hi3516dv200 | Cortex-A7 | `hi3516ev200` |
 | V4/Goke | gk7205v200 | gk7205v200, gk7205v300, gk7202v300, gk7605v100 | Cortex-A7 | `gk7205v200` |
+| V4/XMedia | gk7205v500 | gk7205v500, gk7205v510, gk7205v530, gk7202v330, gk7201v200 | Cortex-A7 | `gk7205v500` (`XM_SET=V200` for gk7201v200) |
 | V5 | hi3516cv610 | hi3516cv610, hi3516cv608 | Cortex-A7 | `hi3516cv6xx` |
 | V5 | hi3519dv500 | hi3519dv500, hi3516dv500 | Cortex-A55 (aarch64) | `hi3519dv500` |
 
@@ -90,7 +91,7 @@ No `#ifdef` soup in driver code — the compat header handles everything. This i
 |--------|--------|-----------|
 | 3.0.8 (vendor) | Production | hi3516cv100 |
 | 3.18.20 (vendor) | Production | hi3516cv300, hi3519v101 |
-| 4.9.37 (vendor) | Production | hi3516cv200, hi3516av100, hi3516cv500, hi3516ev300, gk7205v200 |
+| 4.9.37 (vendor) | Production | hi3516cv200, hi3516av100, hi3516cv500, hi3516ev300, gk7205v200, gk7205v500 |
 | 5.10.221 (vendor) | Production | hi3516cv6xx |
 | 5.10.0 (vendor) | Production | hi3519dv500 |
 | 6.6 LTS | Production | hi3516ev300 (neo) |
@@ -109,6 +110,7 @@ No `#ifdef` soup in driver code — the compat header handles everything. This i
 │   ├── hi3519v101.kbuild        V3A monolithic build config (OSAL)
 │   ├── hi3516cv6xx.kbuild       V5 monolithic build config (OSAL + MMZ split)
 │   ├── hi3519dv500.kbuild       V5 aarch64 build config (64-bit, OSAL + MMZ split)
+│   ├── gk7205v500.kbuild        XMedia build config (V200/V500 blob sets, XM_SET)
 │   ├── Kbuild                   Main entry — dispatches by CHIPARCH
 │   ├── compat/                  Kernel version compatibility (3.0 – 7.0)
 │   ├── obj/<chiparch>/          Pre-built vendor .o blobs
