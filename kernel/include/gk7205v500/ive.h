@@ -1,0 +1,783 @@
+/*
+ * Copyright (c) XMEDIA. All rights reserved.
+ */
+#ifndef _IVE_H_
+#define _IVE_H_
+
+#include "comm_ive.h"
+#include "common.h"
+
+#ifdef __cplusplus
+#if __cplusplus
+extern "C"{
+#endif
+#endif
+
+#define IVE_HIST_NUM          256
+#define IVE_MAP_NUM           256
+#define IVE_MAX_REGION_NUM    254
+#define IVE_ST_MAX_CORNER_NUM 500
+
+
+typedef enum IVE_DMA_MODE_E {
+    IVE_DMA_MODE_DIRECT_COPY = 0x0,
+    IVE_DMA_MODE_INTERVAL_COPY = 0x1,
+    IVE_DMA_MODE_SET_3BYTE = 0x2,
+    IVE_DMA_MODE_SET_8BYTE = 0x3,
+    IVE_DMA_MODE_BUTT
+} IVE_DMA_MODE_E;
+
+
+typedef struct IVE_DMA_CTRL_S {
+    IVE_DMA_MODE_E enMode;
+    XMEDIA_U64 u64Val;
+    XMEDIA_U8 u8HorSegSize;
+    XMEDIA_U8 u8ElemSize;
+    XMEDIA_U8 u8VerSegRows;
+} IVE_DMA_CTRL_S;
+
+
+typedef struct IVE_FILTER_CTRL_S {
+    XMEDIA_S8 as8Mask[25];
+    XMEDIA_U8 u8Norm;
+} IVE_FILTER_CTRL_S;
+
+
+typedef enum IVE_CSC_MODE_E {
+    IVE_CSC_MODE_VIDEO_BT601_YUV2RGB = 0x0,
+    IVE_CSC_MODE_VIDEO_BT709_YUV2RGB = 0x1,
+    IVE_CSC_MODE_PIC_BT601_YUV2RGB = 0x2,
+    IVE_CSC_MODE_PIC_BT709_YUV2RGB = 0x3,
+
+    IVE_CSC_MODE_PIC_BT601_YUV2HSV = 0x4,
+    IVE_CSC_MODE_PIC_BT709_YUV2HSV = 0x5,
+
+    IVE_CSC_MODE_PIC_BT601_YUV2LAB = 0x6,
+    IVE_CSC_MODE_PIC_BT709_YUV2LAB = 0x7,
+
+    IVE_CSC_MODE_VIDEO_BT601_RGB2YUV = 0x8,
+    IVE_CSC_MODE_VIDEO_BT709_RGB2YUV = 0x9,
+    IVE_CSC_MODE_PIC_BT601_RGB2YUV = 0xa,
+    IVE_CSC_MODE_PIC_BT709_RGB2YUV = 0xb,
+
+    IVE_CSC_MODE_BUTT
+} IVE_CSC_MODE_E;
+
+
+typedef struct IVE_CSC_CTRL_S {
+    IVE_CSC_MODE_E enMode;
+} IVE_CSC_CTRL_S;
+
+
+typedef struct IVE_FILTER_AND_CSC_CTRL_S {
+    IVE_CSC_MODE_E enMode;
+    XMEDIA_S8 as8Mask[25];
+    XMEDIA_U8 u8Norm;
+} IVE_FILTER_AND_CSC_CTRL_S;
+
+typedef enum IVE_SOBEL_OUT_CTRL_E {
+    IVE_SOBEL_OUT_CTRL_BOTH = 0x0,
+    IVE_SOBEL_OUT_CTRL_HOR = 0x1,
+    IVE_SOBEL_OUT_CTRL_VER = 0x2,
+    IVE_SOBEL_OUT_CTRL_BUTT
+} IVE_SOBEL_OUT_CTRL_E;
+
+
+typedef struct IVE_SOBEL_CTRL_S {
+    IVE_SOBEL_OUT_CTRL_E enOutCtrl;
+    XMEDIA_S8 as8Mask[25];
+} IVE_SOBEL_CTRL_S;
+
+
+typedef enum IVE_MAG_AND_ANG_OUT_CTRL_E {
+    IVE_MAG_AND_ANG_OUT_CTRL_MAG = 0x0,
+    IVE_MAG_AND_ANG_OUT_CTRL_MAG_AND_ANG = 0x1,
+    IVE_MAG_AND_ANG_OUT_CTRL_BUTT
+} IVE_MAG_AND_ANG_OUT_CTRL_E;
+
+typedef struct IVE_MAG_AND_ANG_CTRL_S {
+    IVE_MAG_AND_ANG_OUT_CTRL_E enOutCtrl;
+    XMEDIA_U16 u16Thr;
+    XMEDIA_S8 as8Mask[25];
+} IVE_MAG_AND_ANG_CTRL_S;
+
+typedef struct IVE_DILATE_CTRL_S {
+    XMEDIA_U8 au8Mask[25];
+} IVE_DILATE_CTRL_S;
+
+typedef struct IVE_ERODE_CTRL_S {
+    XMEDIA_U8 au8Mask[25];
+} IVE_ERODE_CTRL_S;
+
+
+typedef enum IVE_THRESH_MODE_E {
+    IVE_THRESH_MODE_BINARY = 0x0,
+    IVE_THRESH_MODE_TRUNC = 0x1,
+    IVE_THRESH_MODE_TO_MINVAL = 0x2,
+
+    IVE_THRESH_MODE_MIN_MID_MAX = 0x3,
+    IVE_THRESH_MODE_ORI_MID_MAX = 0x4,
+    IVE_THRESH_MODE_MIN_MID_ORI = 0x5,
+    IVE_THRESH_MODE_MIN_ORI_MAX = 0x6,
+    IVE_THRESH_MODE_ORI_MID_ORI = 0x7,
+
+    IVE_THRESH_MODE_BUTT
+} IVE_THRESH_MODE_E;
+
+
+typedef struct IVE_THRESH_CTRL_S {
+    IVE_THRESH_MODE_E enMode;
+    XMEDIA_U8 u8LowThr;
+    XMEDIA_U8 u8HighThr;
+    XMEDIA_U8 u8MinVal;
+    XMEDIA_U8 u8MidVal;
+    XMEDIA_U8 u8MaxVal;
+} IVE_THRESH_CTRL_S;
+
+typedef enum IVE_SUB_MODE_E {
+    IVE_SUB_MODE_ABS = 0x0,
+    IVE_SUB_MODE_SHIFT = 0x1,
+    IVE_SUB_MODE_BUTT
+} IVE_SUB_MODE_E;
+
+typedef struct IVE_SUB_CTRL_S {
+    IVE_SUB_MODE_E enMode;
+} IVE_SUB_CTRL_S;
+
+
+typedef enum IVE_INTEG_OUT_CTRL_E {
+    IVE_INTEG_OUT_CTRL_COMBINE = 0x0,
+    IVE_INTEG_OUT_CTRL_SUM = 0x1,
+    IVE_INTEG_OUT_CTRL_SQSUM = 0x2,
+    IVE_INTEG_OUT_CTRL_BUTT
+} IVE_INTEG_OUT_CTRL_E;
+
+
+typedef struct IVE_INTEG_CTRL_S {
+    IVE_INTEG_OUT_CTRL_E enOutCtrl;
+} IVE_INTEG_CTRL_S;
+
+typedef enum IVE_THRESH_S16_MODE_E {
+    IVE_THRESH_S16_MODE_S16_TO_S8_MIN_MID_MAX = 0x0,
+    IVE_THRESH_S16_MODE_S16_TO_S8_MIN_ORI_MAX = 0x1,
+    IVE_THRESH_S16_MODE_S16_TO_U8_MIN_MID_MAX = 0x2,
+    IVE_THRESH_S16_MODE_S16_TO_U8_MIN_ORI_MAX = 0x3,
+
+    IVE_THRESH_S16_MODE_BUTT
+} IVE_THRESH_S16_MODE_E;
+
+typedef struct IVE_THRESH_S16_CTRL_S {
+    IVE_THRESH_S16_MODE_E enMode;
+    XMEDIA_S16 s16LowThr;
+    XMEDIA_S16 s16HighThr;
+    IVE_8BIT_U un8MinVal;
+    IVE_8BIT_U un8MidVal;
+    IVE_8BIT_U un8MaxVal;
+} IVE_THRESH_S16_CTRL_S;
+
+typedef enum IVE_THRESH_U16_MODE_E {
+    IVE_THRESH_U16_MODE_U16_TO_U8_MIN_MID_MAX = 0x0,
+    IVE_THRESH_U16_MODE_U16_TO_U8_MIN_ORI_MAX = 0x1,
+
+    IVE_THRESH_U16_MODE_BUTT
+} IVE_THRESH_U16_MODE_E;
+
+typedef struct IVE_THRESH_U16_CTRL_S {
+    IVE_THRESH_U16_MODE_E enMode;
+    XMEDIA_U16 u16LowThr;
+    XMEDIA_U16 u16HighThr;
+    XMEDIA_U8 u8MinVal;
+    XMEDIA_U8 u8MidVal;
+    XMEDIA_U8 u8MaxVal;
+} IVE_THRESH_U16_CTRL_S;
+
+typedef enum IVE_16BIT_TO_8BIT_MODE_E {
+    IVE_16BIT_TO_8BIT_MODE_S16_TO_S8 = 0x0,
+    IVE_16BIT_TO_8BIT_MODE_S16_TO_U8_ABS = 0x1,
+    IVE_16BIT_TO_8BIT_MODE_S16_TO_U8_BIAS = 0x2,
+    IVE_16BIT_TO_8BIT_MODE_U16_TO_U8 = 0x3,
+
+    IVE_16BIT_TO_8BIT_MODE_BUTT
+} IVE_16BIT_TO_8BIT_MODE_E;
+
+typedef struct IVE_16BIT_TO_8BIT_CTRL_S {
+    IVE_16BIT_TO_8BIT_MODE_E enMode;
+    XMEDIA_U16 u16Denominator;
+    XMEDIA_U8 u8Numerator;
+    XMEDIA_S8 s8Bias;
+} IVE_16BIT_TO_8BIT_CTRL_S;
+
+typedef enum IVE_ORD_STAT_FILTER_MODE_E {
+    IVE_ORD_STAT_FILTER_MODE_MEDIAN = 0x0,
+    IVE_ORD_STAT_FILTER_MODE_MAX = 0x1,
+    IVE_ORD_STAT_FILTER_MODE_MIN = 0x2,
+
+    IVE_ORD_STAT_FILTER_MODE_BUTT
+} IVE_ORD_STAT_FILTER_MODE_E;
+
+typedef struct IVE_ORD_STAT_FILTER_CTRL_S {
+    IVE_ORD_STAT_FILTER_MODE_E enMode;
+
+} IVE_ORD_STAT_FILTER_CTRL_S;
+
+typedef enum IVE_MAP_MODE_E {
+    IVE_MAP_MODE_U8 = 0x0,
+    IVE_MAP_MODE_S16 = 0x1,
+    IVE_MAP_MODE_U16 = 0x2,
+
+    IVE_MAP_MODE_BUTT
+} IVE_MAP_MODE_E;
+typedef struct IVE_MAP_CTRL_S {
+    IVE_MAP_MODE_E enMode;
+} IVE_MAP_CTRL_S;
+typedef struct IVE_MAP_U8BIT_LUT_MEM_S {
+    XMEDIA_U8 au8Map[IVE_MAP_NUM];
+} IVE_MAP_U8BIT_LUT_MEM_S;
+typedef struct IVE_MAP_U16BIT_LUT_MEM_S {
+    XMEDIA_U16 au16Map[IVE_MAP_NUM];
+} IVE_MAP_U16BIT_LUT_MEM_S;
+typedef struct IVE_MAP_S16BIT_LUT_MEM_S {
+    XMEDIA_S16 as16Map[IVE_MAP_NUM];
+} IVE_MAP_S16BIT_LUT_MEM_S;
+typedef struct IVE_EQUALIZE_HIST_CTRL_MEM_S {
+    XMEDIA_U32 au32Hist[IVE_HIST_NUM];
+    XMEDIA_U8 au8Map[IVE_MAP_NUM];
+} IVE_EQUALIZE_HIST_CTRL_MEM_S;
+
+
+typedef struct IVE_EQUALIZE_HIST_CTRL_S {
+    IVE_MEM_INFO_S stMem;
+} IVE_EQUALIZE_HIST_CTRL_S;
+
+
+typedef struct IVE_ADD_CTRL_S {
+    XMEDIA_U0Q16 u0q16X;
+    XMEDIA_U0Q16 u0q16Y;
+} IVE_ADD_CTRL_S;
+
+typedef struct IVE_NCC_DST_MEM_S {
+    XMEDIA_U64 u64Numerator;
+    XMEDIA_U64 u64QuadSum1;
+    XMEDIA_U64 u64QuadSum2;
+    XMEDIA_U8 u8Reserved[8];
+} IVE_NCC_DST_MEM_S;
+
+typedef struct IVE_REGION_S {
+    XMEDIA_U32 u32Area;
+    XMEDIA_U16 u16Left;
+    XMEDIA_U16 u16Right;
+    XMEDIA_U16 u16Top;
+    XMEDIA_U16 u16Bottom;
+} IVE_REGION_S;
+
+typedef struct IVE_CCBLOB_S {
+    XMEDIA_U16 u16CurAreaThr;
+    XMEDIA_S8 s8LabelStatus;
+    XMEDIA_U8 u8RegionNum;
+    IVE_REGION_S astRegion[IVE_MAX_REGION_NUM];
+} IVE_CCBLOB_S;
+
+typedef enum IVE_CCL_MODE_E {
+    IVE_CCL_MODE_4C = 0x0,
+    IVE_CCL_MODE_8C = 0x1,
+
+    IVE_CCL_MODE_BUTT
+} IVE_CCL_MODE_E;
+typedef struct IVE_CCL_CTRL_S {
+    IVE_CCL_MODE_E enMode;
+    XMEDIA_U16 u16InitAreaThr;
+    XMEDIA_U16 u16Step;
+} IVE_CCL_CTRL_S;
+
+typedef struct IVE_GMM_CTRL_S {
+    XMEDIA_U22Q10 u22q10NoiseVar;
+    XMEDIA_U22Q10 u22q10MaxVar;
+    XMEDIA_U22Q10 u22q10MinVar;
+    XMEDIA_U0Q16 u0q16LearnRate;
+    XMEDIA_U0Q16 u0q16BgRatio;
+    XMEDIA_U8Q8 u8q8VarThr;
+    XMEDIA_U0Q16 u0q16InitWeight;
+    XMEDIA_U8 u8ModelNum;
+} IVE_GMM_CTRL_S;
+
+typedef enum IVE_GMM2_SNS_FACTOR_MODE_E {
+    IVE_GMM2_SNS_FACTOR_MODE_GLB = 0x0,
+    IVE_GMM2_SNS_FACTOR_MODE_PIX = 0x1,
+
+    IVE_GMM2_SNS_FACTOR_MODE_BUTT
+} IVE_GMM2_SNS_FACTOR_MODE_E;
+
+typedef enum IVE_GMM2_LIFE_UPDATE_FACTOR_MODE_E {
+    IVE_GMM2_LIFE_UPDATE_FACTOR_MODE_GLB = 0x0,
+    IVE_GMM2_LIFE_UPDATE_FACTOR_MODE_PIX = 0x1,
+
+    IVE_GMM2_LIFE_UPDATE_FACTOR_MODE_BUTT
+} IVE_GMM2_LIFE_UPDATE_FACTOR_MODE_E;
+
+typedef struct IVE_GMM2_CTRL_S {
+    IVE_GMM2_SNS_FACTOR_MODE_E enSnsFactorMode;
+    IVE_GMM2_LIFE_UPDATE_FACTOR_MODE_E enLifeUpdateFactorMode;
+    XMEDIA_U16 u16GlbLifeUpdateFactor;
+    XMEDIA_U16 u16LifeThr;
+    XMEDIA_U16 u16FreqInitVal;
+    XMEDIA_U16 u16FreqReduFactor;
+    XMEDIA_U16 u16FreqAddFactor;
+    XMEDIA_U16 u16FreqThr;
+    XMEDIA_U16 u16VarRate;
+    XMEDIA_U9Q7 u9q7MaxVar;
+    XMEDIA_U9Q7 u9q7MinVar;
+    XMEDIA_U8 u8GlbSnsFactor;
+    XMEDIA_U8 u8ModelNum;
+} IVE_GMM2_CTRL_S;
+
+typedef struct IVE_CANNY_HYS_EDGE_CTRL_S {
+    IVE_MEM_INFO_S stMem;
+    XMEDIA_U16 u16LowThr;
+    XMEDIA_U16 u16HighThr;
+    XMEDIA_S8 as8Mask[25];
+} IVE_CANNY_HYS_EDGE_CTRL_S;
+
+typedef struct IVE_CANNY_STACK_SIZE_S {
+    XMEDIA_U32 u32StackSize;
+    XMEDIA_U8 u8Reserved[12];
+} IVE_CANNY_STACK_SIZE_S;
+
+typedef enum IVE_LBP_CMP_MODE_E {
+    IVE_LBP_CMP_MODE_NORMAL = 0x0,
+    IVE_LBP_CMP_MODE_ABS = 0x1,
+
+    IVE_LBP_CMP_MODE_BUTT
+} IVE_LBP_CMP_MODE_E;
+
+typedef struct IVE_LBP_CTRL_S {
+    IVE_LBP_CMP_MODE_E enMode;
+    IVE_8BIT_U un8BitThr;
+} IVE_LBP_CTRL_S;
+
+typedef enum IVE_NORM_GRAD_OUT_CTRL_E {
+    IVE_NORM_GRAD_OUT_CTRL_HOR_AND_VER = 0x0,
+    IVE_NORM_GRAD_OUT_CTRL_HOR = 0x1,
+    IVE_NORM_GRAD_OUT_CTRL_VER = 0x2,
+    IVE_NORM_GRAD_OUT_CTRL_COMBINE = 0x3,
+
+    IVE_NORM_GRAD_OUT_CTRL_BUTT
+} IVE_NORM_GRAD_OUT_CTRL_E;
+
+typedef struct IVE_NORM_GRAD_CTRL_S {
+    IVE_NORM_GRAD_OUT_CTRL_E enOutCtrl;
+    XMEDIA_S8 as8Mask[25];
+    XMEDIA_U8 u8Norm;
+} IVE_NORM_GRAD_CTRL_S;
+
+typedef enum IVE_LK_OPTICAL_FLOW_PYR_OUT_MODE_E {
+    IVE_LK_OPTICAL_FLOW_PYR_OUT_MODE_NONE = 0,
+    IVE_LK_OPTICAL_FLOW_PYR_OUT_MODE_STATUS = 1,
+    IVE_LK_OPTICAL_FLOW_PYR_OUT_MODE_BOTH = 2,
+
+    IVE_LK_OPTICAL_FLOW_PYR_OUT_MODE_BUTT
+} IVE_LK_OPTICAL_FLOW_PYR_OUT_MODE_E;
+
+typedef struct IVE_LK_OPTICAL_FLOW_PYR_CTRL_S {
+    IVE_LK_OPTICAL_FLOW_PYR_OUT_MODE_E enOutMode;
+    XMEDIA_BOOL bUseInitFlow;
+    XMEDIA_U16 u16PtsNum;
+    XMEDIA_U8 u8MaxLevel;
+    XMEDIA_U0Q8 u0q8MinEigThr;
+    XMEDIA_U8 u8IterCnt;
+    XMEDIA_U0Q8 u0q8Eps;
+} IVE_LK_OPTICAL_FLOW_PYR_CTRL_S;
+
+typedef struct IVE_ST_MAX_EIG_S {
+    XMEDIA_U16 u16MaxEig;
+    XMEDIA_U8 u8Reserved[14];
+} IVE_ST_MAX_EIG_S;
+
+typedef struct IVE_ST_CANDI_CORNER_CTRL_S {
+    IVE_MEM_INFO_S stMem;
+    XMEDIA_U0Q8 u0q8QualityLevel;
+} IVE_ST_CANDI_CORNER_CTRL_S;
+
+typedef struct IVE_ST_CORNER_INFO_S {
+    XMEDIA_U16 u16CornerNum;
+    IVE_POINT_U16_S astCorner[IVE_ST_MAX_CORNER_NUM];
+} IVE_ST_CORNER_INFO_S;
+
+typedef struct IVE_ST_CORNER_CTRL_S {
+    XMEDIA_U16 u16MaxCornerNum;
+    XMEDIA_U16 u16MinDist;
+} IVE_ST_CORNER_CTRL_S;
+
+typedef enum IVE_GRAD_FG_MODE_E {
+    IVE_GRAD_FG_MODE_USE_CUR_GRAD = 0x0,
+    IVE_GRAD_FG_MODE_FIND_MIN_GRAD = 0x1,
+
+    IVE_GRAD_FG_MODE_BUTT
+} IVE_GRAD_FG_MODE_E;
+
+typedef struct IVE_GRAD_FG_CTRL_S {
+    IVE_GRAD_FG_MODE_E enMode;
+    XMEDIA_U16 u16EdwFactor;
+    XMEDIA_U8 u8CrlCoefThr;
+    XMEDIA_U8 u8MagCrlThr;
+    XMEDIA_U8 u8MinMagDiff;
+    XMEDIA_U8 u8NoiseVal;
+    XMEDIA_U8 u8EdwDark;
+} IVE_GRAD_FG_CTRL_S;
+
+typedef struct IVE_CANDI_BG_PIX_S {
+    XMEDIA_U8Q4F4 u8q4f4Mean;
+    XMEDIA_U16 u16StartTime;
+    XMEDIA_U16 u16SumAccessTime;
+    XMEDIA_U16 u16ShortKeepTime;
+    XMEDIA_U8 u8ChgCond;
+    XMEDIA_U8 u8PotenBgLife;
+} IVE_CANDI_BG_PIX_S;
+
+typedef struct IVE_WORK_BG_PIX_S {
+    XMEDIA_U8Q4F4 u8q4f4Mean;
+    XMEDIA_U16 u16AccTime;
+    XMEDIA_U8 u8PreGray;
+    XMEDIA_U5Q3 u5q3DiffThr;
+    XMEDIA_U8 u8AccFlag;
+    XMEDIA_U8 u8BgGray[3];
+} IVE_WORK_BG_PIX_S;
+
+typedef struct IVE_BG_LIFE_S {
+    XMEDIA_U8 u8WorkBgLife[3];
+    XMEDIA_U8 u8CandiBgLife;
+} IVE_BG_LIFE_S;
+
+typedef struct IVE_BG_MODEL_PIX_S {
+    IVE_WORK_BG_PIX_S stWorkBgPixel;
+    IVE_CANDI_BG_PIX_S stCandiPixel;
+    IVE_BG_LIFE_S stBgLife;
+} IVE_BG_MODEL_PIX_S;
+
+typedef struct IVE_FG_STAT_DATA_S {
+    XMEDIA_U32 u32PixNum;
+    XMEDIA_U32 u32SumLum;
+    XMEDIA_U8 u8Reserved[8];
+} IVE_FG_STAT_DATA_S;
+
+typedef struct IVE_BG_STAT_DATA_S {
+    XMEDIA_U32 u32PixNum;
+    XMEDIA_U32 u32SumLum;
+    XMEDIA_U8 u8Reserved[8];
+} IVE_BG_STAT_DATA_S;
+
+typedef struct IVE_MATCH_BG_MODEL_CTRL_S {
+    XMEDIA_U32 u32CurFrmNum;
+    XMEDIA_U32 u32PreFrmNum;
+    XMEDIA_U16 u16TimeThr;
+
+    XMEDIA_U8 u8DiffThrCrlCoef;
+    XMEDIA_U8 u8DiffMaxThr;
+    XMEDIA_U8 u8DiffMinThr;
+    XMEDIA_U8 u8DiffThrInc;
+    XMEDIA_U8 u8FastLearnRate;
+    XMEDIA_U8 u8DetChgRegion;
+} IVE_MATCH_BG_MODEL_CTRL_S;
+
+typedef struct IVE_UPDATE_BG_MODEL_CTRL_S {
+    XMEDIA_U32 u32CurFrmNum;
+    XMEDIA_U32 u32PreChkTime;
+    XMEDIA_U32 u32FrmChkPeriod;
+
+    XMEDIA_U32 u32InitMinTime;
+    XMEDIA_U32 u32StyBgMinBlendTime;
+    XMEDIA_U32 u32StyBgMaxBlendTime;
+    XMEDIA_U32 u32DynBgMinBlendTime;
+    XMEDIA_U32 u32StaticDetMinTime;
+    XMEDIA_U16 u16FgMaxFadeTime;
+    XMEDIA_U16 u16BgMaxFadeTime;
+
+    XMEDIA_U8 u8StyBgAccTimeRateThr;
+    XMEDIA_U8 u8ChgBgAccTimeRateThr;
+    XMEDIA_U8 u8DynBgAccTimeThr;
+    XMEDIA_U8 u8DynBgDepth;
+    XMEDIA_U8 u8BgEffStaRateThr;
+
+    XMEDIA_U8 u8AcceBgLearn;
+    XMEDIA_U8 u8DetChgRegion;
+} IVE_UPDATE_BG_MODEL_CTRL_S;
+
+typedef enum IVE_ANN_MLP_ACTIV_FUNC_E {
+    IVE_ANN_MLP_ACTIV_FUNC_IDENTITY = 0x0,
+    IVE_ANN_MLP_ACTIV_FUNC_SIGMOID_SYM = 0x1,
+    IVE_ANN_MLP_ACTIV_FUNC_GAUSSIAN = 0x2,
+
+    IVE_ANN_MLP_ACTIV_FUNC_BUTT
+} IVE_ANN_MLP_ACTIV_FUNC_E;
+typedef enum IVE_ANN_MLP_ACCURATE_E {
+    IVE_ANN_MLP_ACCURATE_SRC16_WGT16 = 0x0,
+    IVE_ANN_MLP_ACCURATE_SRC14_WGT20 = 0x1,
+
+    IVE_ANN_MLP_ACCURATE_BUTT
+} IVE_ANN_MLP_ACCURATE_E;
+
+typedef struct IVE_ANN_MLP_MODEL_S {
+    IVE_ANN_MLP_ACTIV_FUNC_E enActivFunc;
+    IVE_ANN_MLP_ACCURATE_E enAccurate;
+    IVE_MEM_INFO_S stWeight;
+    XMEDIA_U32 u32TotalWeightSize;
+
+    XMEDIA_U16 au16LayerCount[8];
+    XMEDIA_U16 u16MaxCount;
+    XMEDIA_U8 u8LayerNum;
+    XMEDIA_U8 u8Reserved;
+} IVE_ANN_MLP_MODEL_S;
+
+typedef enum IVE_SVM_TYPE_E {
+    IVE_SVM_TYPE_C_SVC = 0x0,
+    IVE_SVM_TYPE_NU_SVC = 0x1,
+
+    IVE_SVM_TYPE_BUTT
+} IVE_SVM_TYPE_E;
+
+typedef enum IVE_SVM_KERNEL_TYPE_E {
+    IVE_SVM_KERNEL_TYPE_LINEAR = 0x0,
+    IVE_SVM_KERNEL_TYPE_POLY = 0x1,
+    IVE_SVM_KERNEL_TYPE_RBF = 0x2,
+    IVE_SVM_KERNEL_TYPE_SIGMOID = 0x3,
+
+    IVE_SVM_KERNEL_TYPE_BUTT
+} IVE_SVM_KERNEL_TYPE_E;
+
+typedef struct IVE_SVM_MODEL_S {
+    IVE_SVM_TYPE_E enType;
+    IVE_SVM_KERNEL_TYPE_E enKernelType;
+
+    IVE_MEM_INFO_S stSv;
+    IVE_MEM_INFO_S stDf;
+    XMEDIA_U32 u32TotalDfSize;
+
+    XMEDIA_U16 u16FeatureDim;
+    XMEDIA_U16 u16SvTotal;
+    XMEDIA_U8 u8ClassCount;
+} IVE_SVM_MODEL_S;
+
+typedef enum IVE_SAD_MODE_E {
+    IVE_SAD_MODE_MB_4X4 = 0x0,
+    IVE_SAD_MODE_MB_8X8 = 0x1,
+    IVE_SAD_MODE_MB_16X16 = 0x2,
+
+    IVE_SAD_MODE_BUTT
+} IVE_SAD_MODE_E;
+typedef enum IVE_SAD_OUT_CTRL_E {
+    IVE_SAD_OUT_CTRL_16BIT_BOTH = 0x0,
+    IVE_SAD_OUT_CTRL_8BIT_BOTH = 0x1,
+    IVE_SAD_OUT_CTRL_16BIT_SAD = 0x2,
+    IVE_SAD_OUT_CTRL_8BIT_SAD = 0x3,
+    IVE_SAD_OUT_CTRL_THRESH = 0x4,
+
+    IVE_SAD_OUT_CTRL_BUTT
+} IVE_SAD_OUT_CTRL_E;
+typedef struct IVE_SAD_CTRL_S {
+    IVE_SAD_MODE_E enMode;
+    IVE_SAD_OUT_CTRL_E enOutCtrl;
+    XMEDIA_U16 u16Thr;
+    XMEDIA_U8 u8MinVal;
+    XMEDIA_U8 u8MaxVal;
+} IVE_SAD_CTRL_S;
+
+typedef enum IVE_RESIZE_MODE_E {
+    IVE_RESIZE_MODE_LINEAR = 0x0,
+    IVE_RESIZE_MODE_AREA = 0x1,
+
+    IVE_RESIZE_MODE_BUTT
+} IVE_RESIZE_MODE_E;
+
+typedef struct IVE_RESIZE_CTRL_S {
+    IVE_RESIZE_MODE_E enMode;
+    IVE_MEM_INFO_S stMem;
+    XMEDIA_U16 u16Num;
+} IVE_RESIZE_CTRL_S;
+
+typedef enum IVE_CNN_ACTIV_FUNC_E {
+    IVE_CNN_ACTIV_FUNC_NONE = 0x0,
+    IVE_CNN_ACTIV_FUNC_RELU = 0x1,
+    IVE_CNN_ACTIV_FUNC_SIGMOID = 0x2,
+
+    IVE_CNN_ACTIV_FUNC_BUTT
+} IVE_CNN_ACTIV_FUNC_E;
+
+typedef enum IVE_CNN_POOLING_E {
+    IVE_CNN_POOLING_NONE = 0x0,
+    IVE_CNN_POOLING_MAX = 0x1,
+    IVE_CNN_POOLING_AVG = 0x2,
+
+    IVE_CNN_POOLING_BUTT
+} IVE_CNN_POOLING_E;
+
+typedef struct IVE_CNN_CONV_POOLING_S {
+    IVE_CNN_ACTIV_FUNC_E enActivFunc;
+    IVE_CNN_POOLING_E enPooling;
+
+    XMEDIA_U8 u8FeatureMapNum;
+    XMEDIA_U8 u8KernelSize;
+    XMEDIA_U8 u8ConvStep;
+
+    XMEDIA_U8 u8PoolSize;
+    XMEDIA_U8 u8PoolStep;
+    XMEDIA_U8 u8Reserved[3];
+
+} IVE_CNN_CONV_POOLING_S;
+
+typedef struct IVE_CNN_FULL_CONNECT_S {
+    XMEDIA_U16 au16LayerCnt[8];
+    XMEDIA_U16 u16MaxCnt;
+    XMEDIA_U8 u8LayerNum;
+    XMEDIA_U8 u8Reserved;
+} IVE_CNN_FULL_CONNECT_S;
+
+typedef struct IVE_CNN_MODEL_S {
+    IVE_CNN_CONV_POOLING_S astConvPool[8];
+    IVE_CNN_FULL_CONNECT_S stFullConnect;
+
+    IVE_MEM_INFO_S stConvKernelBias;
+    XMEDIA_U32 u32ConvKernelBiasSize;
+
+    IVE_MEM_INFO_S stFCLWgtBias;
+    XMEDIA_U32 u32FCLWgtBiasSize;
+
+    XMEDIA_U32 u32TotalMemSize;
+
+    IVE_IMAGE_TYPE_E enType;
+    XMEDIA_U32 u32Width;
+    XMEDIA_U32 u32Height;
+
+    XMEDIA_U16 u16ClassCount;
+    XMEDIA_U8 u8ConvPoolLayerNum;
+    XMEDIA_U8 u8Reserved;
+} IVE_CNN_MODEL_S;
+
+typedef struct IVE_CNN_CTRL_S {
+    IVE_MEM_INFO_S stMem;
+    XMEDIA_U32 u32Num;
+} IVE_CNN_CTRL_S;
+
+typedef struct IVE_CNN_RESULT_S {
+    XMEDIA_S32 s32ClassIdx;
+    XMEDIA_S32 s32Confidence;
+} IVE_CNN_RESULT_S;
+
+typedef enum IVE_PERSP_TRANS_ALG_MODE_E {
+    IVE_PERSP_TRANS_ALG_MODE_NR_SIM = 0x0,
+    IVE_PERSP_TRANS_ALG_MODE_SIM = 0x1,
+    IVE_PERSP_TRANS_ALG_MODE_AFFINE = 0x2,
+
+    IVE_PERSP_TRANS_ALG_MODE_BUTT
+} IVE_PERSP_TRANS_ALG_MODE_E;
+
+typedef struct IVE_PERSP_TRANS_POINT_PAIR_S {
+    IVE_POINT_U14Q2_S stSrcPoint;
+    IVE_POINT_U14Q2_S stDstPoint;
+} IVE_PERSP_TRANS_POINT_PAIR_S;
+
+typedef enum IVE_PERSP_TRANS_CSC_MODE_E {
+    IVE_PERSP_TRANS_CSC_MODE_NONE = 0x0,
+    IVE_PERSP_TRANS_CSC_MODE_VIDEO_BT601_YUV2RGB = 0x1,
+    IVE_PERSP_TRANS_CSC_MODE_VIDEO_BT709_YUV2RGB = 0x2,
+    IVE_PERSP_TRANS_CSC_MODE_PIC_BT601_YUV2RGB = 0x3,
+    IVE_PERSP_TRANS_CSC_MODE_PIC_BT709_YUV2RGB = 0x4,
+
+    IVE_PERSP_TRANS_CSC_MODE_BUTT
+} IVE_PERSP_TRANS_CSC_MODE_E;
+
+typedef struct IVE_PERSP_TRANS_CTRL_S {
+    IVE_PERSP_TRANS_ALG_MODE_E enAlgMode;
+    IVE_PERSP_TRANS_CSC_MODE_E enCscMode;
+    XMEDIA_U16 u16RoiNum;
+    XMEDIA_U16 u16PointPairNum;
+} IVE_PERSP_TRANS_CTRL_S;
+
+typedef struct IVE_ROI_INFO_S {
+    IVE_RECT_S24Q8_S stRoi;
+    XMEDIA_U32 u32RoiId;
+} IVE_ROI_INFO_S;
+
+typedef struct IVE_KCF_PRO_CTRL_S {
+    IVE_CSC_MODE_E enCscMode;
+    IVE_MEM_INFO_S stTmpBuf;
+    XMEDIA_U1Q15 u1q15InterFactor;
+    XMEDIA_U0Q16 u0q16Lamda;
+    XMEDIA_U4Q12 u4q12TrancAlfa;
+    XMEDIA_U0Q8 u0q8Sigma;
+    XMEDIA_U8 u8RespThr;
+} IVE_KCF_PRO_CTRL_S;
+
+typedef struct IVE_KCF_OBJ_S {
+    IVE_ROI_INFO_S stRoiInfo;
+    IVE_MEM_INFO_S stCosWinX;
+    IVE_MEM_INFO_S stCosWinY;
+    IVE_MEM_INFO_S stGaussPeak;
+    IVE_MEM_INFO_S stHogFeature;
+    IVE_MEM_INFO_S stAlpha;
+    IVE_MEM_INFO_S stDst;
+    XMEDIA_U3Q5 u3q5Padding;
+    XMEDIA_U8 au8Reserved[3];
+} IVE_KCF_OBJ_S;
+
+typedef struct IVE_LIST_HEAD_S {
+    struct IVE_LIST_HEAD_S *pstNext, *pstPrev;
+} IVE_LIST_HEAD_S;
+
+typedef struct IVE_KCF_OBJ_NODE_S {
+    IVE_LIST_HEAD_S stList;
+    IVE_KCF_OBJ_S stKcfObj;
+} IVE_KCF_OBJ_NODE_S;
+
+typedef enum IVE_KCF_LIST_STATE_E {
+    IVE_KCF_LIST_STATE_CREATE = 0x1,
+    IVE_KCF_LIST_STATE_DESTORY = 0x2,
+    IVE_KCF_LIST_STATE_BUTT
+} IVE_KCF_LIST_STATE_E;
+
+typedef struct IVE_KCF_OBJ_LIST_S {
+    IVE_KCF_OBJ_NODE_S *pstObjNodeBuf;
+    IVE_LIST_HEAD_S stFreeObjList;
+    IVE_LIST_HEAD_S stTrainObjList;
+    IVE_LIST_HEAD_S stTrackObjList;
+
+    XMEDIA_U32 u32FreeObjNum;
+    XMEDIA_U32 u32TrainObjNum;
+    XMEDIA_U32 u32TrackObjNum;
+    XMEDIA_U32 u32MaxObjNum;
+    IVE_KCF_LIST_STATE_E enListState;
+    XMEDIA_U8 *pu8TmpBuf;
+} IVE_KCF_OBJ_LIST_S;
+
+typedef struct IVE_KCF_BBOX_S {
+    IVE_KCF_OBJ_NODE_S *pstNode;
+    XMEDIA_S32 s32Response;
+
+    IVE_ROI_INFO_S stRoiInfo;
+    XMEDIA_BOOL bTrackOk;
+    XMEDIA_BOOL bRoiRefresh;
+} IVE_KCF_BBOX_S;
+
+typedef struct IVE_KCF_BBOX_CTRL_S {
+    XMEDIA_U32 u32MaxBboxNum;
+    XMEDIA_S32 s32RespThr;
+} IVE_KCF_BBOX_CTRL_S;
+
+typedef enum IVE_HOG_MODE_E {
+    IVE_HOG_MODE_VERTICAL_TANGENT_PLANE = 0x1,
+    IVE_HOG_MODE_HORIZONTAL_TANGENT_PLANE = 0x2,
+    IVE_HOG_MODE_BUTT
+} IVE_HOG_MODE_E;
+
+typedef struct IVE_HOG_CTRL_S {
+    IVE_CSC_MODE_E enCscMode;
+    IVE_HOG_MODE_E enHogMode;
+    XMEDIA_U32 u32RoiNum;
+    XMEDIA_U4Q12 u4q12TrancAlfa;
+    XMEDIA_U8 au8Rsv[2];
+} IVE_HOG_CTRL_S;
+
+#ifdef __cplusplus
+#if __cplusplus
+}
+#endif
+#endif
+#endif

@@ -1,0 +1,135 @@
+# gk7205v500 SoC family (XMedia xm720xxxx: GK7205V500/V510/V530, GK7202V330,
+# GK7201V200) build configuration
+#
+# Vendor SDK: XMediaIPCLinuxV100R002C00SPC020 (MPP_V1.0.0.0 B00, objects dated
+# Apr 2023). Kernel target: openipc/linux 4.9.37, ARMv7 Cortex-A7, musl.
+#
+# Layout under kernel/:
+#   obj/gk7205v500/V200/    closed module objects for the V200 dies
+#   obj/gk7205v500/V500/    closed module objects for the V500 dies
+#                           (source/gmp/obj_ko_lib/<set>/linux-4.9.y/obj_dynamic/obj_nolog)
+#   include/gk7205v500/     SDK public headers (source/gmp/include)
+#   osal/gk7205v500/        OSAL + MMZ + media bus (modules/osal)
+#   sys_config/gk7205v500/  pinmux/clock/sysctl (modules/sysconfig)
+#   isp/gk7205v500/         ISP kernel driver (modules/isp/kernel) plus the
+#                           ISP firmware headers it includes
+#   sensor_i2c|sensor_spi|pwm|piris|sample_ist/gk7205v500/  modules/isp/ext_drv
+#   wdt|adc|init/gk7205v500/  modules/{wdg,adc,init}
+#
+# The SDK splits its prebuilt modules into two sets that are not
+# interchangeable: V200 (xm72050200/72050210/72050300/72020300/76050100, and
+# the xm72010200 = GK7201V200 die the SDK predates) and V500 (xm72050500/
+# 72050510/72050530/72050230/72020330). XM_SET picks one; the source modules
+# get the matching -Dxm7205x... so the SDK's own #if chip tests follow along.
+#
+# Every closed .o is already a complete module (init_module, modinfo), so it
+# is only relinked: modpost stamps this kernel's vermagic on it. The objects
+# were compiled against the SDK's xm72050200_tiny_defconfig and call kernel
+# APIs directly (platform/misc devices, kmem_cache, dma ops), so the kernel
+# must keep that config's struct layouts -- CONFIG_PM and CONFIG_MODULE_UNLOAD
+# in particular stay off (CONFIG_PM moves struct device's fields).
+
+XM_SET ?= V500
+ifeq ($(XM_SET),V200)
+    XM_CHIP := xm72050200
+else ifeq ($(XM_SET),V500)
+    XM_CHIP := xm72050500
+else
+    $(error XM_SET must be 'V200' or 'V500', got '$(XM_SET)')
+endif
+
+XM_ISP := isp/gk7205v500
+
+ccflags-y += -D$(XM_CHIP) -D_USE_LLI_ -DVPSS_3DNR_SUPPORT
+ccflags-y += -I$(src)/include/gk7205v500
+ccflags-y += -I$(src)/include/gk7205v500/mpi
+ccflags-y += -I$(src)/osal/gk7205v500/include
+ccflags-y += -I$(src)/osal/gk7205v500
+ccflags-y += -I$(src)/osal/gk7205v500/media
+ccflags-y += -I$(src)/osal/gk7205v500/mmz
+# isp_ext.h pulls the ISP driver headers into sensor_i2c/spi, pwm and piris
+# too, so they are family-wide rather than per-module.
+ccflags-y += -I$(src)/$(XM_ISP)/ext_inc
+ccflags-y += -I$(src)/$(XM_ISP)/kernel/mkp/include
+ccflags-y += -I$(src)/$(XM_ISP)/kernel/arch/include
+ccflags-y += -I$(src)/$(XM_ISP)/kernel/arch/xm72050200/include
+ccflags-y += -I$(src)/$(XM_ISP)/firmware/include
+ccflags-y += -I$(src)/$(XM_ISP)/firmware/arch/include
+
+# --- OSAL (source) ---
+$(PREFIX)osal-objs := $(addprefix osal/gk7205v500/, \
+	osal_fileops.o osal_vmalloc.o osal_addr.o osal_init.o osal_atomic.o \
+	osal_barrier.o osal_cache.o osal_debug.o osal_device.o osal_interrupt.o \
+	osal_math.o osal_mutex.o osal_proc.o osal_schedule.o osal_semaphore.o \
+	osal_spinlock.o osal_string.o osal_task.o osal_timer.o osal_wait.o \
+	osal_workqueue.o osal_notifier.o osal_platform.o \
+	media/base.o media/media.o mmz/media-mem.o mmz/mmz-userdev.o mmz/allocator.o)
+obj-m += $(PREFIX)osal.o
+
+# --- sys_config (source) ---
+$(PREFIX)sysconfig-objs := sys_config/gk7205v500/sys_config.o
+obj-m += $(PREFIX)sysconfig.o
+
+# --- wdt, adc (source) ---
+# init/gk7205v500/xmedia_init.c is kept for reference only: it aggregates
+# every driver's init for a built-in kernel and compiles to an empty module
+# (#ifndef MODULE), so it is not built here.
+$(PREFIX)wdt-objs := wdt/gk7205v500/wdt.o init/gk7205v500/wdt_init.o
+$(PREFIX)adc-objs := adc/gk7205v500/adc.o init/gk7205v500/adc_init.o
+obj-m += $(PREFIX)wdt.o $(PREFIX)adc.o
+
+# --- ISP kernel driver (source) ---
+ifndef DISABLE_ISP
+$(PREFIX)isp-objs := $(addprefix $(XM_ISP)/kernel/, \
+	init/linux/isp_init.o mkp/src/isp.o mkp/src/isp_st.o \
+	mkp/src/isp_drv_vreg.o mkp/src/isp_list.o arch/xm72050200/hal/isp_drv.o)
+obj-m += $(PREFIX)isp.o
+endif
+
+# --- ISP ext drivers (source) ---
+$(PREFIX)isp_sensor_i2c-objs := sensor_i2c/gk7205v500/sensor_i2c.o
+$(PREFIX)isp_sensor_spi-objs := sensor_spi/gk7205v500/sensor_spi.o
+$(PREFIX)isp_pwm-objs := pwm/gk7205v500/pwm.o
+$(PREFIX)isp_piris-objs := piris/gk7205v500/piris.o
+obj-m += $(PREFIX)isp_sensor_i2c.o $(PREFIX)isp_sensor_spi.o \
+	$(PREFIX)isp_pwm.o $(PREFIX)isp_piris.o
+ifndef DISABLE_IST
+$(PREFIX)isp_sample_ist-objs := sample_ist/gk7205v500/sample_ist.o
+obj-m += $(PREFIX)isp_sample_ist.o
+endif
+
+# --- closed modules (relinked) ---
+XM_BLOBS := base sys vi vpss rgn vgs chnl rc venc vedu h264e h265e jpege \
+	mipi_rx ive cipher_drv tde acodec ai ao aio aenc adec
+ifeq ($(XM_SET),V200)
+    XM_BLOBS += vo gfbg
+else
+    XM_BLOBS += npu pm
+endif
+ifdef DISABLE_TDE
+    XM_BLOBS := $(filter-out tde,$(XM_BLOBS))
+endif
+# gfbg needs fbdev (register_framebuffer), which OpenIPC kernels leave out.
+ifdef DISABLE_VO
+    XM_BLOBS := $(filter-out vo gfbg,$(XM_BLOBS))
+endif
+$(foreach b,$(XM_BLOBS),$(eval $(PREFIX)$(b)-objs := obj/gk7205v500/$(XM_SET)/$(b).o))
+obj-m += $(addprefix $(PREFIX),$(addsuffix .o,$(XM_BLOBS)))
+
+# SPC020 predates GK7201V200: sys, vi, vpss and venc key their
+# capabilities on the efuse SKU code, and the die's 0xD0/0xD4 is unknown
+# to them (sys refuses to start, venc cannot create a channel). sys maps
+# the efuse block and hands the pointer to the others, so relink sys with
+# its ioremap redirected to init/gk7205v500/sys_efuse_shadow.c, which
+# serves that block from a RAM copy carrying a code the blobs know.
+ifeq ($(XM_SET),V200)
+$(PREFIX)sys-objs := obj/gk7205v500/V200/sys_shadowed.o \
+	init/gk7205v500/sys_efuse_shadow.o
+quiet_cmd_xm_sys_shadow = OBJCOPY $@
+      cmd_xm_sys_shadow = $(OBJCOPY) \
+	--redefine-sym osal_ioremap=xm_sys_ioremap \
+	--redefine-sym osal_iounmap=xm_sys_iounmap $< $@
+$(obj)/obj/gk7205v500/V200/sys_shadowed.o: $(src)/obj/gk7205v500/V200/sys.o FORCE
+	$(call if_changed,xm_sys_shadow)
+targets += obj/gk7205v500/V200/sys_shadowed.o
+endif
