@@ -113,3 +113,17 @@ ifdef DISABLE_VO
 endif
 $(foreach b,$(XM_BLOBS),$(eval $(PREFIX)$(b)-objs := obj/gk7205v500/$(XM_SET)/$(b).o))
 obj-m += $(addprefix $(PREFIX),$(addsuffix .o,$(XM_BLOBS)))
+
+# SPC020 predates GK7201V200: its V200 sys refuses the die's efuse code
+# (0xD0/0xD4) and every MPP module after it then dereferences a missing
+# sys. Link a copy with that one whitelist entry widened; the script
+# documents the two bytes and refuses any other input.
+ifeq ($(XM_SET),V200)
+$(PREFIX)sys-objs := obj/gk7205v500/V200/sys_gk7201v200.o
+quiet_cmd_xm_sys_fuse = PATCH   $@
+      cmd_xm_sys_fuse = $(CONFIG_SHELL) $(src)/../scripts/xm-sys-fuse-gk7201v200.sh $< $@
+$(obj)/obj/gk7205v500/V200/sys_gk7201v200.o: $(src)/obj/gk7205v500/V200/sys.o \
+		$(src)/../scripts/xm-sys-fuse-gk7201v200.sh FORCE
+	$(call if_changed,xm_sys_fuse)
+targets += obj/gk7205v500/V200/sys_gk7201v200.o
+endif
