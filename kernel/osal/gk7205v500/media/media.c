@@ -29,6 +29,18 @@ static DEFINE_MUTEX(media_sem);
 #define DYNAMIC_MINORS 64 /* like dynamic majors */
 static unsigned char media_minors[DYNAMIC_MINORS / 8];
 
+/*
+ * Only minors below DYNAMIC_MINORS live in the bitmap; fixed minors such as
+ * WATCHDOG_MINOR (130) are registered without it, so releasing them must not
+ * index past its end.
+ */
+static void media_minor_release(int minor)
+{
+    if (minor >= 0 && minor < DYNAMIC_MINORS) {
+        media_minors[minor >> 3] &= ~(1 << (minor & 7));
+    }
+}
+
 int media_devfreq_target(struct device *dev, unsigned long *freq, unsigned int flags)
 {
     struct media_device *pdev = to_media_device(dev);
@@ -228,7 +240,7 @@ int media_register(struct media_device *media)
     /* device register */
     err = media_device_register(media);
     if (err < 0) {
-        media_minors[media->minor >> 3] &= ~(1 << (media->minor & 7));
+        media_minor_release(media->minor);
         goto out;
     }
 
@@ -237,7 +249,7 @@ int media_register(struct media_device *media)
     if (IS_ERR(pdrv)) {
         media_device_unregister(media);
 
-        media_minors[media->minor >> 3] &= ~(1 << (media->minor & 7));
+        media_minor_release(media->minor);
 
         err = PTR_ERR(pdrv);
         goto out;
@@ -288,7 +300,7 @@ int media_unregister(struct media_device *media)
 
             media_device_unregister(media);
 
-            media_minors[media->minor >> 3] &= ~(1 << (media->minor & 7));
+            media_minor_release(media->minor);
 
             break;
         }

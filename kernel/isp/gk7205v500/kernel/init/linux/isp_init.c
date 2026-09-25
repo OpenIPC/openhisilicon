@@ -24,12 +24,10 @@ static int vendor_isp_probe(struct platform_device *pdev)
     if (isp_fe_irq <= 0)
     {
         dev_err(&pdev->dev, "Can't find isp IRQ!\n");
-        return XMEDIA_FALSE;
+        return -ENODEV;
     }
 
-    ISP_ModInit();
-
-    return 0;
+    return (ISP_ModInit() == XMEDIA_SUCCESS) ? 0 : -ENODEV;
 }
 
 static int vendor_isp_remove(struct platform_device *pdev)

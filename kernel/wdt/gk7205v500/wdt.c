@@ -416,6 +416,8 @@ static int  dog_init(void)
         p_dog = osal_kthread_create(dog_deamon, NULL, "dog");
         if(NULL == p_dog) {
             osal_printk("create dog_deamon failed!\n");
+            /* nothing will feed it: do not leave it armed */
+            dog_stop();
             return -1;
         }
         task_dog_deamon = p_dog;

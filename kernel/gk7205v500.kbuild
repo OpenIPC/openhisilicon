@@ -70,11 +70,13 @@ obj-m += $(PREFIX)osal.o
 $(PREFIX)sysconfig-objs := sys_config/gk7205v500/sys_config.o
 obj-m += $(PREFIX)sysconfig.o
 
-# --- init, wdt, adc (source) ---
-$(PREFIX)init-objs := init/gk7205v500/xmedia_init.o
+# --- wdt, adc (source) ---
+# init/gk7205v500/xmedia_init.c is kept for reference only: it aggregates
+# every driver's init for a built-in kernel and compiles to an empty module
+# (#ifndef MODULE), so it is not built here.
 $(PREFIX)wdt-objs := wdt/gk7205v500/wdt.o init/gk7205v500/wdt_init.o
 $(PREFIX)adc-objs := adc/gk7205v500/adc.o init/gk7205v500/adc_init.o
-obj-m += $(PREFIX)init.o $(PREFIX)wdt.o $(PREFIX)adc.o
+obj-m += $(PREFIX)wdt.o $(PREFIX)adc.o
 
 # --- ISP kernel driver (source) ---
 ifndef DISABLE_ISP

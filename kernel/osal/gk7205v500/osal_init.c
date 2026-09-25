@@ -15,12 +15,27 @@ extern void osal_device_init(void);
 
 static int __init osal_init(void)
 {
+    int ret;
+
     osal_device_init();
     osal_proc_init();
-    media_init();
-    media_mem_init();
+    ret = media_init();
+    if (ret) {
+        goto err_proc;
+    }
+    ret = media_mem_init();
+    if (ret) {
+        goto err_media;
+    }
     osal_printk("osal %s init success!\n", OSAL_VERSION);
     return 0;
+
+err_media:
+    media_exit();
+err_proc:
+    osal_proc_exit();
+    osal_printk("osal %s init failed: %d\n", OSAL_VERSION, ret);
+    return ret;
 }
 
 static void __exit osal_exit(void)

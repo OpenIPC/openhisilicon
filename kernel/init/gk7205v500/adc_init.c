@@ -30,6 +30,7 @@ static int adc_probe(struct platform_device *pdev)
     {
         //printk("mem->start %#x. \n", mem->start);
         dev_err(&pdev->dev, "lsadc reg map failed. \n");
+        return PTR_ERR((void *)lsadc_reg);
     }
 
     //printk("lsadc_irq :%d  mem->start %#x. \n", lsadc_irq, mem->start);

@@ -206,8 +206,18 @@ int piris_close_set(int dev, PIRIS_DATA_S *pstPirisData)
 
     init_completion(&pstPiris->piris_comp);
     piris_gpio_update(dev, &piris_pos);
-    // wait for piris origin done
-    wait_for_completion(&pstPiris->piris_comp);
+    /*
+     * wait for piris origin done -- unless there is nowhere to go: the
+     * timer only completes when a step lands on dest_pos, so a target equal
+     * to src_pos would never be signalled. Bounded in case the timer stalls.
+     */
+    spin_lock_irqsave(&pstPiris->lock, u32Flags);
+    if (pstPiris->src_pos != pstPiris->dest_pos) {
+        spin_unlock_irqrestore(&pstPiris->lock, u32Flags);
+        wait_for_completion_timeout(&pstPiris->piris_comp, 10 * HZ);
+    } else {
+        spin_unlock_irqrestore(&pstPiris->lock, u32Flags);
+    }
 
     spin_lock_irqsave(&pstPiris->lock, u32Flags);
     if (pstPirisData->ZeroIsMax == 1) {

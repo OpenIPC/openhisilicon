@@ -727,6 +727,7 @@ int mmz_userdev_mmap(struct file *file, struct vm_area_struct *vma)
     unsigned long offset = vma->vm_pgoff << PAGE_SHIFT;
     mmz_mmb_t *mmb = NULL;
     int mmb_cached = 0;
+    unsigned long avail; /* bytes of the block from offset to its end */
 
     p = get_mmbinfo(offset, pmu);
 
@@ -738,12 +739,24 @@ int mmz_userdev_mmap(struct file *file, struct vm_area_struct *vma)
         } else {
             mmb_cached = mmb->flags & MMZ_MMB_MAP2KERN_CACHED;
         }
+        avail = mmb->length - mmb_offset;
     } else {
         if (p->mapped != NULL) {
             error_mmz("mmb(0x%08lX) have been mapped already?!\n", offset);
             return -EIO;
         }
         mmb_cached = p->map_cached;
+        avail = (unsigned long)(p->phys_addr + p->size - offset);
+    }
+
+    /*
+     * Only the start address was checked above: keep the mapping inside the
+     * block it starts in, not the physical memory after it.
+     */
+    if (vma->vm_end - vma->vm_start > PAGE_ALIGN(avail)) {
+        error_mmz("mmap of 0x%lx bytes at 0x%08lX overruns its mmb (0x%lx left)\n",
+                  vma->vm_end - vma->vm_start, offset, avail);
+        return -EINVAL;
     }
 
     if (file->f_flags & O_SYNC) {

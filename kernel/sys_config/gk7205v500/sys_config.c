@@ -30,7 +30,12 @@ static void *reg_pwm_base=0;
 int g_online_flag = 0;                              /* Same as the value of the VI_VPSS_MODE_E.*/
 int g_cmos_yuv_flag = 0;                            /* vi: 0--RAW, 1--DC, 2--BT1120, 3--BT656 */
 char sensor_list[SENSOR_NAME_LEN] = "imx307";       /* imx307 imx327 sc4236 sc2235 sc3235 imx335 soi_f37 os05a gc2053 bt656 bt1120 imx307_2l,imx327_2l*/
+/* default to the die the build's blob set (XM_SET) is for; chip= overrides */
+#if defined(xm72050500)
+char chip_list[CHIP_NAME_STR_LEN]     = "xm72050500";
+#else
 char chip_list[CHIP_NAME_STR_LEN]     = "xm72050200";  /* xm72050200 xm72050300 xm72020300 xm76050100 */
+#endif
 char board_list[BOARD_NAME_LEN]   = "demo";         /* sck demo*/
 int g_quick_start_flag = 0;                         /* If set to 1, you need to do something in Uboot. */
 
@@ -1557,6 +1562,7 @@ int sensor_config(const char *sensor_name)
 }
 
 void  sysconfig_exit(void);
+static void sysconfig_unmap(void);
 void sysconfig_instant_exit(void);
 
 int  sysconfig_init(void)
@@ -1629,10 +1635,15 @@ int  sysconfig_init(void)
         g_online_flag, g_cmos_yuv_flag, sensor_list, chip_list, board_list);
     printk("==== g_quick_start_flag=%d ====\n",g_quick_start_flag);
     printk("sysconfig init success!\n");
-
-out:
     sysconfig_instant_exit();
     return 0;
+
+out:
+    /* a register block could not be mapped: nothing was configured */
+    printk("sysconfig init failed: cannot map registers\n");
+    sysconfig_instant_exit();
+    sysconfig_unmap();
+    return -ENOMEM;
 }
 
 void sysconfig_instant_exit(void)
@@ -1670,7 +1681,7 @@ void sysconfig_instant_exit(void)
     return;
 }
 
-void __exit sysconfig_exit(void)
+static void sysconfig_unmap(void)
 {
     if (NULL != reg_misc_base)
     {
@@ -1695,6 +1706,11 @@ void __exit sysconfig_exit(void)
         iounmap(reg_sysctl_base);
         reg_sysctl_base = 0;
     }
+}
+
+void __exit sysconfig_exit(void)
+{
+    sysconfig_unmap();
     sysconfig_instant_exit();
 
     return;

@@ -4,6 +4,7 @@
 
 #ifndef __LITEOS__
 
+#include <linux/uaccess.h>
 #include <linux/module.h>
 #include <linux/errno.h>
 #include <linux/miscdevice.h>
@@ -106,10 +107,13 @@ int SampleIst_Close(struct inode *inode, struct file *file)
 static long SampleIst_Ioctl(struct file *file, unsigned int cmd, unsigned long arg)
 {
     int __user *argp = (int __user *)(XMEDIA_UINTPTR_T)arg;
-    int node_index = *argp;
+    int node_index;
 
-    if (node_index >= MAX_TEST_NODES) {
-        return -1;
+    if (copy_from_user(&node_index, argp, sizeof(node_index))) {
+        return -EFAULT;
+    }
+    if (node_index < 0 || node_index >= MAX_TEST_NODES) {
+        return -EINVAL;
     }
 
     switch (cmd) {
