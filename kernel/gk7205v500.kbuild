@@ -114,16 +114,20 @@ endif
 $(foreach b,$(XM_BLOBS),$(eval $(PREFIX)$(b)-objs := obj/gk7205v500/$(XM_SET)/$(b).o))
 obj-m += $(addprefix $(PREFIX),$(addsuffix .o,$(XM_BLOBS)))
 
-# SPC020 predates GK7201V200: its V200 sys refuses the die's efuse code
-# (0xD0/0xD4) and every MPP module after it then dereferences a missing
-# sys. Link a copy with that one whitelist entry widened; the script
-# documents the two bytes and refuses any other input.
+# SPC020 predates GK7201V200: sys, vi, vpss and venc key their
+# capabilities on the efuse SKU code, and the die's 0xD0/0xD4 is unknown
+# to them (sys refuses to start, venc cannot create a channel). sys maps
+# the efuse block and hands the pointer to the others, so relink sys with
+# its ioremap redirected to init/gk7205v500/sys_efuse_shadow.c, which
+# serves that block from a RAM copy carrying a code the blobs know.
 ifeq ($(XM_SET),V200)
-$(PREFIX)sys-objs := obj/gk7205v500/V200/sys_gk7201v200.o
-quiet_cmd_xm_sys_fuse = PATCH   $@
-      cmd_xm_sys_fuse = $(CONFIG_SHELL) $(src)/../scripts/xm-sys-fuse-gk7201v200.sh $< $@
-$(obj)/obj/gk7205v500/V200/sys_gk7201v200.o: $(src)/obj/gk7205v500/V200/sys.o \
-		$(src)/../scripts/xm-sys-fuse-gk7201v200.sh FORCE
-	$(call if_changed,xm_sys_fuse)
-targets += obj/gk7205v500/V200/sys_gk7201v200.o
+$(PREFIX)sys-objs := obj/gk7205v500/V200/sys_shadowed.o \
+	init/gk7205v500/sys_efuse_shadow.o
+quiet_cmd_xm_sys_shadow = OBJCOPY $@
+      cmd_xm_sys_shadow = $(OBJCOPY) \
+	--redefine-sym osal_ioremap=xm_sys_ioremap \
+	--redefine-sym osal_iounmap=xm_sys_iounmap $< $@
+$(obj)/obj/gk7205v500/V200/sys_shadowed.o: $(src)/obj/gk7205v500/V200/sys.o FORCE
+	$(call if_changed,xm_sys_shadow)
+targets += obj/gk7205v500/V200/sys_shadowed.o
 endif

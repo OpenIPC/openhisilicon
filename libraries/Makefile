@@ -52,6 +52,13 @@ ifeq ($(CHIPARCH),hi3519dv500)
     SUBDIRS := $(filter ./sensor/hi3519dv500/%,$(SUBDIRS))
 endif
 
+# gk7205v500 (XMedia): sensor drivers ported to the SPC020 ISP API, built
+# against the SDK headers imported under kernel/. Nobody else's.
+ifeq ($(CHIPARCH),gk7205v500)
+    SUBDIRS := $(filter ./sensor/gk7205v500/%,$(SUBDIRS))
+else
+    SUBDIRS := $(filter-out ./sensor/gk7205v500/%,$(SUBDIRS))
+endif
 # hi3519dv500 sensors are aarch64-only — the 32-bit toolchains used by every
 # other chiparch can't compile their 64-bit-aligned vendor headers. Exclude
 # them from any non-dv500 build (chiparchs without an explicit filter above,
