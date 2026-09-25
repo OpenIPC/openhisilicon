@@ -1452,9 +1452,13 @@ static GK_S32 cmos_get_isp_default(VI_PIPE ViPipe, ISP_CMOS_DEFAULT_S *pstDef)
 	case IMX335_60FPS_FULL_1944P_MODE:
 	case IMX335_60FPS_CROPPED_1080P_MODE:
 	case IMX335_CROP_FLEX_LINEAR_MODE:
-	case IMX335_5M_30FPS_12BIT_LINEAR_MODE:
 		pstDef->stSensorMode.stDngRawFormat.u8BitsPerSample = 10;//was 12
 		pstDef->stSensorMode.stDngRawFormat.u32WhiteLevel = 2592;
+		break;
+
+	case IMX335_5M_30FPS_12BIT_LINEAR_MODE:
+		pstDef->stSensorMode.stDngRawFormat.u8BitsPerSample = 12;
+		pstDef->stSensorMode.stDngRawFormat.u32WhiteLevel = 4095;
 		break;
 
 	case IMX335_60FPS_BINNING_MODE:

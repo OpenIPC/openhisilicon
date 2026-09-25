@@ -248,6 +248,12 @@ void IMX335_linear_5M30_12bit_init(VI_PIPE ViPipe)
 
 	IMX335_write_register(ViPipe, 0x300C, 0x5B);
 	IMX335_write_register(ViPipe, 0x300D, 0x40);
+	/* TODO: this mode has the same 10-bit ADC in a RAW12 container that
+	 * sony_imx335 moved to 12 bits (ADBIT 0x3050 = 1, MDBIT 0x319D = 1,
+	 * ADBIT1 0x341C/D = 0x0047). Not done here because no two-lane IMX335
+	 * board has been available to check that 12-bit output fits two lanes
+	 * at SYS_MODE 1188 Mbps without the left-to-right shading the four-lane
+	 * driver shows at short line periods. */
 	IMX335_write_register(ViPipe, 0x3050, 0x00);
 
 	IMX335_write_register(ViPipe, 0x314C, 0x80);

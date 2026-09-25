@@ -1515,6 +1515,13 @@ void IMX335_linear_5M30_12bit_init(VI_PIPE ViPipe)
 	IMX335_write_register(ViPipe, 0x3076, 0x58); // AREA3_WIDTH_1 = Y_OUT_SIZE * 2
 	IMX335_write_register(ViPipe, 0x3077, 0x0F);
 
+	/* 12-bit ADC and output (ADBIT, MDBIT, ADBIT1 below); both halves are
+	 * needed, either one alone still gives multiples of 4. Only this mode:
+	 * at the shorter line periods of the faster ones (HMAX 0x1A0, 0x16E)
+	 * the 12-bit ADC shades the frame by up to a third from left to right,
+	 * and at 0x12C it delivers no frames, so those stay at 10 bits. A
+	 * raw_bitness=10 profile that lands here is unaffected: the receiver
+	 * keeps the top ten bits, measured identical to the 10-bit ADC. */
 	IMX335_write_register(ViPipe, 0x3050, 0x01); /* ADBIT = 12-bit */
 
 	IMX335_write_register(ViPipe, 0x3074, 0xB0); // AREA3_ST_ADR_1 upper-left crop position
