@@ -808,7 +808,7 @@ void IMX335_cropped_flex_init(VI_PIPE ViPipe)
 	IMX335_write_register(ViPipe, 0x3030, vmax          & 0xFF);
 	IMX335_write_register(ViPipe, 0x3031, (vmax >> 8)   & 0xFF);
 	IMX335_write_register(ViPipe, 0x3032, (vmax >> 16)  & 0x0F);
-	IMX335_write_register(ViPipe, 0x3034, 0x6E);         /* HMAX from 1080p baseline */
+	IMX335_write_register(ViPipe, 0x3034, 0x00);         /* HMAX = 0x0100 — lifts M7 ceiling +43% (see docs/imx335-v4-high-fps.md) */
 	IMX335_write_register(ViPipe, 0x3035, 0x01);
 
 	IMX335_write_register(ViPipe, 0x3056, y_out_size        & 0xFF);
