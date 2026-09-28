@@ -2,6 +2,7 @@
  * Copyright (c) Hunan Goke,Chengdu Goke,Shandong Goke. 2021. All rights reserved.
  */
 #include <linux/module.h>
+#include <linux/mutex.h>
 #include <linux/kernel.h>
 #include <linux/printk.h>
 #include "media.h"
@@ -41,9 +42,53 @@ struct osal_private_data {
 	void *data;
 	struct osal_poll table;
 	int f_ref_cnt;
+	int counted;
 };
 
 spinlock_t f_lock;
+
+/*
+ * How many MPP device files are open, across every osal device, and what to
+ * call when the last one closes.
+ *
+ * A vendor module can hand a process a reference it is expected to give back
+ * later, and nothing on its own side notices when that process dies instead:
+ * the release callbacks in the blobs do nothing. When no MPP file is open at
+ * all, no live process can be holding such a reference, so whatever is still
+ * counted belongs to a dead one. isp registers the hook that acts on that
+ * (isp/mkp/src/isp_orphans.c); osal only knows when the moment has come.
+ *
+ * The hook runs under osal_users_lock, which osal_open also takes, so a new
+ * process cannot start talking to the pipeline while the hook is still
+ * walking it.
+ */
+static DEFINE_MUTEX(osal_users_lock);
+static unsigned int osal_users;
+static void (*osal_last_close_fn)(void);
+
+int osal_register_last_close(void (*fn)(void))
+{
+	mutex_lock(&osal_users_lock);
+	if (fn != NULL && osal_last_close_fn != NULL) {
+		mutex_unlock(&osal_users_lock);
+		return -EBUSY;
+	}
+	osal_last_close_fn = fn;
+	mutex_unlock(&osal_users_lock);
+	return 0;
+}
+EXPORT_SYMBOL(osal_register_last_close);
+
+static void osal_user_put(struct osal_private_data *pdata)
+{
+	if (pdata == NULL || !pdata->counted)
+		return;
+	pdata->counted = 0;
+	mutex_lock(&osal_users_lock);
+	if (osal_users > 0 && --osal_users == 0 && osal_last_close_fn != NULL)
+		osal_last_close_fn();
+	mutex_unlock(&osal_users_lock);
+}
 
 void osal_device_init(void)
 {
@@ -116,9 +161,19 @@ static int osal_open(struct inode *inode, struct file *file)
 
 	file->private_data = pdata;
 	pdata->dev = &(coat_dev->osal_dev);
+
+	mutex_lock(&osal_users_lock);
 	if (coat_dev->osal_dev.fops->open != NULL) {
-		return coat_dev->osal_dev.fops->open((void *)&(pdata->data));
+		int ret = coat_dev->osal_dev.fops->open((void *)&(pdata->data));
+
+		if (ret != 0) {
+			mutex_unlock(&osal_users_lock);
+			return ret;
+		}
 	}
+	pdata->counted = 1;
+	osal_users++;
+	mutex_unlock(&osal_users_lock);
 	return 0;
 }
 
@@ -204,6 +259,9 @@ static int osal_release(struct inode *inode, struct file *file)
 	if (pdata->dev->fops->release != NULL) {
 		ret = pdata->dev->fops->release((void *)&(pdata->data));
 	}
+	/* The file is going away whatever the device answered, so it stops
+	 * counting as an MPP user either way. */
+	osal_user_put(pdata);
 	if (ret != 0) {
 		PUT_FILE(file);
 		osal_printk("%s - release failed!\n", __FUNCTION__);

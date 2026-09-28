@@ -11,6 +11,7 @@
 #include "isp.h"
 #include "isp_drv.h"
 #include "isp_list.h"
+#include "isp_orphans.h"
 #include "isp_drv_vreg.h"
 #include "mm_ext.h"
 #include "proc_ext.h"
@@ -6824,6 +6825,24 @@ GK_S32 ISP_SetPubAttrInfo(VI_PIPE ViPipe, ISP_PUB_ATTR_S *pstPubAttr)
 	return GK_SUCCESS;
 }
 
+/*
+ * The file that took stProcSem with ISP_PROC_WRITE_ING and has not yet given it
+ * back with ISP_PROC_WRITE_OK, per pipe.
+ *
+ * The ISP library holds that semaphore across two ioctls, with its write of
+ * the proc text into shared memory in between. A process that dies inside that
+ * window -- an OOM kill is the usual way, since it is stalled on exactly such
+ * page faults -- leaves the semaphore down for good: the next process's
+ * ISP_PROC_EXIT, and any read of /proc/umap/isp, then sleep on it for ever.
+ * Measured on a hi3516ev300 after an OOM kill: the next majestic hung in
+ * ISP_DRV_ProcExit as soon as it had set the VI up. ISP_close gives it back
+ * when the file that holds it goes away.
+ *
+ * Written only by the holder (after its down, before its up) and read by that
+ * same file's release, which cannot run alongside its own ioctls.
+ */
+static GK_VOID *s_apProcSemOwner[ISP_MAX_PIPE_NUM];
+
 static long ISP_ioctl(unsigned int cmd, unsigned long arg, void *private_data)
 {
 	VI_PIPE ViPipe = ISP_GET_DEV(private_data);
@@ -7126,12 +7145,14 @@ static long ISP_ioctl(unsigned int cmd, unsigned long arg, void *private_data)
 			    &g_astIspDrvCtx[ViPipe].stProcSem)) {
 			return -ERESTARTSYS;
 		}
+		s_apProcSemOwner[ViPipe] = private_data;
 		return GK_SUCCESS;
 	}
 
 	case ISP_PROC_WRITE_OK: {
 		ISP_CHECK_PIPE(ViPipe);
 
+		s_apProcSemOwner[ViPipe] = GK_NULL;
 		osal_up(&g_astIspDrvCtx[ViPipe].stProcSem);
 		return GK_SUCCESS;
 	}
@@ -7784,6 +7805,19 @@ static int ISP_open(void *data)
 
 static int ISP_close(void *data)
 {
+	VI_PIPE ViPipe;
+
+	for (ViPipe = 0; ViPipe < ISP_MAX_PIPE_NUM; ViPipe++) {
+		if (data == GK_NULL || s_apProcSemOwner[ViPipe] != data) {
+			continue;
+		}
+		s_apProcSemOwner[ViPipe] = GK_NULL;
+		osal_up(&g_astIspDrvCtx[ViPipe].stProcSem);
+		osal_printk(
+			"isp: pipe %d proc lock released: its holder closed between PROC_WRITE_ING and PROC_WRITE_OK\n",
+			ViPipe);
+	}
+
 	return 0;
 }
 
@@ -9228,6 +9262,7 @@ int ISP_ModInit(void)
 #ifdef TEST_TIME
 	ISP_Test_Init();
 #endif
+	ISP_OrphansInit();
 	GK_PRINT("ISP Mod init!\n");
 	return GK_SUCCESS;
 
@@ -9247,6 +9282,7 @@ void ISP_ModExit(void)
 {
 	int i;
 
+	ISP_OrphansExit();
 	ISP_DRV_Exit();
 
 	for (i = 0; i < ISP_MAX_PIPE_NUM; i++) {
