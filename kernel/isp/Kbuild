@@ -9,6 +9,7 @@ SRCS := \
 	$(DIR)/mkp/src/isp.c \
 	$(DIR)/mkp/src/isp_drv_vreg.c \
 	$(DIR)/mkp/src/isp_list.c \
+	$(DIR)/mkp/src/isp_orphans.c \
 	$(DIR)/mkp/src/isp_st.c
 
 ccflags-y += -I$(src)/$(MOD_NAME)/include
