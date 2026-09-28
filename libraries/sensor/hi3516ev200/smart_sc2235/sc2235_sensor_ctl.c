@@ -331,6 +331,16 @@ void sc2235_linear_1080p30_init(VI_PIPE ViPipe)
 	delay_ms(20);
 	sc2235_write_register(ViPipe, 0x0100, 0x01);
 
+	// On the Imou Cue 2 (IPC-C22EN) the sequence above alone leaves the
+	// SoC with no pixel clock. Its vendor (Dahua) firmware repeats the DVP
+	// pad setup once the sensor is streaming, with stronger drive, and
+	// then starts streaming again.
+	delay_ms(20);
+	sc2235_write_register(ViPipe, 0x3d08, 0x01);
+	sc2235_write_register(ViPipe, 0x3640, 0x01);
+	sc2235_write_register(ViPipe, 0x3641, 0x02);
+	sc2235_write_register(ViPipe, 0x0100, 0x01);
+
 	printf("=== Smart SC2235_1080P_30FPS_10BIT_LINE_Init_OK!===\n");
 
 	return;
