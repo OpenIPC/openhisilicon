@@ -68,16 +68,28 @@ static void (*osal_last_close_fn)(void);
 
 int osal_register_last_close(void (*fn)(void))
 {
+	int ret = 0;
+
+	if (fn == NULL)
+		return -EINVAL;
 	mutex_lock(&osal_users_lock);
-	if (fn != NULL && osal_last_close_fn != NULL) {
-		mutex_unlock(&osal_users_lock);
-		return -EBUSY;
-	}
-	osal_last_close_fn = fn;
+	if (osal_last_close_fn != NULL)
+		ret = -EBUSY;
+	else
+		osal_last_close_fn = fn;
 	mutex_unlock(&osal_users_lock);
-	return 0;
+	return ret;
 }
 EXPORT_SYMBOL(osal_register_last_close);
+
+void osal_unregister_last_close(void (*fn)(void))
+{
+	mutex_lock(&osal_users_lock);
+	if (osal_last_close_fn == fn)
+		osal_last_close_fn = NULL;
+	mutex_unlock(&osal_users_lock);
+}
+EXPORT_SYMBOL(osal_unregister_last_close);
 
 static void osal_user_put(struct osal_private_data *pdata)
 {

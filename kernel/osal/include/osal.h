@@ -482,10 +482,10 @@ extern int osal_registerdevice(osal_dev_t *pdev);
 extern void osal_deregisterdevice(osal_dev_t *pdev);
 /*
  * Calls fn when the last open MPP device file in the system is closed, under
- * a lock that holds off the next open until fn returns; NULL unregisters.
- * -EBUSY if another hook is already registered. open_isp uses it to release
- * the VB references a dead process was still holding
- * (kernel/isp/mkp/src/isp_orphans.c).
+ * a lock that holds off the next open until fn returns. -EBUSY if another
+ * hook is already registered; osal_unregister_last_close() removes fn only if
+ * it is the one registered. open_isp uses it to release the VB references a
+ * dead process was still holding (kernel/isp/mkp/src/isp_orphans.c).
  *
  * TODO(vb-orphans): implemented only by the V4 OSAL (osal/linux/kernel, built
  * for hi3516ev200 and gk7205v200). The other families have their own OSAL
@@ -494,6 +494,7 @@ extern void osal_deregisterdevice(osal_dev_t *pdev);
  * ERR_VB_BUSY.
  */
 extern int osal_register_last_close(void (*fn)(void));
+extern void osal_unregister_last_close(void (*fn)(void));
 extern void osal_poll_wait(osal_poll_t *table, osal_wait_t *wait);
 extern void osal_pgprot_noncached(osal_vm_t *vm);
 extern void osal_pgprot_cached(osal_vm_t *vm);

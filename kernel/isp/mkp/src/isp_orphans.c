@@ -111,5 +111,7 @@ void ISP_OrphansInit(void)
 
 void ISP_OrphansExit(void)
 {
-	osal_register_last_close(GK_NULL);
+	/* Removes the hook only if it is ours, so a failed registration above
+	 * cannot take another module's hook down with it. */
+	osal_unregister_last_close(isp_release_orphan_frames);
 }
