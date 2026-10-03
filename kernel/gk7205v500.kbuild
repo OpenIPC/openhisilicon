@@ -64,6 +64,11 @@ $(PREFIX)osal-objs := $(addprefix osal/gk7205v500/, \
 	osal_spinlock.o osal_string.o osal_task.o osal_timer.o osal_wait.o \
 	osal_workqueue.o osal_notifier.o osal_platform.o \
 	media/base.o media/media.o mmz/media-mem.o mmz/mmz-userdev.o mmz/allocator.o)
+# mmz_allocator=cma: the MMZ is the CMA zone the kernel reserved from mmz=
+# (drivers/xmedia/cma), lent to movable pages while it is not in use.
+ifeq ($(CONFIG_CMA),y)
+$(PREFIX)osal-objs += osal/gk7205v500/mmz/cma_allocator.o
+endif
 obj-m += $(PREFIX)osal.o
 
 # --- sys_config (source) ---
