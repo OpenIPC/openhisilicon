@@ -23,19 +23,13 @@
 
 #define __use_vmalloc_space 1
 
-struct cma_zone {
-    struct device pdev;
-    char name[NAME_LEN_MAX];
-    unsigned long gfp;
-    unsigned long phys_start;
-    unsigned long nbytes;
-    unsigned int alloc_type;
-    unsigned long block_align;
-};
+/* The zones the xmedia kernel reserved from mmz= (drivers/xmedia/cma). */
+#include <linux/xmedia_cma.h>
 
 extern struct osal_list_head mmz_list;
 
-long long max_malloc_size = 0x40000000UL;
+/* Defined in allocator.c, which every allocator links with. */
+extern long long max_malloc_size;
 
 static int do_mmb_alloc(mmz_mmb_t *mmb)
 {
@@ -70,7 +64,7 @@ static mmz_mmb_t *__mmb_alloc(const char *name,
 {
     mmz_mmz_t *mmz = NULL;
     mmz_mmb_t *mmb = NULL;
-    unsigned long order = get_order(size);
+    unsigned int order;
     size_t count = size >> PAGE_SHIFT;
     struct page *page = NULL;
 
@@ -89,8 +83,23 @@ static mmz_mmb_t *__mmb_alloc(const char *name,
     }
 
     size = mmz_grain_align(size);
-    order = get_order(size);
     count = size >> PAGE_SHIFT;
+
+    /*
+     * dma_alloc_from_contiguous() aligns the block to 1 << order pages and
+     * silently caps order at CONFIG_CMA_ALIGNMENT. Ask for the size's own
+     * order, as this allocator always has, raised to the caller's alignment
+     * when that is larger -- the fixed-region allocator honours `align`, and
+     * the same callers reach both. An alignment past the cap would come back
+     * unmet, so it is refused instead.
+     */
+    order = max(get_order(size), get_order(align));
+    if (get_order(align) > CONFIG_CMA_ALIGNMENT) {
+        pr_err("mmb %s: alignment 0x%lx is beyond CMA's %lu KiB\n",
+               name != NULL ? name : "<null>", align,
+               (PAGE_SIZE << CONFIG_CMA_ALIGNMENT) / SZ_1K);
+        return NULL;
+    }
 
     mmz_trace(1, "anonymous=%s,size=%luKB,align=%lu", mmz_name, size / SZ_1K, align);
 
@@ -385,10 +394,11 @@ static int __allocator_init(char *s)
     char *line = NULL;
     struct cma_zone *cma_zone = NULL;
 
+    int attempted = 0, registered = 0;
+
     while ((line = strsep(&s, ":")) != NULL) {
         int i;
         char *argv[6];
-        extern struct cma_zone *get_cma_zone(const char *name);
         /*
          * FIXME: We got 4 args in "line", formated as
          * "argv[0],argv[1],argv[2],argv[3],argv[4]".
@@ -400,7 +410,8 @@ static int __allocator_init(char *s)
                 break;
             }
 
-        cma_zone = get_cma_zone(argv[0]);
+        attempted++;
+        cma_zone = xmedia_get_cma_zone(argv[0]);
         if (cma_zone == NULL) {
             printk(KERN_ERR "can't get cma zone info:%s\n", argv[0]);
             continue;
@@ -415,9 +426,9 @@ static int __allocator_init(char *s)
             strlcpy(zone->name, argv[0], MMZ_MMZ_NAME_LEN);
 
             printk("cmz zone gfp 0x%lx, phys 0x%lx, nbytes 0x%lx\n",
-                   cma_zone->gfp,
-                   cma_zone->phys_start,
-                   cma_zone->nbytes);
+                   (unsigned long)cma_zone->gfp,
+                   (unsigned long)cma_zone->phys_start,
+                   (unsigned long)cma_zone->nbytes);
             zone->gfp = cma_zone->gfp;
             zone->phys_start = cma_zone->phys_start;
             zone->nbytes = cma_zone->nbytes;
@@ -435,9 +446,22 @@ static int __allocator_init(char *s)
             printk(KERN_WARNING "Add MMZ failed: " MMZ_MMZ_FMT_S "\n",
                    mmz_mmz_fmt_arg(zone));
             mmz_mmz_destroy(zone);
+        } else {
+            registered++;
         }
 
         zone = NULL;
+    }
+
+    /*
+     * An osal with no zone loads fine and then fails every allocation;
+     * refuse it here instead, where media_mem_init() turns it into a
+     * failed modprobe. Same rule as kernel/osal/linux's CMA allocator.
+     */
+    if (attempted > 0 && registered == 0) {
+        printk(KERN_ERR "MMZ: all %d configured zone(s) failed to register; refusing to load\n",
+               attempted);
+        return -ENODEV;
     }
 #endif
 
