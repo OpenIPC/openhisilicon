@@ -64,7 +64,7 @@ static mmz_mmb_t *__mmb_alloc(const char *name,
 {
     mmz_mmz_t *mmz = NULL;
     mmz_mmb_t *mmb = NULL;
-    unsigned long order = get_order(size);
+    unsigned int order;
     size_t count = size >> PAGE_SHIFT;
     struct page *page = NULL;
 
@@ -83,8 +83,23 @@ static mmz_mmb_t *__mmb_alloc(const char *name,
     }
 
     size = mmz_grain_align(size);
-    order = get_order(size);
     count = size >> PAGE_SHIFT;
+
+    /*
+     * dma_alloc_from_contiguous() aligns the block to 1 << order pages and
+     * silently caps order at CONFIG_CMA_ALIGNMENT. Ask for the size's own
+     * order, as this allocator always has, raised to the caller's alignment
+     * when that is larger -- the fixed-region allocator honours `align`, and
+     * the same callers reach both. An alignment past the cap would come back
+     * unmet, so it is refused instead.
+     */
+    order = max(get_order(size), get_order(align));
+    if (get_order(align) > CONFIG_CMA_ALIGNMENT) {
+        pr_err("mmb %s: alignment 0x%lx is beyond CMA's %lu KiB\n",
+               name != NULL ? name : "<null>", align,
+               (PAGE_SIZE << CONFIG_CMA_ALIGNMENT) / SZ_1K);
+        return NULL;
+    }
 
     mmz_trace(1, "anonymous=%s,size=%luKB,align=%lu", mmz_name, size / SZ_1K, align);
 
@@ -379,6 +394,8 @@ static int __allocator_init(char *s)
     char *line = NULL;
     struct cma_zone *cma_zone = NULL;
 
+    int attempted = 0, registered = 0;
+
     while ((line = strsep(&s, ":")) != NULL) {
         int i;
         char *argv[6];
@@ -393,6 +410,7 @@ static int __allocator_init(char *s)
                 break;
             }
 
+        attempted++;
         cma_zone = xmedia_get_cma_zone(argv[0]);
         if (cma_zone == NULL) {
             printk(KERN_ERR "can't get cma zone info:%s\n", argv[0]);
@@ -428,9 +446,22 @@ static int __allocator_init(char *s)
             printk(KERN_WARNING "Add MMZ failed: " MMZ_MMZ_FMT_S "\n",
                    mmz_mmz_fmt_arg(zone));
             mmz_mmz_destroy(zone);
+        } else {
+            registered++;
         }
 
         zone = NULL;
+    }
+
+    /*
+     * An osal with no zone loads fine and then fails every allocation;
+     * refuse it here instead, where media_mem_init() turns it into a
+     * failed modprobe. Same rule as kernel/osal/linux's CMA allocator.
+     */
+    if (attempted > 0 && registered == 0) {
+        printk(KERN_ERR "MMZ: all %d configured zone(s) failed to register; refusing to load\n",
+               attempted);
+        return -ENODEV;
     }
 #endif
 
