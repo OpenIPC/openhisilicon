@@ -23,19 +23,13 @@
 
 #define __use_vmalloc_space 1
 
-struct cma_zone {
-    struct device pdev;
-    char name[NAME_LEN_MAX];
-    unsigned long gfp;
-    unsigned long phys_start;
-    unsigned long nbytes;
-    unsigned int alloc_type;
-    unsigned long block_align;
-};
+/* The zones the xmedia kernel reserved from mmz= (drivers/xmedia/cma). */
+#include <linux/xmedia_cma.h>
 
 extern struct osal_list_head mmz_list;
 
-long long max_malloc_size = 0x40000000UL;
+/* Defined in allocator.c, which every allocator links with. */
+extern long long max_malloc_size;
 
 static int do_mmb_alloc(mmz_mmb_t *mmb)
 {
@@ -388,7 +382,6 @@ static int __allocator_init(char *s)
     while ((line = strsep(&s, ":")) != NULL) {
         int i;
         char *argv[6];
-        extern struct cma_zone *get_cma_zone(const char *name);
         /*
          * FIXME: We got 4 args in "line", formated as
          * "argv[0],argv[1],argv[2],argv[3],argv[4]".
@@ -400,7 +393,7 @@ static int __allocator_init(char *s)
                 break;
             }
 
-        cma_zone = get_cma_zone(argv[0]);
+        cma_zone = xmedia_get_cma_zone(argv[0]);
         if (cma_zone == NULL) {
             printk(KERN_ERR "can't get cma zone info:%s\n", argv[0]);
             continue;
@@ -415,9 +408,9 @@ static int __allocator_init(char *s)
             strlcpy(zone->name, argv[0], MMZ_MMZ_NAME_LEN);
 
             printk("cmz zone gfp 0x%lx, phys 0x%lx, nbytes 0x%lx\n",
-                   cma_zone->gfp,
-                   cma_zone->phys_start,
-                   cma_zone->nbytes);
+                   (unsigned long)cma_zone->gfp,
+                   (unsigned long)cma_zone->phys_start,
+                   (unsigned long)cma_zone->nbytes);
             zone->gfp = cma_zone->gfp;
             zone->phys_start = cma_zone->phys_start;
             zone->nbytes = cma_zone->nbytes;
