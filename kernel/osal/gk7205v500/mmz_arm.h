@@ -32,11 +32,16 @@ static pgprot_t arch_kern_pgprot(int cache)
 #include <asm/highmem.h>
 #include <asm/pgtable.h>
 
-extern void __dma_clear_buffer(struct page *page, size_t size);
+/*
+ * The OpenIPC 4.9 kernel's __dma_clear_buffer() takes a coherent flag, and
+ * only flushes the zeroed pages out of the cache when it is NORMAL (0).
+ * Called with two arguments, the flag was whatever cma_alloc() left in r2.
+ */
+extern void __dma_clear_buffer(struct page *page, size_t size, int coherent_flag);
 
 static void dma_buffer_clear(struct page *page, size_t size)
 {
-    __dma_clear_buffer(page, size);
+    __dma_clear_buffer(page, size, 0);
 }
 
 static void mmb_dcache_flush(mmz_mmb_t *mmb)
@@ -52,7 +57,15 @@ static pgprot_t arch_kern_pgprot(int cache)
         return pgprot_kernel;
     }
 
-    return pgprot_noncached(pgprot_kernel);
+    /*
+     * Normal non-cacheable, as the carve-out allocator's ioremap_wc() gives,
+     * not pgprot_noncached(), which is strongly-ordered on ARM. The closed
+     * venc object reads its VPSS-bind descriptors with unaligned loads
+     * (VENC_VpssSend: ldr.w r1, [r3, #0x45]); on strongly-ordered memory
+     * that is an alignment fault in the VPSS interrupt, and the kernel
+     * panics as soon as a bound VPSS channel delivers its first frame.
+     */
+    return pgprot_writecombine(pgprot_kernel);
 }
 
 #else
