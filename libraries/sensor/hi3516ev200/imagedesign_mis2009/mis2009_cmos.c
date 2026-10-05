@@ -98,13 +98,100 @@ enum {
 #define MIS2009_INTTIME_SHORT (150)
 #define MIS2009_INTTIME_VMAX_MARGIN (200)
 
-//sensor fps mode: Isp_FrameRate above 30 selects the faster PLL
+/*
+ * Sensor modes. Isp_FrameRate above 30 selects the faster PLL at 1080p; the
+ * sensor INI's Isp_SnsMode selects the other two, at the size its DevRect
+ * gives:
+ *   4  a centred crop of any size up to 1920x1080 (as sony_imx335's mode 4)
+ *   5  the full field 2x2-subsampled to exactly 960x540 -- the profile says RGGB,
+ *      since subsampling needs a window that starts one column right of the
+ *      full-resolution one
+ * Both run the faster PLL. The crop's line is 2154 PCLK, 16.6 us, as short
+ * as the timing generator allows (it needs about 4270 ACLK cycles a line;
+ * 4000 breaks the picture); subsampling needs 2400. The frame rate is the line
+ * rate over the rows read plus the vendor's 46 lines of blanking.
+ */
 #define MIS2009_SENSOR_1080P_30FPS_LINEAR_MODE (1)
 #define MIS2009_SENSOR_1080P_50FPS_LINEAR_MODE (2)
+#define MIS2009_SENSOR_CROP_FLEX_LINEAR_MODE (3)
+#define MIS2009_SENSOR_SUBSAMPLE_LINEAR_MODE (4)
 
-#define MIS2009_MODE_LINE_RATE(mode) \
-    ((mode) == MIS2009_SENSOR_1080P_50FPS_LINEAR_MODE ? MIS2009_LINE_RATE_50FPS : MIS2009_LINE_RATE)
-#define MIS2009_MODE_FPS_MAX(mode) ((mode) == MIS2009_SENSOR_1080P_50FPS_LINEAR_MODE ? MIS2009_FPS_MAX_50FPS : 30)
+#define MIS2009_SNS_MODE_CROP (4)      /* Isp_SnsMode values */
+#define MIS2009_SNS_MODE_SUBSAMPLE (5)
+
+#define MIS2009_LINE_RATE_FLEX (60167) /* 129.6 MHz / 2154 */
+/* Subsampling needs a longer line: on this PLL frames stop at 2240 PCLK and
+ * flow at 2272; 2400 keeps a margin. 129.6 MHz / 2400. */
+#define MIS2009_LINE_RATE_SUBSAMPLE (54000)
+#define MIS2009_VBLANK (46)             /* MIS2009_VMAX_1080P30_LINEAR - 1080 */
+/* the smallest crop measured to stream with the ISP's AE and AF statistics:
+ * below 256 wide the ISP refuses their configuration, and 160x128 gives no
+ * frames at all */
+#define MIS2009_CROP_W_MIN (256)
+#define MIS2009_CROP_H_MIN (144)
+
+/* the readout window: full-resolution rows and columns, before subsampling */
+typedef struct {
+    GK_U32 u32Row, u32Col, u32Width, u32Height;
+    GK_BOOL bSubsample;
+} MIS2009_WINDOW_S;
+
+static MIS2009_WINDOW_S g_astMis2009Window[ISP_MAX_PIPE_NUM];
+
+/* the vendor init table's window, 1920x1080 from row 8, column 7 */
+static const MIS2009_WINDOW_S g_stMis2009Window1080p = { 8, 7, 1920, 1080, GK_FALSE };
+
+/* read by mis2009_sensor_ctl.c when it programs a crop or subsampled mode */
+GK_VOID mis2009_get_window(VI_PIPE ViPipe, GK_U32 *pu32Row, GK_U32 *pu32Col, GK_U32 *pu32Width,
+                           GK_U32 *pu32Height, GK_BOOL *pbSubsample)
+{
+    const MIS2009_WINDOW_S *w = &g_stMis2009Window1080p;
+
+    if (ViPipe >= 0 && ViPipe < ISP_MAX_PIPE_NUM && g_astMis2009Window[ViPipe].u32Width) {
+        w = &g_astMis2009Window[ViPipe];
+    }
+    *pu32Row = w->u32Row;
+    *pu32Col = w->u32Col;
+    *pu32Width = w->u32Width;
+    *pu32Height = w->u32Height;
+    *pbSubsample = w->bSubsample;
+}
+
+static GK_U32 mis2009_mode_line_rate(GK_U8 u8Mode)
+{
+    switch (u8Mode) {
+    case MIS2009_SENSOR_1080P_50FPS_LINEAR_MODE:
+        return MIS2009_LINE_RATE_50FPS;
+    case MIS2009_SENSOR_CROP_FLEX_LINEAR_MODE:
+        return MIS2009_LINE_RATE_FLEX;
+    case MIS2009_SENSOR_SUBSAMPLE_LINEAR_MODE:
+        return MIS2009_LINE_RATE_SUBSAMPLE;
+    default:
+        return MIS2009_LINE_RATE;
+    }
+}
+
+/* the shortest frame the rows read fit in */
+static GK_U32 mis2009_vmax_min(const MIS2009_WINDOW_S *w, GK_U8 u8Mode)
+{
+    if (u8Mode != MIS2009_SENSOR_CROP_FLEX_LINEAR_MODE && u8Mode != MIS2009_SENSOR_SUBSAMPLE_LINEAR_MODE) {
+        return MIS2009_VMAX_1080P30_LINEAR;
+    }
+    return (w->bSubsample ? w->u32Height / 2 : w->u32Height) + MIS2009_VBLANK;
+}
+
+static GK_U32 mis2009_mode_fps_max(VI_PIPE ViPipe, GK_U8 u8Mode)
+{
+    switch (u8Mode) {
+    case MIS2009_SENSOR_1080P_50FPS_LINEAR_MODE:
+        return MIS2009_FPS_MAX_50FPS;
+    case MIS2009_SENSOR_CROP_FLEX_LINEAR_MODE:
+    case MIS2009_SENSOR_SUBSAMPLE_LINEAR_MODE:
+        return mis2009_mode_line_rate(u8Mode) / mis2009_vmax_min(&g_astMis2009Window[ViPipe], u8Mode);
+    default:
+        return 30;
+    }
+}
 
 #define MIS2009_RES_IS_1080P(w, h) ((w) <= 1920 && (h) <= 1080)
 
@@ -152,7 +239,7 @@ static GK_S32 cmos_get_ae_default(VI_PIPE ViPipe, AE_SENSOR_DEFAULT_S *pstAeSnsD
     pstAeSnsDft->stAERouteAttrEx.u32TotalNum = 0;
 
     if (g_au32LinesPer500ms[ViPipe] == 0) {
-        pstAeSnsDft->u32LinesPer500ms = MIS2009_MODE_LINE_RATE(pstSnsState->u8ImgMode) / 2;
+        pstAeSnsDft->u32LinesPer500ms = mis2009_mode_line_rate(pstSnsState->u8ImgMode) / 2;
     } else {
         pstAeSnsDft->u32LinesPer500ms = g_au32LinesPer500ms[ViPipe];
     }
@@ -201,20 +288,21 @@ static GK_VOID cmos_set_vmax(ISP_SNS_STATE_S *pstSnsState, GK_U32 u32FullLines)
 static GK_VOID cmos_fps_set(VI_PIPE ViPipe, GK_FLOAT f32Fps, AE_SENSOR_DEFAULT_S *pstAeSnsDft)
 {
     ISP_SNS_STATE_S *pstSnsState = GK_NULL;
-    GK_U32 u32FullLines;
+    GK_U32 u32FullLines, u32VmaxMin;
 
     CMOS_CHECK_POINTER_VOID(pstAeSnsDft);
     MIS2009_SENSOR_GET_CTX(ViPipe, pstSnsState);
     CMOS_CHECK_POINTER_VOID(pstSnsState);
 
-    if ((f32Fps > MIS2009_MODE_FPS_MAX(pstSnsState->u8ImgMode)) || (f32Fps < 2.75)) {
+    if ((f32Fps > mis2009_mode_fps_max(ViPipe, pstSnsState->u8ImgMode)) || (f32Fps < 2.75)) {
         ISP_TRACE(MODULE_DBG_ERR, "Not support Fps: %f\n", f32Fps);
         return;
     }
 
-    u32FullLines = MIS2009_MODE_LINE_RATE(pstSnsState->u8ImgMode) / DIV_0_TO_1_FLOAT(f32Fps);
-    if (u32FullLines < MIS2009_VMAX_1080P30_LINEAR) { /* the shortest frame the 1080 rows fit in */
-        u32FullLines = MIS2009_VMAX_1080P30_LINEAR;
+    u32FullLines = mis2009_mode_line_rate(pstSnsState->u8ImgMode) / DIV_0_TO_1_FLOAT(f32Fps);
+    u32VmaxMin = mis2009_vmax_min(&g_astMis2009Window[ViPipe], pstSnsState->u8ImgMode);
+    if (u32FullLines < u32VmaxMin) {
+        u32FullLines = u32VmaxMin;
     }
     u32FullLines = MIN(u32FullLines, MIS2009_FULL_LINES_MAX_LINEAR);
 
@@ -460,7 +548,7 @@ static GK_VOID cmos_set_pixel_detect(VI_PIPE ViPipe, GK_BOOL bEnable)
     MIS2009_SENSOR_GET_CTX(ViPipe, pstSnsState);
     CMOS_CHECK_POINTER_VOID(pstSnsState);
 
-    u32FullLines_5Fps = MIS2009_MODE_LINE_RATE(pstSnsState->u8ImgMode) / 5;
+    u32FullLines_5Fps = mis2009_mode_line_rate(pstSnsState->u8ImgMode) / 5;
     u32MaxIntTime_5Fps = u32FullLines_5Fps - EXP_OFFSET_LINEAR;
 
     if (bEnable) { /* setup for ISP pixel calibration mode */
@@ -532,6 +620,8 @@ static GK_S32 cmos_get_sns_regs_info(VI_PIPE ViPipe, ISP_SNS_REGS_INFO_S *pstSns
 static GK_S32 cmos_set_image_mode(VI_PIPE ViPipe, ISP_CMOS_SENSOR_IMAGE_MODE_S *pstSensorImageMode)
 {
     ISP_SNS_STATE_S *pstSnsState = GK_NULL;
+    MIS2009_WINDOW_S stWindow;
+    GK_U32 u32FpsMax;
     GK_U8 u8Mode;
 
     CMOS_CHECK_POINTER(pstSensorImageMode);
@@ -540,21 +630,64 @@ static GK_S32 cmos_set_image_mode(VI_PIPE ViPipe, ISP_CMOS_SENSOR_IMAGE_MODE_S *
 
     pstSnsState->bSyncInit = GK_FALSE;
 
-    if ((pstSensorImageMode->f32Fps > MIS2009_FPS_MAX_50FPS) || (pstSnsState->enWDRMode != WDR_MODE_NONE) ||
+    if ((pstSnsState->enWDRMode != WDR_MODE_NONE) ||
         !MIS2009_RES_IS_1080P(pstSensorImageMode->u16Width, pstSensorImageMode->u16Height)) {
         MIS2009_ERR_MODE_PRINT(pstSensorImageMode, pstSnsState);
         return GK_FAILURE;
     }
 
-    u8Mode = (pstSensorImageMode->f32Fps > 30) ? MIS2009_SENSOR_1080P_50FPS_LINEAR_MODE
-                                                : MIS2009_SENSOR_1080P_30FPS_LINEAR_MODE;
-    if ((pstSnsState->bInit == GK_TRUE) && (pstSnsState->u8ImgMode == u8Mode)) {
+    stWindow = g_stMis2009Window1080p;
+    if (pstSensorImageMode->u8SnsMode == MIS2009_SNS_MODE_CROP) {
+        /* centred; the start column stays odd and the start row even, as in
+         * the 1080p window, so the colour filter phase is unchanged. The ISP
+         * expects exactly the size it asked for, so a size the window cannot
+         * produce is refused rather than rounded. */
+        GK_U32 u32W = pstSensorImageMode->u16Width;
+        GK_U32 u32H = pstSensorImageMode->u16Height;
+
+        if ((u32W % 8) || (u32H % 4) || u32W < MIS2009_CROP_W_MIN || u32H < MIS2009_CROP_H_MIN) {
+            ISP_TRACE(MODULE_DBG_ERR, "MIS2009 crop %ux%u: width must be a multiple of 8 and at least %u, "
+                      "height a multiple of 4 and at least %u\n",
+                      u32W, u32H, MIS2009_CROP_W_MIN, MIS2009_CROP_H_MIN);
+            return GK_FAILURE;
+        }
+        stWindow.u32Row += ((1080 - u32H) / 2) & ~1U;
+        stWindow.u32Col += ((1920 - u32W) / 2) & ~1U;
+        stWindow.u32Width = u32W;
+        stWindow.u32Height = u32H;
+        u8Mode = MIS2009_SENSOR_CROP_FLEX_LINEAR_MODE;
+    } else if (pstSensorImageMode->u8SnsMode == MIS2009_SNS_MODE_SUBSAMPLE) {
+        if (pstSensorImageMode->u16Width != 960 || pstSensorImageMode->u16Height != 540) {
+            MIS2009_ERR_MODE_PRINT(pstSensorImageMode, pstSnsState);
+            return GK_FAILURE;
+        }
+        /* subsampling reads columns and rows in pairs from a window whose
+         * start addresses end in binary 00 and end addresses in 11 */
+        stWindow.u32Col = 8;
+        stWindow.bSubsample = GK_TRUE;
+        u8Mode = MIS2009_SENSOR_SUBSAMPLE_LINEAR_MODE;
+    } else {
+        u8Mode = (pstSensorImageMode->f32Fps > 30) ? MIS2009_SENSOR_1080P_50FPS_LINEAR_MODE
+                                                    : MIS2009_SENSOR_1080P_30FPS_LINEAR_MODE;
+    }
+
+    u32FpsMax = (u8Mode == MIS2009_SENSOR_CROP_FLEX_LINEAR_MODE || u8Mode == MIS2009_SENSOR_SUBSAMPLE_LINEAR_MODE)
+                    ? mis2009_mode_line_rate(u8Mode) / mis2009_vmax_min(&stWindow, u8Mode)
+                    : MIS2009_FPS_MAX_50FPS;
+    if (pstSensorImageMode->f32Fps > u32FpsMax) {
+        MIS2009_ERR_MODE_PRINT(pstSensorImageMode, pstSnsState);
+        return GK_FAILURE;
+    }
+
+    if ((pstSnsState->bInit == GK_TRUE) && (pstSnsState->u8ImgMode == u8Mode) &&
+        !memcmp(&g_astMis2009Window[ViPipe], &stWindow, sizeof(stWindow))) {
         /* Don't need to switch SensorImageMode */
         return ISP_DO_NOT_NEED_SWITCH_IMAGEMODE;
     }
 
+    g_astMis2009Window[ViPipe] = stWindow;
     pstSnsState->u8ImgMode = u8Mode;
-    pstSnsState->u32FLStd = MIS2009_VMAX_1080P30_LINEAR;
+    pstSnsState->u32FLStd = mis2009_vmax_min(&stWindow, u8Mode);
     pstSnsState->au32FL[0] = pstSnsState->u32FLStd;
     pstSnsState->au32FL[1] = pstSnsState->u32FLStd;
 
@@ -586,11 +719,16 @@ static GK_S32 cmos_set_wdr_mode(VI_PIPE ViPipe, GK_U8 u8Mode)
  * The vendor mirrors and flips in VPSS and never touches the sensor. Here the
  * sensor does it, and each flipped axis moves the readout window by one pixel
  * so the colour filter phase the ISP is configured for stays put.
+ *
+ * Subsampled, flip works the same way, but mirror does not work at all: with
+ * the columns read in pairs, a mirrored readout is garbage at every window
+ * start tried (columns 5 to 12). The picture is left unmirrored instead.
  */
 static GK_VOID sensor_mirror_flip(VI_PIPE ViPipe, ISP_SNS_MIRRORFLIP_TYPE_E eSnsMirrorFlip)
 {
     ISP_SNS_STATE_S *pstSnsState = GK_NULL;
-    GK_U32 u32Row = 8, u32Col = 7; /* the vendor init table's window */
+    GK_U32 u32Row, u32Col, u32Width, u32Height;
+    GK_BOOL bSubsample;
     GK_U8 u8Value;
 
     MIS2009_SENSOR_GET_CTX(ViPipe, pstSnsState);
@@ -612,17 +750,22 @@ static GK_VOID sensor_mirror_flip(VI_PIPE ViPipe, ISP_SNS_MIRRORFLIP_TYPE_E eSns
     default:
         return;
     }
+    mis2009_get_window(ViPipe, &u32Row, &u32Col, &u32Width, &u32Height, &bSubsample);
+    if (bSubsample && (u8Value & 0x01)) {
+        ISP_TRACE(MODULE_DBG_ERR, "MIS2009: no mirror while subsampling; picture left unmirrored\n");
+        u8Value &= ~0x01;
+    }
     u32Col += (u8Value & 0x01) ? 1 : 0;
     u32Row += (u8Value & 0x02) ? 1 : 0;
 
     mis2009_write_register(ViPipe, MIS2009_WINDOW_ADDR + 0, HIGH_8BITS(u32Row));
     mis2009_write_register(ViPipe, MIS2009_WINDOW_ADDR + 1, LOW_8BITS(u32Row));
-    mis2009_write_register(ViPipe, MIS2009_WINDOW_ADDR + 2, HIGH_8BITS(u32Row + 1079));
-    mis2009_write_register(ViPipe, MIS2009_WINDOW_ADDR + 3, LOW_8BITS(u32Row + 1079));
+    mis2009_write_register(ViPipe, MIS2009_WINDOW_ADDR + 2, HIGH_8BITS(u32Row + u32Height - 1));
+    mis2009_write_register(ViPipe, MIS2009_WINDOW_ADDR + 3, LOW_8BITS(u32Row + u32Height - 1));
     mis2009_write_register(ViPipe, MIS2009_WINDOW_ADDR + 4, HIGH_8BITS(u32Col));
     mis2009_write_register(ViPipe, MIS2009_WINDOW_ADDR + 5, LOW_8BITS(u32Col));
-    mis2009_write_register(ViPipe, MIS2009_WINDOW_ADDR + 6, HIGH_8BITS(u32Col + 1919));
-    mis2009_write_register(ViPipe, MIS2009_WINDOW_ADDR + 7, LOW_8BITS(u32Col + 1919));
+    mis2009_write_register(ViPipe, MIS2009_WINDOW_ADDR + 6, HIGH_8BITS(u32Col + u32Width - 1));
+    mis2009_write_register(ViPipe, MIS2009_WINDOW_ADDR + 7, LOW_8BITS(u32Col + u32Width - 1));
     mis2009_write_register(ViPipe, MIS2009_FLIP_MIRROR_ADDR, u8Value);
 }
 
@@ -637,6 +780,7 @@ static GK_VOID sensor_global_init(VI_PIPE ViPipe)
     pstSnsState->bInit = GK_FALSE;
     pstSnsState->bSyncInit = GK_FALSE;
     pstSnsState->u8ImgMode = MIS2009_SENSOR_1080P_30FPS_LINEAR_MODE;
+    g_astMis2009Window[ViPipe] = g_stMis2009Window1080p;
     pstSnsState->enWDRMode = WDR_MODE_NONE;
     pstSnsState->u32FLStd = MIS2009_VMAX_1080P30_LINEAR;
     pstSnsState->au32FL[0] = MIS2009_VMAX_1080P30_LINEAR;
