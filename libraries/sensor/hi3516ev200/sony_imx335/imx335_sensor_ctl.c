@@ -808,7 +808,9 @@ void IMX335_cropped_flex_init(VI_PIPE ViPipe)
 	IMX335_write_register(ViPipe, 0x3030, vmax          & 0xFF);
 	IMX335_write_register(ViPipe, 0x3031, (vmax >> 8)   & 0xFF);
 	IMX335_write_register(ViPipe, 0x3032, (vmax >> 16)  & 0x0F);
-	IMX335_write_register(ViPipe, 0x3034, 0x6E);         /* HMAX from 1080p baseline */
+	/* HMAX 300 (IMX335_FLEX_HMAX in imx335_cmos.c, which derives the line
+	 * rate from it): clean down to 280, broken at 270 at any crop width */
+	IMX335_write_register(ViPipe, 0x3034, 0x2C);
 	IMX335_write_register(ViPipe, 0x3035, 0x01);
 
 	IMX335_write_register(ViPipe, 0x3056, y_out_size        & 0xFF);

@@ -36,7 +36,43 @@ Flexible-crop ceiling rises as crop shrinks; per-size points measured:
 | 800×480 @ 150 fps | 147 fps | 147 fps |
 
 Set `Isp_FrameRate` in the sensor INI to request a target rate; the driver
-clamps to the per-mode sensor ceiling.
+clamps to the per-mode sensor ceiling. The per-size points above were capped
+by the rate requested; the next table gives the ceilings.
+
+### Flexible crop: the line (HMAX)
+
+The flex crop used to inherit the 1080p crop's line, HMAX 366 (`0x016E`).
+It now uses 300, and the fps and AE line-rate constants derive from that
+value (`IMX335_FLEX_HMAX`). HMAX counts the 74.25 MHz internal clock, so 300
+is a 247500 lines/s line rate.
+
+Before, the fps-to-VMAX conversion assumed HMAX 366, and AE's
+`LinesPer500ms` was 1.47× too short even at 366, so AE's exposure times
+were off by that factor.
+
+Measured on `openipc-hi3516ev300` by rewriting HMAX live in the flex mode,
+`Isp_FrameRate=240`, slow shutter off. Each figure is the VENC `Send` rate;
+predicted sensor rates (74.25 MHz / (HMAX × VMAX)) are in brackets where
+delivery falls short of them:
+
+| Crop | HMAX 366 | HMAX 300 | HMAX 290 | HMAX 256 |
+|---|---|---|---|---|
+| 1920×1080 | 54 (sensor 88) | 54 | 54 | — |
+| 1280×720 | 121 (sensor 129) | 122 | 122 | — |
+| 800×480 | 186 | 227 | 235 | 168 (sensor 265), **picture corrupt** |
+| 480×352 | 218 | — | 300 | — |
+
+What the table shows:
+
+- **Where the limit is.** The picture is clean at HMAX 280 and above, and
+  breaks at 270 at every crop width tried (800 and 1920 wide alike): a
+  purple cast, column banding and noise. So the limit is the line's own
+  timing, not MIPI, which showed no CRC or ECC errors at any value.
+- **Why 300.** It keeps a margin to that limit.
+- **Where it helps.** Shortening the line only helps below about 720p. At
+  1280×720 and 1920×1080 the hi3516ev300's encode pipeline caps delivery
+  at about 121 and 54 fps, whatever the sensor does.
+- **What is not measured.** gk7205v300 has not been re-measured.
 
 ## IMX307 high-framerate modes (hi3516ev200 / gk7205v200)
 
