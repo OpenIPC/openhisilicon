@@ -3,6 +3,7 @@
 */
 
 #include <stdio.h>
+#include <string.h>
 #include <sys/types.h>
 #include <sys/stat.h>
 #include <sys/ioctl.h>
@@ -11,21 +12,8 @@
 #include "comm_video.h"
 #include "sns_ctrl.h"
 
-#ifdef GPIO_I2C
-#include "gpioi2c_ex.h"
-#else
-
-#ifdef __LITEOS__
+#include <linux/i2c.h>
 #include "i2c.h"
-#else
-#include "i2c.h"
-#endif
-#endif
-
-#define LOSCFG_HOST_TYPE_VENDOR
-#ifdef LOSCFG_HOST_TYPE_VENDOR
-#include <linux/fb.h>
-#endif
 
 const unsigned char mis2009_i2c_addr = 0x60; /* I2C Address of MIS2009 */
 const unsigned int mis2009_addr_byte = 2;
@@ -39,26 +27,17 @@ int mis2009_i2c_init(VI_PIPE ViPipe)
 {
 	char acDevFile[16] = { 0 };
 	GK_U8 u8DevNum;
+	int ret;
 
 	if (g_fd[ViPipe] >= 0) {
 		return GK_SUCCESS;
 	}
-#ifdef GPIO_I2C
-	int ret;
-
-	g_fd[ViPipe] = open("/dev/gpioi2c_ex", O_RDONLY, S_IRUSR);
-	if (g_fd[ViPipe] < 0) {
-		ISP_TRACE(MODULE_DBG_ERR, "Open gpioi2c_ex error!\n");
-		return GK_FAILURE;
-	}
-#else
-	int ret;
 
 	u8DevNum = g_aunMis2009BusInfo[ViPipe].s8I2cDev;
 	snprintf(acDevFile, sizeof(acDevFile), "/dev/i2c-%u", u8DevNum);
 	g_fd[ViPipe] = open(acDevFile, O_RDWR, S_IRUSR | S_IWUSR);
 	if (g_fd[ViPipe] < 0) {
-		ISP_TRACE(MODULE_DBG_ERR, "Open /dev/i2c_drv-%u error!\n", u8DevNum);
+		ISP_TRACE(MODULE_DBG_ERR, "Open /dev/i2c-%u error!\n", u8DevNum);
 		return GK_FAILURE;
 	}
 
@@ -67,9 +46,8 @@ int mis2009_i2c_init(VI_PIPE ViPipe)
 		ISP_TRACE(MODULE_DBG_ERR, "I2C_SLAVE_FORCE error!\n");
 		close(g_fd[ViPipe]);
 		g_fd[ViPipe] = -1;
-		return ret;
+		return GK_FAILURE;
 	}
-#endif
 
 	return GK_SUCCESS;
 }
@@ -89,120 +67,51 @@ struct i2c_rdwr_ioctl_data {
 	unsigned int nmsgs;
 };
 
+/* The register's value, or GK_FAILURE unless both messages went through. */
 int mis2009_read_register(VI_PIPE ViPipe, int addr)
 {
-	GK_S32 s32RegVal = 0;
+	GK_U8 aBuf[2] = { (addr >> 8) & 0xff, addr & 0xff };
+	struct i2c_msg astMsg[2];
+	struct i2c_rdwr_ioctl_data stRdwr;
 
 	if (g_fd[ViPipe] < 0) {
 		ISP_TRACE(MODULE_DBG_ERR, "mis2009_read_register fd not opened!\n");
 		return GK_FAILURE;
 	}
 
-	GK_S32 s32Ret = 0;
-	GK_U32 u32RegWidth = mis2009_addr_byte;
-	GK_U32 u32DataWidth = mis2009_data_byte;
-	GK_U8 aRecvbuf[4];
-
-#ifdef LOSCFG_HOST_TYPE_VENDOR
-	GK_U32 u32SnsI2cAddr = (mis2009_i2c_addr >> 1);
-	struct i2c_rdwr_ioctl_data stRdwr;
-	struct i2c_msg astMsg[2];
-	memset(&stRdwr, 0x0, sizeof(stRdwr));
-	memset(astMsg, 0x0, sizeof(astMsg));
-#endif
-
-	memset(aRecvbuf, 0x0, sizeof(aRecvbuf));
-
-#ifdef LOSCFG_HOST_TYPE_VENDOR
-	astMsg[0].addr = u32SnsI2cAddr;
-	astMsg[0].flags = 0;
-	astMsg[0].len = u32RegWidth;
-	astMsg[0].buf = aRecvbuf;
-
-	astMsg[1].addr = u32SnsI2cAddr;
-	astMsg[1].flags = 0;
-	astMsg[1].flags |= I2C_M_RD;
-	astMsg[1].len = u32DataWidth;
-	astMsg[1].buf = aRecvbuf;
-	stRdwr.msgs = &astMsg[0];
+	memset(astMsg, 0, sizeof(astMsg));
+	astMsg[0].addr = mis2009_i2c_addr >> 1;
+	astMsg[0].len = mis2009_addr_byte;
+	astMsg[0].buf = aBuf;
+	astMsg[1].addr = mis2009_i2c_addr >> 1;
+	astMsg[1].flags = I2C_M_RD;
+	astMsg[1].len = mis2009_data_byte;
+	astMsg[1].buf = aBuf;
+	stRdwr.msgs = astMsg;
 	stRdwr.nmsgs = 2;
-#endif
 
-#ifdef LOSCFG_HOST_TYPE_VENDOR
-	if (u32RegWidth == 2) {
-		aRecvbuf[0] = (addr >> 8) & 0xff;
-		aRecvbuf[1] = addr & 0xff;
-	} else {
-		aRecvbuf[0] = addr & 0xff;
-	}
-	s32Ret = ioctl(g_fd[ViPipe], I2C_RDWR, &stRdwr);
-#else
-	if (u32RegWidth == 2) {
-		aRecvbuf[0] = addr & 0xff;
-		aRecvbuf[1] = (addr >> 8) & 0xff;
-	} else {
-		aRecvbuf[0] = addr & 0xff;
-	}
-	s32Ret = read(g_fd[ViPipe], aRecvbuf, u32RegWidth + u32DataWidth);
-#endif
-
-	if (s32Ret < 0) {
+	if (ioctl(g_fd[ViPipe], I2C_RDWR, &stRdwr) != 2) {
+		ISP_TRACE(MODULE_DBG_ERR, "I2C_READ error!\n");
 		return GK_FAILURE;
 	}
 
-	if (u32DataWidth == 2) {
-		s32RegVal = aRecvbuf[0] | (aRecvbuf[1] << 8);
-	} else {
-		s32RegVal = aRecvbuf[0];
-	}
-
-	return s32RegVal;
+	return aBuf[0];
 }
 
 int mis2009_write_register(VI_PIPE ViPipe, int addr, int data)
 {
+	GK_U8 aBuf[3] = { (addr >> 8) & 0xff, addr & 0xff, data & 0xff };
+
 	if (g_fd[ViPipe] < 0) {
-		return GK_SUCCESS;
+		ISP_TRACE(MODULE_DBG_ERR, "mis2009_write_register fd not opened!\n");
+		return GK_FAILURE;
 	}
 
-#ifdef GPIO_I2C
-	i2c_data.dev_addr = mis2009_i2c_addr;
-	i2c_data.reg_addr = addr;
-	i2c_data.addr_byte_num = mis2009_addr_byte;
-	i2c_data.data = data;
-	i2c_data.data_byte_num = mis2009_data_byte;
-
-	ret = ioctl(g_fd[ViPipe], GPIO_I2C_WRITE, &i2c_data);
-	if (ret) {
-		ISP_TRACE(MODULE_DBG_ERR, "GPIO-I2C write faild!\n");
-		return ret;
-	}
-#else
-	int idx = 0;
-	int ret;
-	char buf[8];
-
-	if (mis2009_addr_byte == 2) {
-		buf[idx] = (addr >> 8) & 0xff;
-		idx++;
-		buf[idx] = addr & 0xff;
-		idx++;
-	} else {
-	}
-
-	if (mis2009_data_byte == 2) {
-	} else {
-		buf[idx] = data & 0xff;
-		idx++;
-	}
-
-	ret = write(g_fd[ViPipe], buf, mis2009_addr_byte + mis2009_data_byte);
-	if (ret < 0) {
+	if (write(g_fd[ViPipe], aBuf, sizeof(aBuf)) != (ssize_t)sizeof(aBuf)) {
 		ISP_TRACE(MODULE_DBG_ERR, "I2C_WRITE error!\n");
 		return GK_FAILURE;
 	}
 
-#endif
 	return GK_SUCCESS;
 }
 
@@ -416,7 +325,10 @@ void mis2009_init(VI_PIPE ViPipe)
 	GK_U8 u8ImgMode;
 
 	u8ImgMode = g_pastMis2009[ViPipe]->u8ImgMode;
-	mis2009_i2c_init(ViPipe);
+	if (mis2009_i2c_init(ViPipe) != GK_SUCCESS) {
+		ISP_TRACE(MODULE_DBG_ERR, "MIS2009: no I2C bus, sensor not initialised\n");
+		return;
+	}
 	switch (u8ImgMode) {
 	case MIS2009_SENSOR_1080P_30FPS_LINEAR_MODE:
 		mis2009_linear_1080p30_init(ViPipe);
