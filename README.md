@@ -256,70 +256,9 @@ sensor driver found online came from — see
 
 Each sensor has `.so` (shared) and `.a` (static) library builds. The goal is to eventually unify sensor drivers across platforms where the same sensor model is used.
 
-### IMX335 high-framerate modes (hi3516ev200 only)
-
-Encoded fps delivered by VENC (`/proc/umap/venc` `VENC SEND1` `Send`
-counter, delta over 8 s after a 6 s warm-up), measured side-by-side on
-`openipc-hi3516ev300` and `openipc-gk7205v300` with identical sensor INI
-and majestic config (4 Mbps, `video0.size = 1920x1080` for high-res
-4:3 / 16:9 sensor modes — the typical IP-cam streaming target — and
-sensor-crop-native for smaller modes; VPSS handles the downscale and
-center-crops 4:3 sensors when streaming 16:9). H.264 and H.265 produce
-identical fps in every mode at this bitrate (verified codec-by-codec on
-both boards); the encoder is not the bottleneck.
-
-| Mode | Sensor crop | hi3516ev300 | gk7205v300 | Selected by |
-|------|-------------|------------|------------|-------------|
-| Stock full-scale | 2592×1944 | 30 fps | 30 fps | `DevRect_w=2592 DevRect_h=1944` (default) |
-| Cropped 16:9 | 2592×1520 | 49 fps | 45 fps | `DevRect_w=2592 DevRect_h=1520` |
-| Binning | 1296×972 | 64 fps | 64 fps | `DevRect_w=1296 DevRect_h=972` |
-| Cropped 1.5x zoom | 1920×1080 | 55 fps | 55 fps | `DevRect_w=1920 DevRect_h=1080` |
-| Boost-1944p | 2592×1944 | 39 fps (`Isp_FrameRate=45`) | 31 fps (`Isp_FrameRate=36`) | `Isp_SnsMode=6` |
-| Flexible crop | arbitrary W×H | up to **147 fps** at 800×480 | up to **147 fps** at 800×480 | `Isp_SnsMode=4` + `Isp_W=...` + `Isp_H=...` |
-
-Flexible-crop ceiling rises as crop shrinks; per-size points measured:
-
-| Flex crop W×H | hi3516ev300 | gk7205v300 |
-|---|---|---|
-| 1280×720 @ 100 fps | 98 fps | 98 fps |
-| 1024×576 @ 120 fps | 118 fps | 118 fps |
-| 800×480 @ 130 fps | 128 fps | 128 fps |
-| 800×480 @ 150 fps | 147 fps | 147 fps |
-
-Set `Isp_FrameRate` in the sensor INI to request a target rate; the driver
-clamps to the per-mode sensor ceiling.
-
-### IMX307 high-framerate modes (hi3516ev200 / gk7205v200)
-
-Wire fps from VENC `Send` counter (5 s window, h.265 @ 4 Mbps wire) on
-`openipc-gk7205v200` with the `sony_imx307_2L` driver (2-lane MIPI
-CSI-2). `Isp_SnsMode` dispatch follows the same IMX335 PR #99 pattern
-(`u8SnsMode=4` → window crop, programmable W×H). Register values
-verified against Sony IMX307LQD-C datasheet pp.49 / 54-58 / 60-65 /
-66-68. The 4-lane variant (`sony_imx307`) carries the same dispatch
-infrastructure with MIPI D-PHY timings from the datasheet's "4-Lane"
-columns — not yet validated on real hardware.
-
-| Mode | Sensor crop | Wire fps | Encoder ceiling | Selected by |
-|------|-------------|----------|------------------|-------------|
-| Stock 1080p | 1920×1080 | 30 fps | — | (default) |
-| 1080p60 boost | 1920×1080 | 44 fps | **44** (encoder-bound) | `Isp_FrameRate=60` |
-| 720p60 sub-readout | 1280×720 | 60 fps | 60 (sensor PHY tier) | `Isp_SnsMode=1` |
-| 720p flex | 1280×720 | up to **91 fps** | 91 (encoder-bound) | `Isp_SnsMode=4` + `Isp_W=1280 Isp_H=720` |
-| VGA flex | 640×480 | up to **130 fps** | 130 (encoder-bound) | `Isp_SnsMode=4` + `Isp_W=640 Isp_H=480` |
-| CIF flex | 368×304 | up to **200 fps** | 200-219 (encoder-bound) | `Isp_SnsMode=4` + `Isp_W=368 Isp_H=304` |
-
-Lower bound on flex-crop dimensions is 368×304 (datasheet WINMODE=4h
-constraint: WINWH ≥ 368 mult-of-4, WINWV ≥ 304). At 1080p the encoder
-caps wire fps regardless of sensor rate; sub-1080p resolutions lift
-the ceiling roughly with the reciprocal of pixel count, until either
-the encoder hits a per-frame budget or the sensor reaches its own
-VMAX-floor at the requested crop.
-
-gk7205v200 requires `clock=37.125MHz` in the INI's `[mode]` section
-(vendor blob defaults to 27 MHz INCK; without the override the
-delivered rate is ~73% of nominal). Same gotcha applies to IMX335
-high-fps presets on the gk side.
+Some sensors have modes faster than the vendor driver's (IMX335, IMX307,
+MIS2009); [docs/high-framerate-modes.md](docs/high-framerate-modes.md) lists
+them with measured frame rates.
 
 ## Kernel modules
 

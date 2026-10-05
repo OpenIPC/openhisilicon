@@ -128,6 +128,7 @@ void mis2009_restart(VI_PIPE ViPipe)
 }
 
 #define MIS2009_SENSOR_1080P_30FPS_LINEAR_MODE (1)
+#define MIS2009_SENSOR_1080P_50FPS_LINEAR_MODE (2)
 
 /*
  * 1920x1080 RAW10 linear, 30 fps from a 27 MHz clock, 2-lane MIPI: the
@@ -310,14 +311,46 @@ void mis2009_default_reg_init(VI_PIPE ViPipe)
 	}
 }
 
-static void mis2009_linear_1080p30_init(VI_PIPE ViPipe)
+/*
+ * 1080p up to 51 fps: the 30 fps table with the PLL raised from 756 to
+ * 1296 MHz (FBDIV 28 -> 48). The line stays 2240 PCLK, so the timing
+ * generator's 0x39xx table, counted in ACLK cycles, still fits it unchanged;
+ * PCLK 129.6 MHz, 57857 lines per second, MIPI 648 Mbps per lane.
+ *
+ * The datasheet's own 1080p60 row (FBDIV 55, VCO 1485 MHz, line 2154) streams
+ * at 61 fps on this part, but bright pixels come out dark with a coloured
+ * fringe -- measured: clean up to VCO 1296, a few at 1404, dozens a frame at
+ * 1485, at any line length and any ACLK divider. TSDIV/CPDIV are that row's.
+ */
+static const struct {
+	GK_U16 u16Addr;
+	GK_U8 u8Slow; /* what the 30 fps table leaves: reset values, read back from a sensor */
+	GK_U8 u8Fast;
+} g_astMis2009Pll[] = {
+	{ 0x3300, 0x1c, 0x30 }, /* FBDIV: VCO 27 MHz x 28 = 756 MHz, x 48 = 1296 MHz */
+	{ 0x330f, 0x0f, 0x12 }, /* TSDIV 15, 18 */
+	{ 0x3310, 0x02, 0x06 }, /* CPDIV 2, 6 */
+	{ 0x3c01, 0x09, 0x05 }, /* MIPI clk_period: 4x the bit clock period in ns, rounded down */
+};
+
+static void mis2009_linear_1080p_init(VI_PIPE ViPipe, GK_BOOL bFast)
 {
+	const GK_U32 n = sizeof(g_astMis2009Linear1080p30) / sizeof(g_astMis2009Linear1080p30[0]);
 	GK_U32 i;
 
-	for (i = 0; i < sizeof(g_astMis2009Linear1080p30) / sizeof(g_astMis2009Linear1080p30[0]); i++) {
+	/* the table's last entry takes the sensor out of standby; the PLL goes in
+	 * before it, written either way -- the 30 fps table leaves CPDIV and the
+	 * MIPI clock period at their reset values, so a sensor coming back from the
+	 * faster mode without a reset would otherwise keep the faster ones */
+	for (i = 0; i < n - 1; i++) {
 		mis2009_write_register(ViPipe, g_astMis2009Linear1080p30[i].u16Addr, g_astMis2009Linear1080p30[i].u8Data);
 	}
-	printf("===MIS2009 1080P 30fps 10bit LINE Init OK!===\n");
+	for (i = 0; i < sizeof(g_astMis2009Pll) / sizeof(g_astMis2009Pll[0]); i++) {
+		mis2009_write_register(ViPipe, g_astMis2009Pll[i].u16Addr,
+				       bFast ? g_astMis2009Pll[i].u8Fast : g_astMis2009Pll[i].u8Slow);
+	}
+	mis2009_write_register(ViPipe, g_astMis2009Linear1080p30[n - 1].u16Addr, g_astMis2009Linear1080p30[n - 1].u8Data);
+	printf("===MIS2009 1080P %dfps 10bit LINE Init OK!===\n", bFast ? 50 : 30);
 }
 
 void mis2009_init(VI_PIPE ViPipe)
@@ -331,7 +364,10 @@ void mis2009_init(VI_PIPE ViPipe)
 	}
 	switch (u8ImgMode) {
 	case MIS2009_SENSOR_1080P_30FPS_LINEAR_MODE:
-		mis2009_linear_1080p30_init(ViPipe);
+		mis2009_linear_1080p_init(ViPipe, GK_FALSE);
+		break;
+	case MIS2009_SENSOR_1080P_50FPS_LINEAR_MODE:
+		mis2009_linear_1080p_init(ViPipe, GK_TRUE);
 		break;
 	default:
 		ISP_TRACE(MODULE_DBG_ERR, "Not Support Image Mode %d\n", u8ImgMode);

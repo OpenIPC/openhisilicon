@@ -86,6 +86,8 @@ enum {
 
 #define MIS2009_VMAX_1080P30_LINEAR (1126)
 #define MIS2009_LINE_RATE (33780) /* lines per second: VMAX = MIS2009_LINE_RATE / fps */
+#define MIS2009_LINE_RATE_50FPS (57857) /* the same, with the PLL at 1296 MHz: 129.6 MHz / 2240 */
+#define MIS2009_FPS_MAX_50FPS (51) /* MIS2009_LINE_RATE_50FPS / MIS2009_VMAX_1080P30_LINEAR */
 #define EXP_OFFSET_LINEAR (2)
 #define MIS2009_INTTIME_TARGET_MAX (1978)
 #define MIS2009_INIT_EXPOSURE (148859)
@@ -96,8 +98,13 @@ enum {
 #define MIS2009_INTTIME_SHORT (150)
 #define MIS2009_INTTIME_VMAX_MARGIN (200)
 
-//sensor fps mode
+//sensor fps mode: Isp_FrameRate above 30 selects the faster PLL
 #define MIS2009_SENSOR_1080P_30FPS_LINEAR_MODE (1)
+#define MIS2009_SENSOR_1080P_50FPS_LINEAR_MODE (2)
+
+#define MIS2009_MODE_LINE_RATE(mode) \
+    ((mode) == MIS2009_SENSOR_1080P_50FPS_LINEAR_MODE ? MIS2009_LINE_RATE_50FPS : MIS2009_LINE_RATE)
+#define MIS2009_MODE_FPS_MAX(mode) ((mode) == MIS2009_SENSOR_1080P_50FPS_LINEAR_MODE ? MIS2009_FPS_MAX_50FPS : 30)
 
 #define MIS2009_RES_IS_1080P(w, h) ((w) <= 1920 && (h) <= 1080)
 
@@ -145,7 +152,7 @@ static GK_S32 cmos_get_ae_default(VI_PIPE ViPipe, AE_SENSOR_DEFAULT_S *pstAeSnsD
     pstAeSnsDft->stAERouteAttrEx.u32TotalNum = 0;
 
     if (g_au32LinesPer500ms[ViPipe] == 0) {
-        pstAeSnsDft->u32LinesPer500ms = pstSnsState->u32FLStd * 30 / 2;
+        pstAeSnsDft->u32LinesPer500ms = MIS2009_MODE_LINE_RATE(pstSnsState->u8ImgMode) / 2;
     } else {
         pstAeSnsDft->u32LinesPer500ms = g_au32LinesPer500ms[ViPipe];
     }
@@ -200,16 +207,15 @@ static GK_VOID cmos_fps_set(VI_PIPE ViPipe, GK_FLOAT f32Fps, AE_SENSOR_DEFAULT_S
     MIS2009_SENSOR_GET_CTX(ViPipe, pstSnsState);
     CMOS_CHECK_POINTER_VOID(pstSnsState);
 
-    if (pstSnsState->u8ImgMode != MIS2009_SENSOR_1080P_30FPS_LINEAR_MODE) {
-        ISP_TRACE(MODULE_DBG_ERR, "Not support this Mode\n");
-        return;
-    }
-    if ((f32Fps > 30) || (f32Fps < 2.75)) {
+    if ((f32Fps > MIS2009_MODE_FPS_MAX(pstSnsState->u8ImgMode)) || (f32Fps < 2.75)) {
         ISP_TRACE(MODULE_DBG_ERR, "Not support Fps: %f\n", f32Fps);
         return;
     }
 
-    u32FullLines = MIS2009_LINE_RATE / DIV_0_TO_1_FLOAT(f32Fps);
+    u32FullLines = MIS2009_MODE_LINE_RATE(pstSnsState->u8ImgMode) / DIV_0_TO_1_FLOAT(f32Fps);
+    if (u32FullLines < MIS2009_VMAX_1080P30_LINEAR) { /* the shortest frame the 1080 rows fit in */
+        u32FullLines = MIS2009_VMAX_1080P30_LINEAR;
+    }
     u32FullLines = MIN(u32FullLines, MIS2009_FULL_LINES_MAX_LINEAR);
 
     pstSnsState->u32FLStd = u32FullLines;
@@ -454,11 +460,7 @@ static GK_VOID cmos_set_pixel_detect(VI_PIPE ViPipe, GK_BOOL bEnable)
     MIS2009_SENSOR_GET_CTX(ViPipe, pstSnsState);
     CMOS_CHECK_POINTER_VOID(pstSnsState);
 
-    if (MIS2009_SENSOR_1080P_30FPS_LINEAR_MODE != pstSnsState->u8ImgMode) {
-        return;
-    }
-
-    u32FullLines_5Fps = MIS2009_LINE_RATE / 5;
+    u32FullLines_5Fps = MIS2009_MODE_LINE_RATE(pstSnsState->u8ImgMode) / 5;
     u32MaxIntTime_5Fps = u32FullLines_5Fps - EXP_OFFSET_LINEAR;
 
     if (bEnable) { /* setup for ISP pixel calibration mode */
@@ -530,6 +532,7 @@ static GK_S32 cmos_get_sns_regs_info(VI_PIPE ViPipe, ISP_SNS_REGS_INFO_S *pstSns
 static GK_S32 cmos_set_image_mode(VI_PIPE ViPipe, ISP_CMOS_SENSOR_IMAGE_MODE_S *pstSensorImageMode)
 {
     ISP_SNS_STATE_S *pstSnsState = GK_NULL;
+    GK_U8 u8Mode;
 
     CMOS_CHECK_POINTER(pstSensorImageMode);
     MIS2009_SENSOR_GET_CTX(ViPipe, pstSnsState);
@@ -537,18 +540,20 @@ static GK_S32 cmos_set_image_mode(VI_PIPE ViPipe, ISP_CMOS_SENSOR_IMAGE_MODE_S *
 
     pstSnsState->bSyncInit = GK_FALSE;
 
-    if ((pstSensorImageMode->f32Fps > 30) || (pstSnsState->enWDRMode != WDR_MODE_NONE) ||
+    if ((pstSensorImageMode->f32Fps > MIS2009_FPS_MAX_50FPS) || (pstSnsState->enWDRMode != WDR_MODE_NONE) ||
         !MIS2009_RES_IS_1080P(pstSensorImageMode->u16Width, pstSensorImageMode->u16Height)) {
         MIS2009_ERR_MODE_PRINT(pstSensorImageMode, pstSnsState);
         return GK_FAILURE;
     }
 
-    if ((pstSnsState->bInit == GK_TRUE) && (pstSnsState->u8ImgMode == MIS2009_SENSOR_1080P_30FPS_LINEAR_MODE)) {
+    u8Mode = (pstSensorImageMode->f32Fps > 30) ? MIS2009_SENSOR_1080P_50FPS_LINEAR_MODE
+                                                : MIS2009_SENSOR_1080P_30FPS_LINEAR_MODE;
+    if ((pstSnsState->bInit == GK_TRUE) && (pstSnsState->u8ImgMode == u8Mode)) {
         /* Don't need to switch SensorImageMode */
         return ISP_DO_NOT_NEED_SWITCH_IMAGEMODE;
     }
 
-    pstSnsState->u8ImgMode = MIS2009_SENSOR_1080P_30FPS_LINEAR_MODE;
+    pstSnsState->u8ImgMode = u8Mode;
     pstSnsState->u32FLStd = MIS2009_VMAX_1080P30_LINEAR;
     pstSnsState->au32FL[0] = pstSnsState->u32FLStd;
     pstSnsState->au32FL[1] = pstSnsState->u32FLStd;
