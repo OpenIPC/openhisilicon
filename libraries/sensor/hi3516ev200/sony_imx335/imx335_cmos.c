@@ -496,9 +496,7 @@ static GK_VOID cmos_fps_set(VI_PIPE ViPipe, GK_FLOAT f32Fps,
 				vmax_min = (ch + 20) * 2 + 96;
 				if (u32Lines < vmax_min) u32Lines = vmax_min;
 			}
-			/* the line rate itself: AE turns exposure lines into time with it */
-			pstAeSnsDft->u32LinesPer500ms = IMX335_FLEX_LINE_RATE / 2;
-			pstSnsState->u32FLStd = u32Lines;
+			pstSnsState->u32FLStd = u32Lines; /* AE's timing: see the end of this function */
 		} else {
 			ISP_TRACE(MODULE_DBG_ERR, "Not support Fps FLEX: %f\n", f32Fps);
 			return;
@@ -673,6 +671,13 @@ static GK_VOID cmos_fps_set(VI_PIPE ViPipe, GK_FLOAT f32Fps,
 	 * u32FLStd, so this is the last place it can be made honest. */
 	pstSnsState->u32FLStd = imx335_clamp_full_lines(pstSnsState->u32FLStd);
 
+	/* The flex crop's line is known outright, and its frame may be clamped
+	 * longer than the rate asked for allows: the rate AE is told, and the line
+	 * it converts exposure with, come from the line, not from the request. */
+	if (IMX335_CROP_FLEX_LINEAR_MODE == pstSnsState->u8ImgMode) {
+		f32Fps = (GK_FLOAT)IMX335_FLEX_LINE_RATE / DIV_0_TO_1_FLOAT(pstSnsState->u32FLStd);
+	}
+
 	pstAeSnsDft->f32Fps = f32Fps;
 	gu32STimeFps = (GK_U32)f32Fps;
 	pstAeSnsDft->u32LinesPer500ms = pstSnsState->u32FLStd * f32Fps / 2;
@@ -683,6 +688,10 @@ static GK_VOID cmos_fps_set(VI_PIPE ViPipe, GK_FLOAT f32Fps,
 	pstAeSnsDft->u32FullLines = pstSnsState->au32FL[0];
 	pstAeSnsDft->u32HmaxTimes =
 		(1000000) / (pstSnsState->u32FLStd * DIV_0_TO_1_FLOAT(f32Fps));
+	if (IMX335_CROP_FLEX_LINEAR_MODE == pstSnsState->u8ImgMode) {
+		pstAeSnsDft->u32LinesPer500ms = IMX335_FLEX_LINE_RATE / 2;
+		pstAeSnsDft->u32HmaxTimes = 1000000 / IMX335_FLEX_LINE_RATE;
+	}
 
 	return;
 }
