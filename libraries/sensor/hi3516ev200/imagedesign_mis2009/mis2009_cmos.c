@@ -103,7 +103,7 @@ enum {
  * sensor INI's Isp_SnsMode selects the other two, at the size its DevRect
  * gives:
  *   4  a centred crop of any size up to 1920x1080 (as sony_imx335's mode 4)
- *   5  the full field 2x2-subsampled to 960x540 -- the profile says RGGB,
+ *   5  the full field 2x2-subsampled to exactly 960x540 -- the profile says RGGB,
  *      since subsampling needs a window that starts one column right of the
  *      full-resolution one
  * Both run the faster PLL. The crop's line is 2154 PCLK, 16.6 us, as short
@@ -124,8 +124,11 @@ enum {
  * flow at 2272; 2400 keeps a margin. 129.6 MHz / 2400. */
 #define MIS2009_LINE_RATE_SUBSAMPLE (54000)
 #define MIS2009_VBLANK (46)             /* MIS2009_VMAX_1080P30_LINEAR - 1080 */
-#define MIS2009_CROP_W_MIN (128)
-#define MIS2009_CROP_H_MIN (128)
+/* the smallest crop measured to stream with the ISP's AE and AF statistics:
+ * below 256 wide the ISP refuses their configuration, and 160x128 gives no
+ * frames at all */
+#define MIS2009_CROP_W_MIN (256)
+#define MIS2009_CROP_H_MIN (144)
 
 /* the readout window: full-resolution rows and columns, before subsampling */
 typedef struct {
@@ -636,19 +639,25 @@ static GK_S32 cmos_set_image_mode(VI_PIPE ViPipe, ISP_CMOS_SENSOR_IMAGE_MODE_S *
     stWindow = g_stMis2009Window1080p;
     if (pstSensorImageMode->u8SnsMode == MIS2009_SNS_MODE_CROP) {
         /* centred; the start column stays odd and the start row even, as in
-         * the 1080p window, so the colour filter phase is unchanged */
-        GK_U32 u32W = pstSensorImageMode->u16Width & ~7U;
-        GK_U32 u32H = pstSensorImageMode->u16Height & ~3U;
+         * the 1080p window, so the colour filter phase is unchanged. The ISP
+         * expects exactly the size it asked for, so a size the window cannot
+         * produce is refused rather than rounded. */
+        GK_U32 u32W = pstSensorImageMode->u16Width;
+        GK_U32 u32H = pstSensorImageMode->u16Height;
 
-        u32W = (u32W < MIS2009_CROP_W_MIN) ? MIS2009_CROP_W_MIN : u32W;
-        u32H = (u32H < MIS2009_CROP_H_MIN) ? MIS2009_CROP_H_MIN : u32H;
+        if ((u32W % 8) || (u32H % 4) || u32W < MIS2009_CROP_W_MIN || u32H < MIS2009_CROP_H_MIN) {
+            ISP_TRACE(MODULE_DBG_ERR, "MIS2009 crop %ux%u: width must be a multiple of 8 and at least %u, "
+                      "height a multiple of 4 and at least %u\n",
+                      u32W, u32H, MIS2009_CROP_W_MIN, MIS2009_CROP_H_MIN);
+            return GK_FAILURE;
+        }
         stWindow.u32Row += ((1080 - u32H) / 2) & ~1U;
         stWindow.u32Col += ((1920 - u32W) / 2) & ~1U;
         stWindow.u32Width = u32W;
         stWindow.u32Height = u32H;
         u8Mode = MIS2009_SENSOR_CROP_FLEX_LINEAR_MODE;
     } else if (pstSensorImageMode->u8SnsMode == MIS2009_SNS_MODE_SUBSAMPLE) {
-        if (pstSensorImageMode->u16Width > 960 || pstSensorImageMode->u16Height > 540) {
+        if (pstSensorImageMode->u16Width != 960 || pstSensorImageMode->u16Height != 540) {
             MIS2009_ERR_MODE_PRINT(pstSensorImageMode, pstSnsState);
             return GK_FAILURE;
         }

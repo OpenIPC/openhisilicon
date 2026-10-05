@@ -394,6 +394,14 @@ static void mis2009_linear_1080p_init(VI_PIPE ViPipe, GK_BOOL bFast, GK_BOOL bWi
 	}
 	if (bWindow) {
 		mis2009_window_init(ViPipe);
+	} else {
+		/* the MIPI frame size the 1080p table leaves at its reset value; a
+		 * crop or subsampled mode before this one, without a sensor reset,
+		 * would otherwise leave its own */
+		mis2009_write_register(ViPipe, 0x3c24, 0x07); /* 1920 */
+		mis2009_write_register(ViPipe, 0x3c25, 0x80);
+		mis2009_write_register(ViPipe, 0x3c26, 0x04); /* 1080 */
+		mis2009_write_register(ViPipe, 0x3c27, 0x38);
 	}
 	mis2009_write_register(ViPipe, g_astMis2009Linear1080p30[n - 1].u16Addr, g_astMis2009Linear1080p30[n - 1].u8Data);
 	if (!bWindow) {
