@@ -97,12 +97,82 @@ same scene, line 2154:
 | fps | 31 | 40 | 45 | 49 | 54 | 58 | 61 |
 | speckles | 2–3 | 3 | 3 | 2–3 | 1–7 | 6 | 26–30 |
 
-The speckles track the VCO, not the frame rate: VCO 1485 at a 30 fps line
-is worse still, and neither a longer line, a slower ACLK nor the PLL trim
-registers (0x3304–0x3309) clear them. A line shorter than the active width
-stops the stream, so ~61 fps is the sensor's 1080p ceiling.
+The speckles track the pixel clock, not the VCO or the frame rate:
+
+- **Not the VCO.** With FRANGE1 1 and the vendor's own VCO of 756 MHz,
+  PCLK is 151.2 MHz, and the picture speckles just the same (10–21 a frame
+  at a 2154 line, 13–21 with ACLK slowed to 252 MHz and the line
+  lengthened to 2560).
+- **Not the frame rate.** VCO 1485 at a 30 fps line is worse still.
+- **Not the trims.** Neither a longer line, a slower ACLK nor the PLL trim
+  registers (0x3304–0x3309) clear them.
+
+Clean runs reach PCLK 129.6 MHz; 140 MHz already speckles. In RAW10 over two
+lanes the MIPI bit clock is always 5× PCLK, so these runs cannot tell the
+two apart. A line shorter than the active width stops the stream, so 1080p
+is held to about 54 fps by the clean PCLK, whatever the input clock.
 
 The encoder is not the limit at 1080p: VENC takes 61 fps from one channel.
-With a second VPSS channel, VPSS is: at a 50 fps sensor rate, a second
-channel tops out at ~33 fps at any size from 704×576 to 1920×1080, while
-1080p50 plus a 25 or 30 fps sub-stream holds both rates.
+
+### Crop and subsampled modes
+
+Selected by `Isp_SnsMode` in the sensor INI, at the size its `DevRect` gives:
+
+- **`Isp_SnsMode=4` (crop):** a centred crop of any size up to
+  1920×1080, keeping the colour filter phase (GRBG).
+- **`Isp_SnsMode=5` (subsampled):** the full field read 2×2-subsampled to
+  960×540. The window has to start one column further right, so the
+  profile says `Isp_Bayer=BAYER_RGGB`.
+
+Both modes run the 1080p50 PLL (PCLK 129.6 MHz), and the frame is the rows
+read plus the vendor's 46 lines of blanking.
+
+| Mode | Line | Line rate | Frame rate |
+|---|---|---|---|
+| Crop (4) | 2154 PCLK | 60167 lines/s | 60167 / (H + 46) |
+| Subsampled (5) | 2400 PCLK | 54000 lines/s | 54000 / 586 |
+
+Why those lines:
+
+- **Crop: 2154 PCLK.** The timing generator needs about 4270 ACLK cycles
+  a line; 4000 breaks the picture. 2154 PCLK is 4308 cycles.
+- **Subsampled: 2400 PCLK.** Frames stop at 2240 PCLK on this PLL and flow
+  at 2272; 2400 keeps a margin.
+
+Measured with `Isp_FrameRate` at each mode's ceiling and slow shutter off.
+In a dim scene, AE's slow shutter lengthens the frame and the rate falls
+below these. MIPI CRC/ECC errors were 0 in every run, and no frame
+speckled:
+
+| Mode | Size | Ceiling | Delivered |
+|---|---|---|---|
+| crop | 1920×1080 | 53 | 53.0 |
+| crop | 1600×900 | 63 | 63.1 |
+| crop | 1280×720 | 78 | 78.2 |
+| crop | 1024×576 | 96 | 96.4 |
+| crop | 800×480 | 114 | 114.4 |
+| crop | 640×360 | 148 | 149.0 |
+| crop | 320×240 | 210 | 211.1 |
+| crop | 320×180 | 233 | 231.8 |
+| crop | 256×144 | 240 | 240.8 |
+| subsampled | 960×540, full field | 92 | 92.2 |
+
+Limits found along the way:
+
+- **Minimum width.** Below 256 wide the ISP refuses its AE/AF statistics
+  configuration. 192×160 streams but without them; 160×128 produces no
+  frames at all.
+- **Exposure.** The driver tells AE each mode's frame length. Without that,
+  AE asks for an exposure longer than the frame and the sensor outputs
+  black.
+- **Mirror and flip.** Both work in the crop, which moves its window by one
+  pixel as the 1080p modes do. Subsampled, flip works but mirror does not:
+  with the columns read in pairs, a mirrored readout is garbage at every
+  window start tried (columns 5 to 12). The driver leaves the picture
+  unmirrored there and logs it.
+
+### Two streams
+
+A second stream from the same VPSS group is bounded by what the pipeline
+carries in all, about 80 frames of 1080p a second (166 Mpix/s): two 1080p
+streams at 50 come out at 42 and 41.

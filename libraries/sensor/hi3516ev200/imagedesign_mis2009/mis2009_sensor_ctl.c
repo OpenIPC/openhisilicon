@@ -129,6 +129,11 @@ void mis2009_restart(VI_PIPE ViPipe)
 
 #define MIS2009_SENSOR_1080P_30FPS_LINEAR_MODE (1)
 #define MIS2009_SENSOR_1080P_50FPS_LINEAR_MODE (2)
+#define MIS2009_SENSOR_CROP_FLEX_LINEAR_MODE (3)
+#define MIS2009_SENSOR_SUBSAMPLE_LINEAR_MODE (4)
+
+extern GK_VOID mis2009_get_window(VI_PIPE ViPipe, GK_U32 *pu32Row, GK_U32 *pu32Col, GK_U32 *pu32Width,
+				  GK_U32 *pu32Height, GK_BOOL *pbSubsample);
 
 /*
  * 1920x1080 RAW10 linear, 30 fps from a 27 MHz clock, 2-lane MIPI: the
@@ -333,7 +338,45 @@ static const struct {
 	{ 0x3c01, 0x09, 0x05 }, /* MIPI clk_period: 4x the bit clock period in ns, rounded down */
 };
 
-static void mis2009_linear_1080p_init(VI_PIPE ViPipe, GK_BOOL bFast)
+/*
+ * The crop and subsampled modes: the faster PLL, a 2154-PCLK line (16.6 us,
+ * 4308 ACLK cycles -- the timing generator needs about 4270; subsampling needs
+ * 2272, and gets 2400) and the window,
+ * MIPI frame size and subsampling for the size asked for. Written while the
+ * sensor is still in standby.
+ */
+static void mis2009_window_init(VI_PIPE ViPipe)
+{
+	GK_U32 u32Row, u32Col, u32Width, u32Height, u32OutW, u32OutH;
+	GK_U32 u32Vmax = g_pastMis2009[ViPipe]->u32FLStd;
+	GK_BOOL bSubsample;
+
+	mis2009_get_window(ViPipe, &u32Row, &u32Col, &u32Width, &u32Height, &bSubsample);
+	u32OutW = bSubsample ? u32Width / 2 : u32Width;
+	u32OutH = bSubsample ? u32Height / 2 : u32Height;
+
+	mis2009_write_register(ViPipe, 0x3013, bSubsample ? 0x03 : 0x00); /* SUBSAMPLING_V | _H */
+	mis2009_write_register(ViPipe, 0x3204, (u32Row >> 8) & 0x07);
+	mis2009_write_register(ViPipe, 0x3205, u32Row & 0xff);
+	mis2009_write_register(ViPipe, 0x3206, ((u32Row + u32Height - 1) >> 8) & 0x07);
+	mis2009_write_register(ViPipe, 0x3207, (u32Row + u32Height - 1) & 0xff);
+	mis2009_write_register(ViPipe, 0x3208, (u32Col >> 8) & 0x07);
+	mis2009_write_register(ViPipe, 0x3209, u32Col & 0xff);
+	mis2009_write_register(ViPipe, 0x320a, ((u32Col + u32Width - 1) >> 8) & 0x07);
+	mis2009_write_register(ViPipe, 0x320b, (u32Col + u32Width - 1) & 0xff);
+	mis2009_write_register(ViPipe, 0x3c24, (u32OutW >> 8) & 0xff); /* MIPI frame width */
+	mis2009_write_register(ViPipe, 0x3c25, u32OutW & 0xff);
+	mis2009_write_register(ViPipe, 0x3c26, (u32OutH >> 8) & 0xff); /* MIPI frame height */
+	mis2009_write_register(ViPipe, 0x3c27, u32OutH & 0xff);
+	mis2009_write_register(ViPipe, 0x3202, bSubsample ? 0x09 : 0x08); /* FRAME_W 2400 or 2154 */
+	mis2009_write_register(ViPipe, 0x3203, bSubsample ? 0x60 : 0x6a);
+	mis2009_write_register(ViPipe, 0x3200, (u32Vmax >> 8) & 0xff);
+	mis2009_write_register(ViPipe, 0x3201, u32Vmax & 0xff);
+	printf("===MIS2009 %ux%u%s 10bit LINE Init OK!===\n", u32OutW, u32OutH,
+	       bSubsample ? " subsampled" : " crop");
+}
+
+static void mis2009_linear_1080p_init(VI_PIPE ViPipe, GK_BOOL bFast, GK_BOOL bWindow)
 {
 	const GK_U32 n = sizeof(g_astMis2009Linear1080p30) / sizeof(g_astMis2009Linear1080p30[0]);
 	GK_U32 i;
@@ -349,8 +392,13 @@ static void mis2009_linear_1080p_init(VI_PIPE ViPipe, GK_BOOL bFast)
 		mis2009_write_register(ViPipe, g_astMis2009Pll[i].u16Addr,
 				       bFast ? g_astMis2009Pll[i].u8Fast : g_astMis2009Pll[i].u8Slow);
 	}
+	if (bWindow) {
+		mis2009_window_init(ViPipe);
+	}
 	mis2009_write_register(ViPipe, g_astMis2009Linear1080p30[n - 1].u16Addr, g_astMis2009Linear1080p30[n - 1].u8Data);
-	printf("===MIS2009 1080P %dfps 10bit LINE Init OK!===\n", bFast ? 50 : 30);
+	if (!bWindow) {
+		printf("===MIS2009 1080P %dfps 10bit LINE Init OK!===\n", bFast ? 50 : 30);
+	}
 }
 
 void mis2009_init(VI_PIPE ViPipe)
@@ -364,10 +412,14 @@ void mis2009_init(VI_PIPE ViPipe)
 	}
 	switch (u8ImgMode) {
 	case MIS2009_SENSOR_1080P_30FPS_LINEAR_MODE:
-		mis2009_linear_1080p_init(ViPipe, GK_FALSE);
+		mis2009_linear_1080p_init(ViPipe, GK_FALSE, GK_FALSE);
 		break;
 	case MIS2009_SENSOR_1080P_50FPS_LINEAR_MODE:
-		mis2009_linear_1080p_init(ViPipe, GK_TRUE);
+		mis2009_linear_1080p_init(ViPipe, GK_TRUE, GK_FALSE);
+		break;
+	case MIS2009_SENSOR_CROP_FLEX_LINEAR_MODE:
+	case MIS2009_SENSOR_SUBSAMPLE_LINEAR_MODE:
+		mis2009_linear_1080p_init(ViPipe, GK_TRUE, GK_TRUE);
 		break;
 	default:
 		ISP_TRACE(MODULE_DBG_ERR, "Not Support Image Mode %d\n", u8ImgMode);
