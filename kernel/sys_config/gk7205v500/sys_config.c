@@ -195,7 +195,8 @@ int parse_sensor_clock(const char *name)
         || (strncmp("sc500ai", name, len) == 0)
         || (strncmp("gc2093", name, len)  == 0)
         || (strncmp("gc2083", name, len)  == 0)
-        || (strncmp("mis2008", name, len) == 0))
+        || (strncmp("mis2008", name, len) == 0)
+        || (strncmp("mis2009", name, len) == 0))
     {
         clock = 0x6;
     }
