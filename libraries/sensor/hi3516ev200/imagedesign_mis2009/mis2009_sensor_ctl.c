@@ -324,12 +324,13 @@ void mis2009_default_reg_init(VI_PIPE ViPipe)
  */
 static const struct {
 	GK_U16 u16Addr;
-	GK_U8 u8Data;
-} g_astMis2009Pll50fps[] = {
-	{ 0x3300, 0x30 }, /* FBDIV 48: VCO 27 MHz x 48 = 1296 MHz */
-	{ 0x330f, 0x12 }, /* TSDIV 18 */
-	{ 0x3310, 0x06 }, /* CPDIV 6 */
-	{ 0x3c01, 0x05 }, /* MIPI clk_period, 4x the 648 MHz bit clock period in ns, rounded down */
+	GK_U8 u8Slow; /* what the 30 fps table leaves: reset values, read back from a sensor */
+	GK_U8 u8Fast;
+} g_astMis2009Pll[] = {
+	{ 0x3300, 0x1c, 0x30 }, /* FBDIV: VCO 27 MHz x 28 = 756 MHz, x 48 = 1296 MHz */
+	{ 0x330f, 0x0f, 0x12 }, /* TSDIV 15, 18 */
+	{ 0x3310, 0x02, 0x06 }, /* CPDIV 2, 6 */
+	{ 0x3c01, 0x09, 0x05 }, /* MIPI clk_period: 4x the bit clock period in ns, rounded down */
 };
 
 static void mis2009_linear_1080p_init(VI_PIPE ViPipe, GK_BOOL bFast)
@@ -337,13 +338,16 @@ static void mis2009_linear_1080p_init(VI_PIPE ViPipe, GK_BOOL bFast)
 	const GK_U32 n = sizeof(g_astMis2009Linear1080p30) / sizeof(g_astMis2009Linear1080p30[0]);
 	GK_U32 i;
 
-	/* the table's last entry takes the sensor out of standby; the faster
-	 * PLL goes in before it */
+	/* the table's last entry takes the sensor out of standby; the PLL goes in
+	 * before it, written either way -- the 30 fps table leaves CPDIV and the
+	 * MIPI clock period at their reset values, so a sensor coming back from the
+	 * faster mode without a reset would otherwise keep the faster ones */
 	for (i = 0; i < n - 1; i++) {
 		mis2009_write_register(ViPipe, g_astMis2009Linear1080p30[i].u16Addr, g_astMis2009Linear1080p30[i].u8Data);
 	}
-	for (i = 0; bFast && i < sizeof(g_astMis2009Pll50fps) / sizeof(g_astMis2009Pll50fps[0]); i++) {
-		mis2009_write_register(ViPipe, g_astMis2009Pll50fps[i].u16Addr, g_astMis2009Pll50fps[i].u8Data);
+	for (i = 0; i < sizeof(g_astMis2009Pll) / sizeof(g_astMis2009Pll[0]); i++) {
+		mis2009_write_register(ViPipe, g_astMis2009Pll[i].u16Addr,
+				       bFast ? g_astMis2009Pll[i].u8Fast : g_astMis2009Pll[i].u8Slow);
 	}
 	mis2009_write_register(ViPipe, g_astMis2009Linear1080p30[n - 1].u16Addr, g_astMis2009Linear1080p30[n - 1].u8Data);
 	printf("===MIS2009 1080P %dfps 10bit LINE Init OK!===\n", bFast ? 50 : 30);
