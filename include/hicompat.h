@@ -22,6 +22,8 @@
 #define GK_API_AWB_SensorRegCallBack HI_MPI_AWB_SensorRegCallBack
 #define GK_API_AWB_SensorUnRegCallBack HI_MPI_AWB_SensorUnRegCallBack
 #define GK_API_ISP_GetModParam HI_MPI_ISP_GetModParam
+#define GK_API_ISP_GetPubAttr HI_MPI_ISP_GetPubAttr
+#define GK_API_ISP_SetPubAttr HI_MPI_ISP_SetPubAttr
 #endif
 
 GK_S32 GK_API_ISP_SensorRegCallBack(VI_PIPE ViPipe,
@@ -45,6 +47,11 @@ GK_S32 GK_API_AWB_SensorUnRegCallBack(VI_PIPE ViPipe, ALG_LIB_S *pstAwbLib,
  * call, so a prototype has to exist under whichever name it rewrites to. Used
  * by the drivers that read the ISP's quick-start flag. */
 GK_S32 GK_API_ISP_GetModParam(ISP_MOD_PARAM_S *pstModParam);
+
+/* Same again, for the drivers that move the ISP's Bayer order with their
+ * mirror/flip (superpix_sp2305). */
+GK_S32 GK_API_ISP_SetPubAttr(VI_PIPE ViPipe, const ISP_PUB_ATTR_S *pstPubAttr);
+GK_S32 GK_API_ISP_GetPubAttr(VI_PIPE ViPipe, ISP_PUB_ATTR_S *pstPubAttr);
 #endif /* SDK_CODE != 0 */
 
 #endif /* HICOMPAT_H */
