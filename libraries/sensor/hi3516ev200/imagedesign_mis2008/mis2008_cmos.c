@@ -23,13 +23,6 @@ extern "C" {
 #define MIS2008_ID 0x2008
 #define HIGH_8BITS(x) (((x)&0xFF00) >> 8)
 #define LOW_8BITS(x) ((x)&0x00FF)
-#define LOWER_4BITS(x) (((x)&0x000F) << 4)
-#define HIGHER_4BITS(x) (((x)&0xF000) >> 12)
-#define HIGHER_8BITS(x) (((x)&0x0FF0) >> 4)
-
-#ifndef MAX
-#define MAX(a, b) (((a) < (b)) ? (b) : (a))
-#endif
 
 #ifndef MIN
 #define MIN(a, b) (((a) > (b)) ? (b) : (a))
@@ -44,20 +37,18 @@ ISP_SNS_STATE_S *g_pastMis2008[ISP_MAX_PIPE_NUM] = { GK_NULL };
 ISP_SNS_COMMBUS_U g_aunMis2008BusInfo[ISP_MAX_PIPE_NUM] = { [0] = { .s8I2cDev = 0 },
                                 [1 ... ISP_MAX_PIPE_NUM - 1] = { .s8I2cDev = -1 } };
 
-static GK_U32 gu32MaxTimeGetCnt[ISP_MAX_PIPE_NUM] = { 0 };
 static GK_U32 g_au32InitExposure[ISP_MAX_PIPE_NUM] = { 0 };
 static GK_U32 g_au32LinesPer500ms[ISP_MAX_PIPE_NUM] = { 0 };
 static GK_U16 g_au16InitWBGain[ISP_MAX_PIPE_NUM][3] = { { 0 } };
 static GK_U16 g_au16SampleRgain[ISP_MAX_PIPE_NUM] = { 0 };
 static GK_U16 g_au16SampleBgain[ISP_MAX_PIPE_NUM] = { 0 };
-static GK_U32 au32WDRIntTime[4] = { 0 };
 
 /****************************************************************************
  * extern                                                                   *
  ****************************************************************************/
-extern const unsigned int mis2008_i2c_addr;
-extern unsigned int mis2008_addr_byte;
-extern unsigned int mis2008_data_byte;
+extern const unsigned char mis2008_i2c_addr;
+extern const unsigned int mis2008_addr_byte;
+extern const unsigned int mis2008_data_byte;
 
 extern void mis2008_init(VI_PIPE ViPipe);
 extern void mis2008_exit(VI_PIPE ViPipe);
@@ -77,12 +68,35 @@ extern int mis2008_read_register(VI_PIPE ViPipe, int addr);
 #define MIS2008_DGAIN_ADDR (0x3700)
 #define MIS2008_VMAX_ADDR (0x3200)
 #define MIS2008_FLIP_MIRROR_ADDR 0x3007
+#define MIS2008_WINDOW_ADDR (0x3204) /* row start/end, column start/end, 11 bit each */
+#define MIS2008_DS_SEL_ADDR (0x300B) /* 1: registers take effect at frame sync; 0: held */
+
+/*
+ * The readout window: 1920x1080 from row 8, column 7 of the 1936x1096 array.
+ * An even row and an odd column start the GRBG order the ISP is set up for;
+ * the other three start phases measure as the other three orders. Each
+ * flipped axis reads the array the other way, so its start moves on by one
+ * pixel to keep the order.
+ */
+#define MIS2008_WINDOW_ROW (8)
+#define MIS2008_WINDOW_COL (7)
+#define MIS2008_WINDOW_W (1920)
+#define MIS2008_WINDOW_H (1080)
+
+/* the slots cmos_get_sns_regs_info hands the ISP */
+enum {
+    SLOT_EXP_H, SLOT_EXP_L, SLOT_AGAIN, SLOT_DGAIN_H, SLOT_DGAIN_L,
+    SLOT_VMAX_H, SLOT_VMAX_L, SLOT_NUM
+};
 
 #define MIS2008_INCREASE_LINES (1) /* make real fps less than stand fps because NVR require*/
 
 #define MIS2008_VMAX_1080P30_LINEAR (1125 + MIS2008_INCREASE_LINES)
-#define MIS2008_FRAME_RATE_MIN (0x34BC)
-#define EXP_OFFSET_LINEAR (8)
+#define MIS2008_LINE_RATE (MIS2008_VMAX_1080P30_LINEAR * 30) /* lines per second */
+/* integration time up to VMAX - 2; the datasheet's limit is VMAX - 1 */
+#define EXP_OFFSET_LINEAR (2)
+/* lines, until AE first runs: the longest the 30 fps frame allows */
+#define MIS2008_INIT_INTTIME (MIS2008_VMAX_1080P30_LINEAR - EXP_OFFSET_LINEAR)
 
 //sensor fps mode
 #define MIS2008_SENSOR_1080P_30FPS_LINEAR_MODE (1)
@@ -95,32 +109,6 @@ extern int mis2008_read_register(VI_PIPE ViPipe, int addr);
               pstSensorImageMode->u16Width, pstSensorImageMode->u16Height, pstSensorImageMode->f32Fps, \
               pstSnsState->enWDRMode);                                                                 \
     } while (0)
-
-GK_U16 Dgain_mapping_realgain_to_sensorgain(GK_FLOAT gain_real);
-
-GK_U16 Dgain_mapping_realgain_to_sensorgain(GK_FLOAT gain_real)
-{
-    GK_U16 u16sensorgain;
-    GK_U32 u32Dgain = gain_real * 128;
-    GK_U8 dCoarseGain = 0;
-    GK_U8 dFineGain = 0;
-    GK_U8 u8Reg0x3e06 = 0;
-    for (dCoarseGain = 1; dCoarseGain <= 16; dCoarseGain = dCoarseGain * 2) //1,2,4,8,16
-    {
-        if (u32Dgain < (128 * 2 * dCoarseGain)) {
-            break;
-        }
-    }
-    dFineGain = u32Dgain / dCoarseGain;
-
-    for (; dCoarseGain >= 2; dCoarseGain = dCoarseGain / 2) {
-        u8Reg0x3e06 = (u8Reg0x3e06 << 1) | 0x01;
-    }
-    u16sensorgain = ((GK_U16)u8Reg0x3e06) << 8;
-    u16sensorgain += dFineGain;
-
-    return u16sensorgain;
-}
 
 static GK_S32 cmos_get_ae_default(VI_PIPE ViPipe, AE_SENSOR_DEFAULT_S *pstAeSnsDft)
 {
@@ -136,11 +124,10 @@ static GK_S32 cmos_get_ae_default(VI_PIPE ViPipe, AE_SENSOR_DEFAULT_S *pstAeSnsD
     pstAeSnsDft->stIntTimeAccu.f32Accuracy = 1;
     pstAeSnsDft->stIntTimeAccu.f32Offset = 0;
 
-    pstSnsState->u32FLStd = MIS2008_VMAX_1080P30_LINEAR ;
     pstAeSnsDft->u32FullLinesStd = pstSnsState->u32FLStd;
     pstAeSnsDft->u32FlickerFreq = 50 * 256;
     pstAeSnsDft->u32FullLinesMax = MIS2008_FULL_LINES_MAX_LINEAR;
-    pstAeSnsDft->u32HmaxTimes = (1000000) / (pstSnsState->u32FLStd * 30);
+    pstAeSnsDft->u32HmaxTimes = (1000000) / MIS2008_LINE_RATE;
 
     pstAeSnsDft->stAgainAccu.enAccuType = AE_ACCURACY_TABLE;
     pstAeSnsDft->stAgainAccu.f32Accuracy = 1; //1/128 0.0078125
@@ -160,7 +147,7 @@ static GK_S32 cmos_get_ae_default(VI_PIPE ViPipe, AE_SENSOR_DEFAULT_S *pstAeSnsD
     pstAeSnsDft->stAERouteAttrEx.u32TotalNum = 0;
 
     if (g_au32LinesPer500ms[ViPipe] == 0) {
-        pstAeSnsDft->u32LinesPer500ms = pstSnsState->u32FLStd * 30 / 2;
+        pstAeSnsDft->u32LinesPer500ms = MIS2008_LINE_RATE / 2;
     } else {
         pstAeSnsDft->u32LinesPer500ms = g_au32LinesPer500ms[ViPipe];
     }
@@ -170,7 +157,7 @@ static GK_S32 cmos_get_ae_default(VI_PIPE ViPipe, AE_SENSOR_DEFAULT_S *pstAeSnsD
     pstAeSnsDft->au8HistThresh[2] = 0x60;
     pstAeSnsDft->au8HistThresh[3] = 0x80;
 
-    pstAeSnsDft->u32MaxAgain = 16128; //  1.81*128*32
+    pstAeSnsDft->u32MaxAgain = 16128; /* 15.75x, the last entry of g_au32AgainTab */
     pstAeSnsDft->u32MinAgain = 1024;
     pstAeSnsDft->u32MaxAgainTarget = pstAeSnsDft->u32MaxAgain;
     pstAeSnsDft->u32MinAgainTarget = pstAeSnsDft->u32MinAgain;
@@ -188,7 +175,7 @@ static GK_S32 cmos_get_ae_default(VI_PIPE ViPipe, AE_SENSOR_DEFAULT_S *pstAeSnsD
 
     pstAeSnsDft->u32InitExposure = g_au32InitExposure[ViPipe] ? g_au32InitExposure[ViPipe] : 76151; //148859
 
-    pstAeSnsDft->u32MaxIntTime = pstSnsState->u32FLStd - 1;
+    pstAeSnsDft->u32MaxIntTime = pstSnsState->u32FLStd - EXP_OFFSET_LINEAR;
     pstAeSnsDft->u32MinIntTime = 1;
     pstAeSnsDft->u32MaxIntTimeTarget = 65535;
     pstAeSnsDft->u32MinIntTimeTarget = 1;
@@ -196,11 +183,17 @@ static GK_S32 cmos_get_ae_default(VI_PIPE ViPipe, AE_SENSOR_DEFAULT_S *pstAeSnsD
     return GK_SUCCESS;
 }
 
+static GK_VOID cmos_set_vmax(ISP_SNS_STATE_S *pstSnsState, GK_U32 u32FullLines)
+{
+    pstSnsState->au32FL[0] = u32FullLines;
+    pstSnsState->astRegsInfo[0].astI2cData[SLOT_VMAX_H].u32Data = HIGH_8BITS(u32FullLines);
+    pstSnsState->astRegsInfo[0].astI2cData[SLOT_VMAX_L].u32Data = LOW_8BITS(u32FullLines);
+}
+
 /* the function of sensor set fps */
 static GK_VOID cmos_fps_set(VI_PIPE ViPipe, GK_FLOAT f32Fps, AE_SENSOR_DEFAULT_S *pstAeSnsDft)
 {
     ISP_SNS_STATE_S *pstSnsState = GK_NULL;
-    GK_FLOAT f32maxFps;
     GK_U32 u32FullLines;
 
     CMOS_CHECK_POINTER_VOID(pstAeSnsDft);
@@ -209,39 +202,30 @@ static GK_VOID cmos_fps_set(VI_PIPE ViPipe, GK_FLOAT f32Fps, AE_SENSOR_DEFAULT_S
 
     switch (pstSnsState->u8ImgMode) {
     case MIS2008_SENSOR_1080P_30FPS_LINEAR_MODE:
-        f32maxFps = 30;
         if ((f32Fps <= 30) && (f32Fps >= 2.5)) { /* Minimum 2.5fps */
-            u32FullLines = MIS2008_VMAX_1080P30_LINEAR * f32maxFps / DIV_0_TO_1_FLOAT(f32Fps);
+            u32FullLines = MIS2008_LINE_RATE / DIV_0_TO_1_FLOAT(f32Fps);
         } else {
             ISP_TRACE(MODULE_DBG_ERR, "Not support Fps: %f\n", f32Fps);
             return;
         }
-        u32FullLines = (u32FullLines > MIS2008_FULL_LINES_MAX_LINEAR) ? MIS2008_FULL_LINES_MAX_LINEAR :
-                                        u32FullLines;
+        u32FullLines = MIN(u32FullLines, MIS2008_FULL_LINES_MAX_LINEAR);
         break;
 
     default:
-        printf("Not support this Mode\n");
+        ISP_TRACE(MODULE_DBG_ERR, "Not support this Mode\n");
         return;
-        break;
     }
 
     pstSnsState->u32FLStd = u32FullLines;
-
-    pstSnsState->astRegsInfo[0].astI2cData[6].u32Data = HIGH_8BITS(u32FullLines);
-    pstSnsState->astRegsInfo[0].astI2cData[7].u32Data = LOW_8BITS(u32FullLines);
+    cmos_set_vmax(pstSnsState, u32FullLines);
 
     pstAeSnsDft->f32Fps = f32Fps;
-    pstAeSnsDft->u32FullLinesStd = pstSnsState->u32FLStd;
-    pstSnsState->au32FL[0] = pstSnsState->u32FLStd;
-    pstAeSnsDft->u32FullLines = pstSnsState->au32FL[0];
-
-    pstAeSnsDft->u32MaxIntTime = (pstSnsState->u32FLStd << 1) - EXP_OFFSET_LINEAR;
-    // pstAeSnsDft->u32HmaxTimes = (1000000) / (pstSnsState->u32FLStd * DIV_0_TO_1_FLOAT(f32Fps));
-
-    return;
+    pstAeSnsDft->u32FullLinesStd = u32FullLines;
+    pstAeSnsDft->u32FullLines = u32FullLines;
+    pstAeSnsDft->u32MaxIntTime = u32FullLines - EXP_OFFSET_LINEAR;
 }
 
+/* AE lengthens the frame past the standard one for a longer exposure */
 static GK_VOID cmos_slow_framerate_set(VI_PIPE ViPipe, GK_U32 u32FullLines, AE_SENSOR_DEFAULT_S *pstAeSnsDft)
 {
     ISP_SNS_STATE_S *pstSnsState = GK_NULL;
@@ -250,47 +234,44 @@ static GK_VOID cmos_slow_framerate_set(VI_PIPE ViPipe, GK_U32 u32FullLines, AE_S
     MIS2008_SENSOR_GET_CTX(ViPipe, pstSnsState);
     CMOS_CHECK_POINTER_VOID(pstSnsState);
 
-    u32FullLines = (u32FullLines + EXP_OFFSET_LINEAR) >> 1;
-    u32FullLines = (u32FullLines > MIS2008_FRAME_RATE_MIN) ? MIS2008_FRAME_RATE_MIN : u32FullLines;
-    pstSnsState->au32FL[0] = u32FullLines;
-    pstSnsState->astRegsInfo[0].astI2cData[6].u32Data = HIGH_8BITS(u32FullLines);
-    pstSnsState->astRegsInfo[0].astI2cData[7].u32Data = LOW_8BITS(u32FullLines);
+    u32FullLines = MIN(u32FullLines, MIS2008_FULL_LINES_MAX_LINEAR);
+    cmos_set_vmax(pstSnsState, u32FullLines);
 
-    pstAeSnsDft->u32FullLines = pstSnsState->au32FL[0];
-
-    pstAeSnsDft->u32MaxIntTime = pstSnsState->au32FL[0] - EXP_OFFSET_LINEAR;
-
-    return;
+    pstAeSnsDft->u32FullLines = u32FullLines;
+    pstAeSnsDft->u32MaxIntTime = u32FullLines - EXP_OFFSET_LINEAR;
 }
 
 /* while isp notify ae to update sensor regs, ae call these funcs. */
 static GK_VOID cmos_inttime_update(VI_PIPE ViPipe, GK_U32 u32IntTime)
 {
     ISP_SNS_STATE_S *pstSnsState = GK_NULL;
-    static GK_BOOL bFirst = GK_TRUE;
-    static GK_U32 u32ShortIntTime = 0;
-    static GK_U32 u32LongIntTime = 0;
+
     MIS2008_SENSOR_GET_CTX(ViPipe, pstSnsState);
     CMOS_CHECK_POINTER_VOID(pstSnsState);
 
-    // Somehow values after this leads to picture loss
-    // XM limits this to 0x10000, but actually never sets higher also
-    if (u32IntTime > 0x545){
-        u32IntTime = 0x545;
-    }
-
-    pstSnsState->astRegsInfo[0].astI2cData[0].u32Data = HIGH_8BITS(u32IntTime);
-    pstSnsState->astRegsInfo[0].astI2cData[1].u32Data = LOW_8BITS(u32IntTime);
+    /* AE keeps this within u32MaxIntTime, VMAX - 2 of the frame it set */
+    pstSnsState->astRegsInfo[0].astI2cData[SLOT_EXP_H].u32Data = HIGH_8BITS(u32IntTime);
+    pstSnsState->astRegsInfo[0].astI2cData[SLOT_EXP_L].u32Data = LOW_8BITS(u32IntTime);
 
     return;
 }
 
-static const GK_U16 u16AgainTab[64] = { 1024,  1088,  1152,  1216,  1280,  1344,  1408,	 1472,	1536,  1600,  1664,
-                    1728,  1792,  1856,  1920,  1984,  2048,  2176,	 2304,	2432,  2560,  2688,
-                    2816,  2944,  3072,  3200,  3328,  3456,  3584,	 3712,	3840,  3968,  4096,
-                    4352,  4608,  4864,  5120,  5376,  5632,  5888,	 6144,	6400,  6656,  6912,
-                    7168,  7424,  7680,  7936,  8192,  8704,  9216,	 9728,	10240, 10752, 11264,
-                    11776, 12288, 12800, 13312, 13824, 14336, 14848, 15360, 15872 };
+/*
+ * 0x3102: [6:5] coarse gain 1x, 2x, 4x, 8x; [4:0] fine, (32 + n) / 32. The
+ * index into this table is the register value: 1x .. 15.75x in 128 steps,
+ * 0x400 + 0x20 * i, 0x800 + 0x40 * i, ...
+ */
+#define MIS2008_AGAIN_NUM (128)
+static GK_U32 g_au32AgainTab[MIS2008_AGAIN_NUM];
+
+static GK_VOID cmos_again_table_init(GK_VOID)
+{
+    GK_U32 i;
+
+    for (i = 0; i < MIS2008_AGAIN_NUM; i++) {
+        g_au32AgainTab[i] = (0x400 << (i / 32)) + (0x20 << (i / 32)) * (i % 32);
+    }
+}
 
 static GK_U32 Dgain_table[] = {
     1024,  1088,  1152,  1216,  1280,  1344,  1408,	 1472,	1536,  1600,  1664,  1728,  1792,  1856,  1920,	 1984,
@@ -430,25 +411,22 @@ static struct gain_tbl_info_s DgainInfo[] = {
 static GK_VOID cmos_again_calc_table(VI_PIPE ViPipe, GK_U32 *pu32AgainLin, GK_U32 *pu32AgainDb)
 {
     GK_U32 i;
-    static GK_U8 again_table_size = 63;
 
     CMOS_CHECK_POINTER_VOID(pu32AgainLin);
     CMOS_CHECK_POINTER_VOID(pu32AgainDb);
 
-    if (*pu32AgainLin >= u16AgainTab[again_table_size - 1]) {
-        *pu32AgainLin = u16AgainTab[again_table_size - 1];
-        *pu32AgainDb = again_table_size - 1;
-        return;
+    if (g_au32AgainTab[0] == 0) {
+        cmos_again_table_init();
     }
 
-    for (i = 1; i < again_table_size; i++) {
-        if (*pu32AgainLin < u16AgainTab[i]) {
-            *pu32AgainLin = u16AgainTab[i - 1];
-            *pu32AgainDb = i - 1;
+    /* the largest entry not above the request */
+    for (i = 1; i < MIS2008_AGAIN_NUM; i++) {
+        if (*pu32AgainLin < g_au32AgainTab[i]) {
             break;
         }
     }
-    return;
+    *pu32AgainLin = g_au32AgainTab[i - 1];
+    *pu32AgainDb = i - 1;
 }
 
 static GK_VOID cmos_dgain_calc_table(VI_PIPE ViPipe, GK_U32 *pu32DgainLin, GK_U32 *pu32DgainDb)
@@ -485,7 +463,7 @@ static GK_VOID cmos_gains_update(VI_PIPE ViPipe, GK_U32 u32Again, GK_U32 u32Dgai
     MIS2008_SENSOR_GET_CTX(ViPipe, pstSnsState);
     CMOS_CHECK_POINTER_VOID(pstSnsState);
 
-    pstSnsState->astRegsInfo[0].astI2cData[3].u32Data = (u32Again & 0x7F);
+    pstSnsState->astRegsInfo[0].astI2cData[SLOT_AGAIN].u32Data = (u32Again & 0x7F);
 
     /* find Dgain register setting. */
     tbl_num = sizeof(DgainInfo) / sizeof(struct gain_tbl_info_s);
@@ -496,30 +474,11 @@ static GK_VOID cmos_gains_update(VI_PIPE ViPipe, GK_U32 u32Again, GK_U32 u32Dgai
             break;
     }
 
-    pstSnsState->astRegsInfo[0].astI2cData[4].u32Data = ((info->regGain & 0x0e) >> 1);
+    pstSnsState->astRegsInfo[0].astI2cData[SLOT_DGAIN_H].u32Data = ((info->regGain & 0x0e) >> 1);
     u32Dgain = info->regGainFineBase + (u32Dgain - info->idxBase) * info->regGainFineStep;
-    pstSnsState->astRegsInfo[0].astI2cData[5].u32Data = ((info->regGain & 0x01) << 7) | ((u32Dgain & 0x0F) << 3);
+    pstSnsState->astRegsInfo[0].astI2cData[SLOT_DGAIN_L].u32Data = ((info->regGain & 0x01) << 7) | ((u32Dgain & 0x0F) << 3);
  
      return;
-}
-
-static GK_VOID cmos_get_inttime_max(VI_PIPE ViPipe, GK_U16 u16ManRatioEnable, GK_U32 *au32Ratio, GK_U32 *au32IntTimeMax,
-                    GK_U32 *au32IntTimeMin, GK_U32 *pu32LFMaxIntTime)
-{
-    GK_U32 u32ShortTimeMinLimit = 0;
-    GK_U32 u32ShortTimeMaxlimit = 0;
-
-    ISP_SNS_STATE_S *pstSnsState = GK_NULL;
-
-    CMOS_CHECK_POINTER_VOID(au32Ratio);
-    CMOS_CHECK_POINTER_VOID(au32IntTimeMax);
-    CMOS_CHECK_POINTER_VOID(au32IntTimeMin);
-    CMOS_CHECK_POINTER_VOID(pu32LFMaxIntTime);
-    MIS2008_SENSOR_GET_CTX(ViPipe, pstSnsState);
-    CMOS_CHECK_POINTER_VOID(pstSnsState);
-    u32ShortTimeMinLimit = 1;
-
-    return;
 }
 
 static GK_S32 cmos_init_ae_exp_function(AE_SENSOR_EXP_FUNC_S *pstExpFuncs)
@@ -530,13 +489,11 @@ static GK_S32 cmos_init_ae_exp_function(AE_SENSOR_EXP_FUNC_S *pstExpFuncs)
 
     pstExpFuncs->pfn_cmos_get_ae_default = cmos_get_ae_default;
     pstExpFuncs->pfn_cmos_fps_set = cmos_fps_set;
-    // pstExpFuncs->pfn_cmos_slow_framerate_set = cmos_slow_framerate_set;
+    pstExpFuncs->pfn_cmos_slow_framerate_set = cmos_slow_framerate_set;
     pstExpFuncs->pfn_cmos_inttime_update = cmos_inttime_update;
     pstExpFuncs->pfn_cmos_gains_update = cmos_gains_update;
     pstExpFuncs->pfn_cmos_again_calc_table = cmos_again_calc_table;
     pstExpFuncs->pfn_cmos_dgain_calc_table = cmos_dgain_calc_table;
-    pstExpFuncs->pfn_cmos_get_inttime_max = cmos_get_inttime_max;
-    // pstExpFuncs->pfn_cmos_ae_fswdr_attr_set = cmos_ae_fswdr_attr_set;
 
     return GK_SUCCESS;
 }
@@ -707,43 +664,39 @@ static GK_VOID cmos_set_pixel_detect(VI_PIPE ViPipe, GK_BOOL bEnable)
     CMOS_CHECK_POINTER_VOID(pstSnsState);
 
     if (MIS2008_SENSOR_1080P_30FPS_LINEAR_MODE == pstSnsState->u8ImgMode) {
-        u32FullLines_5Fps = MIS2008_VMAX_1080P30_LINEAR * 30 / 5;
+        u32FullLines_5Fps = MIS2008_LINE_RATE / 5;
     } else {
         return;
     }
 
-    u32MaxIntTime_5Fps = u32FullLines_5Fps * 2 - EXP_OFFSET_LINEAR;
+    u32MaxIntTime_5Fps = u32FullLines_5Fps - EXP_OFFSET_LINEAR;
 
     if (bEnable) { /* setup for ISP pixel calibration mode */
         mis2008_write_register(ViPipe, MIS2008_VMAX_ADDR, HIGH_8BITS(u32FullLines_5Fps)); /* 5fps */
-        mis2008_write_register(ViPipe, MIS2008_VMAX_ADDR + 1, LOW_8BITS(u32FullLines_5Fps)); /* 5fps */
-        mis2008_write_register(ViPipe, MIS2008_EXP_ADDR,
-                       HIGHER_4BITS(u32MaxIntTime_5Fps)); /* max exposure lines */
-        mis2008_write_register(ViPipe, MIS2008_EXP_ADDR + 1,
-                       HIGHER_8BITS(u32MaxIntTime_5Fps)); /* max exposure lines */
-        // mis2008_write_register(ViPipe, MIS2008_EXP_ADDR + 2,
-        // 		       LOWER_4BITS(u32MaxIntTime_5Fps)); /* max exposure lines */
-
-        mis2008_write_register(ViPipe, MIS2008_DGAIN_ADDR, 0x00);
+        mis2008_write_register(ViPipe, MIS2008_VMAX_ADDR + 1, LOW_8BITS(u32FullLines_5Fps));
+        mis2008_write_register(ViPipe, MIS2008_EXP_ADDR, HIGH_8BITS(u32MaxIntTime_5Fps)); /* max exposure lines */
+        mis2008_write_register(ViPipe, MIS2008_EXP_ADDR + 1, LOW_8BITS(u32MaxIntTime_5Fps));
+        mis2008_write_register(ViPipe, MIS2008_DGAIN_ADDR, 0x00); /* 1x, 4.7 fixed point */
         mis2008_write_register(ViPipe, MIS2008_DGAIN_ADDR + 1, 0x80);
-        mis2008_write_register(ViPipe, MIS2008_AGAIN_ADDR, 0x00);
-        // mis2008_write_register(ViPipe, MIS2008_AGAIN_ADDR+1, 0x40);
+        mis2008_write_register(ViPipe, MIS2008_AGAIN_ADDR, 0x00); /* 1x */
     } else { /* setup for ISP 'normal mode' */
-        pstSnsState->u32FLStd = (pstSnsState->u32FLStd > MIS2008_FULL_LINES_MAX_LINEAR * 2) ?
-                        (MIS2008_FULL_LINES_MAX_LINEAR * 2) :
-                        pstSnsState->u32FLStd;
+        pstSnsState->u32FLStd = MIN(pstSnsState->u32FLStd, MIS2008_FULL_LINES_MAX_LINEAR);
         pstSnsState->au32FL[0] = pstSnsState->u32FLStd;
-        mis2008_write_register(ViPipe, MIS2008_VMAX_ADDR, HIGH_8BITS(pstSnsState->u32FLStd >> 1));
-        mis2008_write_register(ViPipe, MIS2008_VMAX_ADDR + 1, LOW_8BITS(pstSnsState->u32FLStd >> 1));
+        mis2008_write_register(ViPipe, MIS2008_VMAX_ADDR, HIGH_8BITS(pstSnsState->u32FLStd));
+        mis2008_write_register(ViPipe, MIS2008_VMAX_ADDR + 1, LOW_8BITS(pstSnsState->u32FLStd));
         pstSnsState->bSyncInit = GK_FALSE;
     }
-
-    return;
 }
 
 static GK_S32 cmos_get_sns_regs_info(VI_PIPE ViPipe, ISP_SNS_REGS_INFO_S *pstSnsRegsInfo)
 {
-    GK_S32 i;
+    static const GK_U32 au32SlotAddr[SLOT_NUM] = {
+        [SLOT_EXP_H] = MIS2008_EXP_ADDR,       [SLOT_EXP_L] = MIS2008_EXP_ADDR + 1,
+        [SLOT_AGAIN] = MIS2008_AGAIN_ADDR,     [SLOT_DGAIN_H] = MIS2008_DGAIN_ADDR,
+        [SLOT_DGAIN_L] = MIS2008_DGAIN_ADDR + 1, [SLOT_VMAX_H] = MIS2008_VMAX_ADDR,
+        [SLOT_VMAX_L] = MIS2008_VMAX_ADDR + 1,
+    };
+    GK_U32 i;
     ISP_SNS_STATE_S *pstSnsState = GK_NULL;
 
     CMOS_CHECK_POINTER(pstSnsRegsInfo);
@@ -754,36 +707,16 @@ static GK_S32 cmos_get_sns_regs_info(VI_PIPE ViPipe, ISP_SNS_REGS_INFO_S *pstSns
         pstSnsState->astRegsInfo[0].enSnsType = ISP_SNS_I2C_TYPE;
         pstSnsState->astRegsInfo[0].unComBus.s8I2cDev = g_aunMis2008BusInfo[ViPipe].s8I2cDev;
         pstSnsState->astRegsInfo[0].u8Cfg2ValidDelayMax = 2;
-        pstSnsState->astRegsInfo[0].u32RegNum = 8;
+        pstSnsState->astRegsInfo[0].u32RegNum = SLOT_NUM;
 
-        for (i = 0; i < pstSnsState->astRegsInfo[0].u32RegNum; i++) {
+        for (i = 0; i < SLOT_NUM; i++) {
             pstSnsState->astRegsInfo[0].astI2cData[i].bUpdate = GK_TRUE;
             pstSnsState->astRegsInfo[0].astI2cData[i].u8DevAddr = mis2008_i2c_addr;
             pstSnsState->astRegsInfo[0].astI2cData[i].u32AddrByteNum = mis2008_addr_byte;
             pstSnsState->astRegsInfo[0].astI2cData[i].u32DataByteNum = mis2008_data_byte;
+            pstSnsState->astRegsInfo[0].astI2cData[i].u8DelayFrmNum = 0;
+            pstSnsState->astRegsInfo[0].astI2cData[i].u32RegAddr = au32SlotAddr[i];
         }
-
-        //Linear Mode Regs
-        pstSnsState->astRegsInfo[0].astI2cData[0].u8DelayFrmNum = 0;
-        pstSnsState->astRegsInfo[0].astI2cData[0].u32RegAddr = MIS2008_EXP_ADDR;
-        pstSnsState->astRegsInfo[0].astI2cData[1].u8DelayFrmNum = 0;
-        pstSnsState->astRegsInfo[0].astI2cData[1].u32RegAddr = MIS2008_EXP_ADDR + 1;
-        // pstSnsState->astRegsInfo[0].astI2cData[2].u8DelayFrmNum = 0;
-        // pstSnsState->astRegsInfo[0].astI2cData[2].u32RegAddr = MIS2008_EXP_ADDR + 2;
-
-        pstSnsState->astRegsInfo[0].astI2cData[3].u8DelayFrmNum = 0;
-        pstSnsState->astRegsInfo[0].astI2cData[3].u32RegAddr = MIS2008_AGAIN_ADDR;
-        pstSnsState->astRegsInfo[0].astI2cData[4].u8DelayFrmNum = 0;
-        pstSnsState->astRegsInfo[0].astI2cData[4].u32RegAddr = MIS2008_DGAIN_ADDR;
-        pstSnsState->astRegsInfo[0].astI2cData[5].u8DelayFrmNum = 0;
-        pstSnsState->astRegsInfo[0].astI2cData[5].u32RegAddr = MIS2008_DGAIN_ADDR + 1;
-
-        pstSnsState->astRegsInfo[0].astI2cData[6].u8DelayFrmNum = 0;
-        pstSnsState->astRegsInfo[0].astI2cData[6].u32RegAddr = MIS2008_VMAX_ADDR;
-        pstSnsState->astRegsInfo[0].astI2cData[7].u8DelayFrmNum = 0;
-        pstSnsState->astRegsInfo[0].astI2cData[7].u32RegAddr = MIS2008_VMAX_ADDR + 1;
-        pstSnsState->astRegsInfo[0].astI2cData[8].u8DelayFrmNum = 0;
-        pstSnsState->astRegsInfo[0].astI2cData[8].u32RegAddr = MIS2008_FLIP_MIRROR_ADDR;
         pstSnsState->bSyncInit = GK_TRUE;
     } else {
         for (i = 0; i < pstSnsState->astRegsInfo[0].u32RegNum; i++) {
@@ -842,57 +775,110 @@ static GK_S32 cmos_set_image_mode(VI_PIPE ViPipe, ISP_CMOS_SENSOR_IMAGE_MODE_S *
     return GK_SUCCESS;
 }
 
+/*
+ * The orientation asked for, per pipe. mis2008_init applies it at the end of
+ * its register table, which resets 0x3007 and the window, so a re-init keeps
+ * it.
+ */
+static volatile ISP_SNS_MIRRORFLIP_TYPE_E g_aenMis2008MirrorFlip[ISP_MAX_PIPE_NUM] = { ISP_SNS_NORMAL };
+
+/*
+ * Mirror/flip and the window move together. Writes are held (0x300B = 0) and
+ * released together, so the sensor switches at one frame sync: written one by
+ * one, some frames would come out a row or column short or in the wrong
+ * order. The window and 0x3007 are not in the ISP's sync list, so these writes
+ * cannot race it.
+ *
+ * A failed write is retried with the whole group, since a window left half
+ * written gives the VI frames of the wrong size. The hold is released whatever
+ * happens: a sensor left held would take no further exposure, gain or VMAX
+ * either.
+ */
+#define MIS2008_ORIENT_TRIES (2)
+
+GK_S32 mis2008_orientation_init(VI_PIPE ViPipe)
+{
+    GK_U8 u8Value;
+    GK_U32 u32Row = MIS2008_WINDOW_ROW;
+    GK_U32 u32Col = MIS2008_WINDOW_COL;
+    GK_U32 i, u32Try;
+    GK_S32 s32Ret = GK_FAILURE;
+
+    switch (g_aenMis2008MirrorFlip[ViPipe]) {
+    case ISP_SNS_MIRROR:
+        u8Value = 0x01;
+        break;
+    case ISP_SNS_FLIP:
+        u8Value = 0x02;
+        break;
+    case ISP_SNS_MIRROR_FLIP:
+        u8Value = 0x03;
+        break;
+    default:
+        u8Value = 0x00;
+        break;
+    }
+    u32Col += (u8Value & 0x01) ? 1 : 0;
+    u32Row += (u8Value & 0x02) ? 1 : 0;
+
+    {
+        const struct {
+            GK_U32 u32Addr, u32Data;
+        } astGroup[] = {
+            { MIS2008_WINDOW_ADDR + 0, HIGH_8BITS(u32Row) },
+            { MIS2008_WINDOW_ADDR + 1, LOW_8BITS(u32Row) },
+            { MIS2008_WINDOW_ADDR + 2, HIGH_8BITS(u32Row + MIS2008_WINDOW_H - 1) },
+            { MIS2008_WINDOW_ADDR + 3, LOW_8BITS(u32Row + MIS2008_WINDOW_H - 1) },
+            { MIS2008_WINDOW_ADDR + 4, HIGH_8BITS(u32Col) },
+            { MIS2008_WINDOW_ADDR + 5, LOW_8BITS(u32Col) },
+            { MIS2008_WINDOW_ADDR + 6, HIGH_8BITS(u32Col + MIS2008_WINDOW_W - 1) },
+            { MIS2008_WINDOW_ADDR + 7, LOW_8BITS(u32Col + MIS2008_WINDOW_W - 1) },
+            { MIS2008_FLIP_MIRROR_ADDR, u8Value },
+        };
+
+        for (u32Try = 0; u32Try < MIS2008_ORIENT_TRIES && s32Ret != GK_SUCCESS; u32Try++) {
+            s32Ret = mis2008_write_register(ViPipe, MIS2008_DS_SEL_ADDR, 0x00);
+            for (i = 0; i < sizeof(astGroup) / sizeof(astGroup[0]) && s32Ret == GK_SUCCESS; i++) {
+                s32Ret = mis2008_write_register(ViPipe, astGroup[i].u32Addr, astGroup[i].u32Data);
+            }
+        }
+    }
+
+    for (u32Try = 0; u32Try < MIS2008_ORIENT_TRIES; u32Try++) {
+        if (mis2008_write_register(ViPipe, MIS2008_DS_SEL_ADDR, 0x01) == GK_SUCCESS) {
+            break;
+        }
+    }
+    if (u32Try == MIS2008_ORIENT_TRIES) {
+        ISP_TRACE(MODULE_DBG_ERR, "MIS2008: could not release the register hold (0x300B)\n");
+        return GK_FAILURE;
+    }
+    if (s32Ret != GK_SUCCESS) {
+        ISP_TRACE(MODULE_DBG_ERR, "MIS2008: mirror/flip %d not applied\n", g_aenMis2008MirrorFlip[ViPipe]);
+    }
+    return s32Ret;
+}
+
 static GK_VOID sensor_mirror_flip(VI_PIPE ViPipe, ISP_SNS_MIRRORFLIP_TYPE_E eSnsMirrorFlip)
 {
     ISP_SNS_STATE_S *pstSnsState = GK_NULL;
-    MIS2008_SENSOR_GET_CTX(ViPipe, pstSnsState);
-    CMOS_CHECK_POINTER_VOID(pstSnsState);
-    GK_U8 FRAME_H_ST, FRAME_H_END;
-    GK_U8 FRAME_W_ST, FRAME_W_END;
-    GK_U8 value = 0;
-    switch (eSnsMirrorFlip) {
-    case ISP_SNS_NORMAL:
-        value |= 0;
-        FRAME_H_ST = 4;
-        FRAME_H_END = 0x3f;
-        FRAME_W_ST = 9;
-        FRAME_W_END = 0x88;
-        break;
-    case ISP_SNS_MIRROR:
-        value |= 0x01;
-        FRAME_H_ST = 4;
-        FRAME_H_END = 0x3f;
-        FRAME_W_ST = 0xa;
-        FRAME_W_END = 0x89;
-        break;
-    case ISP_SNS_FLIP:
-        value |= 0x02;
-        FRAME_H_ST = 5;
-        FRAME_H_END = 0x40;
-        FRAME_W_ST = 9;
-        FRAME_W_END = 0x88;
-        break;
-    case ISP_SNS_MIRROR_FLIP:
-        value |= 0x03;
-        FRAME_H_ST = 5;
-        FRAME_H_END = 0x40;
-        FRAME_W_ST = 0xa;
-        FRAME_W_END = 0x89;
-        break;
-    default:
+
+    if (eSnsMirrorFlip > ISP_SNS_MIRROR_FLIP) {
         return;
     }
+    g_aenMis2008MirrorFlip[ViPipe] = eSnsMirrorFlip;
 
-    mis2008_write_register(ViPipe, 0x3205, FRAME_H_ST);
-    mis2008_write_register(ViPipe, 0x3207, FRAME_H_END);
-    mis2008_write_register(ViPipe, 0x3209, FRAME_W_ST);
-    mis2008_write_register(ViPipe, 0x320b, FRAME_W_END);
-    mis2008_write_register(ViPipe, MIS2008_FLIP_MIRROR_ADDR, value);
+    /* before the sensor is initialised, mis2008_init applies it */
+    MIS2008_SENSOR_GET_CTX(ViPipe, pstSnsState);
+    if ((pstSnsState != GK_NULL) && (pstSnsState->bInit == GK_TRUE)) {
+        mis2008_orientation_init(ViPipe);
+    }
 }
 
 static GK_VOID sensor_global_init(VI_PIPE ViPipe)
 {
     ISP_SNS_STATE_S *pstSnsState = GK_NULL;
+    ISP_I2C_DATA_S *pstData;
 
     MIS2008_SENSOR_GET_CTX(ViPipe, pstSnsState);
     CMOS_CHECK_POINTER_VOID(pstSnsState);
@@ -908,9 +894,15 @@ static GK_VOID sensor_global_init(VI_PIPE ViPipe)
     memset(&pstSnsState->astRegsInfo[0], 0, sizeof(ISP_SNS_REGS_INFO_S));
     memset(&pstSnsState->astRegsInfo[1], 0, sizeof(ISP_SNS_REGS_INFO_S));
 
-    pstSnsState->astRegsInfo[0].astI2cData[0].u32Data = 0x05;
-    pstSnsState->astRegsInfo[0].astI2cData[1].u32Data = 0x45;
-
+    /* what the slots hold until AE first runs; mis2008_init writes them too */
+    pstData = pstSnsState->astRegsInfo[0].astI2cData;
+    pstData[SLOT_EXP_H].u32Data = HIGH_8BITS(MIS2008_INIT_INTTIME);
+    pstData[SLOT_EXP_L].u32Data = LOW_8BITS(MIS2008_INIT_INTTIME);
+    pstData[SLOT_AGAIN].u32Data = 0x00;   /* 1x */
+    pstData[SLOT_DGAIN_H].u32Data = 0x00; /* 1x, 4.7 fixed point */
+    pstData[SLOT_DGAIN_L].u32Data = 0x80;
+    pstData[SLOT_VMAX_H].u32Data = HIGH_8BITS(MIS2008_VMAX_1080P30_LINEAR);
+    pstData[SLOT_VMAX_L].u32Data = LOW_8BITS(MIS2008_VMAX_1080P30_LINEAR);
 }
 
 static GK_S32 cmos_init_sensor_exp_function(ISP_SENSOR_EXP_FUNC_S *pstSensorExpFunc)
@@ -1039,6 +1031,7 @@ static GK_S32 sensor_unregister_callback(VI_PIPE ViPipe, ALG_LIB_S *pstAeLib, AL
     }
 
     sensor_ctx_exit(ViPipe);
+    g_aenMis2008MirrorFlip[ViPipe] = ISP_SNS_NORMAL; /* a new session starts unflipped */
 
     return GK_SUCCESS;
 }
