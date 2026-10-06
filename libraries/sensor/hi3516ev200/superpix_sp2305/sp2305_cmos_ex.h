@@ -416,27 +416,38 @@ static const ISP_CMOS_SHARPEN_S g_stIspYuvSharpen = {
     },
 };
 
+/*
+ * Fitted on the same RAW captures as the white-balance curve (sp2305_cmos.c):
+ * per bulb colour temperature, white-balanced by the chart's greys, rows
+ * summing to 1.0, minimising CIELAB error with lightness matched (the bulbs lit
+ * the chart unevenly).  Each is held to no more than 1.25x the noise of the
+ * matrix the camera ran at that light (Majestic's imx307.ini, the ev200
+ * default.ini), so colour improves without the video getting noisier.  Mean
+ * colour error 7.7 dE at 6000 K, 9.9 at 5000 K, 12.2 at 4300 K, 16.6 at 3000 K;
+ * the vendor tables, whose 3700 K and 2650 K entries were one matrix, scored
+ * 11-17 at 1.5-1.9x the noise.
+ */
 static AWB_CCM_S g_stAwbCcm = {
     4,
     {
         {
-            6800,
-            { 0x0280, 0x813F, 0x8041, 0x8067, 0x0176, 0x800F, 0x801C, 0x8142, 0x025E },
+            6000,
+            { 0x021F, 0x8104, 0x801B, 0x80B8, 0x0236, 0x807E, 0x8029, 0x80FE, 0x0227 },
         },
 
         {
             5000,
-            { 0x0278, 0x8159, 0x801F, 0x8063, 0x0144, 0x001F, 0x8017, 0x81BA, 0x02D1 },
+            { 0x0220, 0x80F6, 0x802A, 0x80A7, 0x022F, 0x8088, 0x800F, 0x810A, 0x0219 },
         },
 
         {
-            3700,
-            { 0x027C, 0x8114, 0x8068, 0x808C, 0x0169, 0x0023, 0x802B, 0x81BE, 0x02E9 },
+            4300,
+            { 0x0220, 0x80DE, 0x8042, 0x80AA, 0x0228, 0x807E, 0x8016, 0x80FE, 0x0214 },
         },
 
         {
-            2650,
-            { 0x027C, 0x8114, 0x8068, 0x808C, 0x0169, 0x0023, 0x802B, 0x81BE, 0x02E9 },
+            3000,
+            { 0x0271, 0x80D4, 0x809D, 0x80B1, 0x0272, 0x80C1, 0x0002, 0x8150, 0x024E },
         },
     },
 };
