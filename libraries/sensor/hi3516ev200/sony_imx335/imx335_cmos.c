@@ -177,6 +177,16 @@ extern int IMX335_read_register(VI_PIPE ViPipe, int addr);
 #define IMX335_60FPS_CROPPED_1080P_MODE  (5) //1920x1080
 #define IMX335_60FPS_FULL_1944P_MODE     (6) //2592x1944
 #define IMX335_CROP_FLEX_LINEAR_MODE     (7) /* window crop, all-pixel, flexible W×H */
+
+/* The flex crop's line, as IMX335_cropped_flex_init() programs it (the two
+ * must agree), and what follows from it: HMAX counts the 74.25 MHz internal
+ * clock, so 300 is a 4.04 us line and 247500 lines a second.
+ *
+ * Measured on an hi3516ev300 by rewriting HMAX live: clean at 280 and above,
+ * the picture breaks at 270 at every crop width (800 and 1920 wide alike), so
+ * this is the line's own timing and not MIPI. 300 keeps a margin. */
+#define IMX335_FLEX_HMAX      (300)
+#define IMX335_FLEX_LINE_RATE (74250000 / IMX335_FLEX_HMAX)
 #define IMX335_4M_25FPS_10BIT_WDR_MODE   (8) //2560x1440 WDR (preserved from stock driver)
 
 
@@ -327,6 +337,9 @@ static GK_S32 cmos_get_ae_default(VI_PIPE ViPipe,
 
 	if (g_au32LinesPer500ms[ViPipe] == 0) {
 		pstAeSnsDft->u32LinesPer500ms = (u32Fll * U32MaxFps) >> 1;
+		if (IMX335_CROP_FLEX_LINEAR_MODE == pstSnsState->u8ImgMode) {
+			pstAeSnsDft->u32LinesPer500ms = IMX335_FLEX_LINE_RATE / 2;
+		}
 	} else {
 		pstAeSnsDft->u32LinesPer500ms = g_au32LinesPer500ms[ViPipe];
 	}
@@ -471,12 +484,11 @@ static GK_VOID cmos_fps_set(VI_PIPE ViPipe, GK_FLOAT f32Fps,
     case IMX335_CROP_FLEX_LINEAR_MODE:
 		/* Flex window crop: fps ceiling scales with crop height. Datasheet
 		 * (p55) says VTTL ≥ AREA3_WIDTH_1 + 96. AREA3_WIDTH_1 = (crop_h+20)*2.
-		 * At HMAX=0x16E (1080p-init baseline) the achievable fps at the
-		 * VMAX_MIN is roughly 90 × (1080+20) / (crop_h+20). Don't cap;
-		 * just clamp VMAX so the sensor doesn't truncate the frame. */
+		 * The frame is the line rate over the rate asked for, never shorter
+		 * than that, so the ceiling is IMX335_FLEX_LINE_RATE / VMAX_MIN. Don't
+		 * cap; just clamp VMAX so the sensor doesn't truncate the frame. */
 		if (f32Fps >= 2.0) {
-			u32MaxFps = 90;
-			u32Lines  = IMX335_VMAX_CROPPED_1080P * u32MaxFps / DIV_0_TO_1_FLOAT(f32Fps);
+			u32Lines  = IMX335_FLEX_LINE_RATE / DIV_0_TO_1_FLOAT(f32Fps);
 			{
 				GK_U32 cw, ch;
 				GK_U32 vmax_min;
@@ -484,8 +496,7 @@ static GK_VOID cmos_fps_set(VI_PIPE ViPipe, GK_FLOAT f32Fps,
 				vmax_min = (ch + 20) * 2 + 96;
 				if (u32Lines < vmax_min) u32Lines = vmax_min;
 			}
-			pstAeSnsDft->u32LinesPer500ms = IMX335_VMAX_CROPPED_1080P * 30;
-			pstSnsState->u32FLStd = u32Lines;
+			pstSnsState->u32FLStd = u32Lines; /* AE's timing: see the end of this function */
 		} else {
 			ISP_TRACE(MODULE_DBG_ERR, "Not support Fps FLEX: %f\n", f32Fps);
 			return;
@@ -660,6 +671,13 @@ static GK_VOID cmos_fps_set(VI_PIPE ViPipe, GK_FLOAT f32Fps,
 	 * u32FLStd, so this is the last place it can be made honest. */
 	pstSnsState->u32FLStd = imx335_clamp_full_lines(pstSnsState->u32FLStd);
 
+	/* The flex crop's line is known outright, and its frame may be clamped
+	 * longer than the rate asked for allows: the rate AE is told, and the line
+	 * it converts exposure with, come from the line, not from the request. */
+	if (IMX335_CROP_FLEX_LINEAR_MODE == pstSnsState->u8ImgMode) {
+		f32Fps = (GK_FLOAT)IMX335_FLEX_LINE_RATE / DIV_0_TO_1_FLOAT(pstSnsState->u32FLStd);
+	}
+
 	pstAeSnsDft->f32Fps = f32Fps;
 	gu32STimeFps = (GK_U32)f32Fps;
 	pstAeSnsDft->u32LinesPer500ms = pstSnsState->u32FLStd * f32Fps / 2;
@@ -670,6 +688,10 @@ static GK_VOID cmos_fps_set(VI_PIPE ViPipe, GK_FLOAT f32Fps,
 	pstAeSnsDft->u32FullLines = pstSnsState->au32FL[0];
 	pstAeSnsDft->u32HmaxTimes =
 		(1000000) / (pstSnsState->u32FLStd * DIV_0_TO_1_FLOAT(f32Fps));
+	if (IMX335_CROP_FLEX_LINEAR_MODE == pstSnsState->u8ImgMode) {
+		pstAeSnsDft->u32LinesPer500ms = IMX335_FLEX_LINE_RATE / 2;
+		pstAeSnsDft->u32HmaxTimes = 1000000 / IMX335_FLEX_LINE_RATE;
+	}
 
 	return;
 }
