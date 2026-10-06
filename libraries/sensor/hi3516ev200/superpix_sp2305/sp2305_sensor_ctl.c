@@ -225,11 +225,6 @@ int sp2305_write_register(VI_PIPE ViPipe, GK_S32 addr, GK_S32 data)
     return GK_SUCCESS;
 }
 
-void sp2305_mirror_flip(VI_PIPE ViPipe, ISP_SNS_MIRRORFLIP_TYPE_E eSnsMirrorFlip)
-{
-    return;
-}
-
 static void delay_ms(int ms)
 {
     usleep(ms * 1000); /* 1ms : 1000 us */
@@ -418,6 +413,8 @@ void sp2305_init_1080P30_10bit_linear(VI_PIPE ViPipe)
     ret += sp2305_write_register(ViPipe, 0xa5, 0x08); /*  H start 8Lsb */
     ret += sp2305_write_register(ViPipe, 0xa6, 0x03);
     ret += sp2305_write_register(ViPipe, 0xa7, 0xc0); /*  Half H size_value Lsb8bits */
+    ret += sp2305_write_register(ViPipe, 0x5e, /*  auto_first_en off: see sp2305_cmos.h */
+                                 SP2305_BR_FIRST_REG(sp2305_get_mirror_flip(ViPipe)));
     ret += sp2305_write_register(ViPipe, 0xfd, 0x01);
     ret += sp2305_write_register(ViPipe, 0x8e, 0x07);
     ret += sp2305_write_register(ViPipe, 0x8f, 0x80); /*  MIPI column number */
@@ -426,6 +423,7 @@ void sp2305_init_1080P30_10bit_linear(VI_PIPE ViPipe)
     ret += sp2305_write_register(ViPipe, 0xfd, 0x01);
     ret += sp2305_write_register(ViPipe, 0x05, 0x00);
     ret += sp2305_write_register(ViPipe, 0x06, 0x70); /*  change min VTS, Vblank, VTS:0x4c1, 30.037fps */
+    ret += sp2305_write_register(ViPipe, 0x3f, SP2305_MIRROR_FLIP_REG(sp2305_get_mirror_flip(ViPipe)));
     ret += sp2305_write_register(ViPipe, 0x01, 0x01);
     ret += sp2305_write_register(ViPipe, 0xfd, 0x00); /* pll_clk 168M, DAC 84M, pclk_pre 84M timer_clk 42M(Pclk=84M) */
     ret += sp2305_write_register(ViPipe, 0x2f, 0x10);

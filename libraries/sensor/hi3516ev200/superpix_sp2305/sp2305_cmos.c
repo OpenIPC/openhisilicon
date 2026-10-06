@@ -77,7 +77,12 @@ static GK_U16 g_au16SampleBgain[ISP_MAX_PIPE_NUM] = {0};
 #define VTS_ENABLE_INDEX        4
 #define VTS_ADDR_HIGH_INDEX     5
 #define VTS_ADDR_LOW_INDEX      6
-#define TRIGGER_INDEX           7
+#define MIRROR_FLIP_INDEX       7
+#define TRIGGER_INDEX           8
+#define PAGE_ADDR_2_INDEX       9
+#define BR_FIRST_INDEX          10
+#define PAGE_ADDR_1_BACK_INDEX  11
+#define SP2305_SYNC_REG_NUM     12
 
 /* Register define */
 #define PAGE_SELECT_ADDR        0xfd
@@ -88,6 +93,30 @@ static GK_U16 g_au16SampleBgain[ISP_MAX_PIPE_NUM] = {0};
 #define VTS_ADDR_H              0x0e
 #define VTS_ADDR_L              0x0f
 #define TRIGGER_ADDR            0x01
+#define MIRROR_FLIP_ADDR        0x3f /* page 1 */
+#define BR_FIRST_ADDR           0x5e /* page 2 */
+
+/*
+ * The orientation asked for, per pipe.  sp2305_mirror_flip() runs on the
+ * application's thread and only records it here; the ISP's thread applies it
+ * at the top of cmos_get_sns_regs_info(), before that diffs this frame's
+ * registers against the last, so a request cannot land between the diff and
+ * the snapshot and be lost.
+ */
+static volatile ISP_SNS_MIRRORFLIP_TYPE_E g_aenSp2305MirrorFlip[ISP_MAX_PIPE_NUM] = {ISP_SNS_NORMAL};
+
+/* the order the readout starts with, per orientation; see sp2305_cmos.h */
+static const ISP_BAYER_FORMAT_E g_aenSp2305Bayer[] = {
+    [ISP_SNS_NORMAL]      = BAYER_BGGR,
+    [ISP_SNS_MIRROR]      = BAYER_GBRG,
+    [ISP_SNS_FLIP]        = BAYER_GRBG,
+    [ISP_SNS_MIRROR_FLIP] = BAYER_RGGB,
+};
+
+ISP_SNS_MIRRORFLIP_TYPE_E sp2305_get_mirror_flip(VI_PIPE ViPipe)
+{
+    return g_aenSp2305MirrorFlip[ViPipe];
+}
 
 #define INCREASE_LINES  0  /* make real fps less than stand fps because NVR require */
 #define SP2305_VMAX_1080P30_LINEAR  (0x4c1 + INCREASE_LINES)  /*  1488 */
@@ -569,7 +598,7 @@ static GK_VOID cmos_comm_sns_reg_info_init(VI_PIPE ViPipe, ISP_SNS_STATE_S *pstS
     pstSnsState->astRegsInfo[0].enSnsType = ISP_SNS_I2C_TYPE;
     pstSnsState->astRegsInfo[0].unComBus.s8I2cDev = g_aunSp2305_BusInfo[ViPipe].s8I2cDev;
     pstSnsState->astRegsInfo[0].u8Cfg2ValidDelayMax = 2; /* 2 */
-    pstSnsState->astRegsInfo[0].u32RegNum = 8; /* 8 */
+    pstSnsState->astRegsInfo[0].u32RegNum = SP2305_SYNC_REG_NUM;
 
     for (i = 0; i < pstSnsState->astRegsInfo[0].u32RegNum; i++) {
         pstSnsState->astRegsInfo[0].astI2cData[i].bUpdate = GK_TRUE;
@@ -592,12 +621,30 @@ static GK_VOID cmos_comm_sns_reg_info_init(VI_PIPE ViPipe, ISP_SNS_STATE_S *pstS
     pstSnsState->astRegsInfo[0].astI2cData[VTS_ADDR_HIGH_INDEX].u32RegAddr      = 0x0E;
     pstSnsState->astRegsInfo[0].astI2cData[VTS_ADDR_LOW_INDEX].u8DelayFrmNum    = 0;          /* trigger */
     pstSnsState->astRegsInfo[0].astI2cData[VTS_ADDR_LOW_INDEX].u32RegAddr       = 0x0F;
+    pstSnsState->astRegsInfo[0].astI2cData[MIRROR_FLIP_INDEX].u8DelayFrmNum     = 0;
+    pstSnsState->astRegsInfo[0].astI2cData[MIRROR_FLIP_INDEX].u32RegAddr        = MIRROR_FLIP_ADDR;
     pstSnsState->astRegsInfo[0].astI2cData[TRIGGER_INDEX].u8DelayFrmNum         = 0;          /* trigger */
     pstSnsState->astRegsInfo[0].astI2cData[TRIGGER_INDEX].u32RegAddr            = 0x01;
+
+    /*
+     * br_first is on page 2.  It rides in this list rather than being written
+     * from sp2305_mirror_flip(): the kernel rewrites 0xFD=0x01 here every
+     * frame, so a userspace write to page 2 races it and can land on page 1
+     * (seen on the bench: it hit P1:0xA1, a MIPI control).  The trailing entry
+     * returns the sensor to page 1.
+     */
+    pstSnsState->astRegsInfo[0].astI2cData[PAGE_ADDR_2_INDEX].u8DelayFrmNum     = 0;
+    pstSnsState->astRegsInfo[0].astI2cData[PAGE_ADDR_2_INDEX].u32RegAddr        = PAGE_SELECT_ADDR;
+    pstSnsState->astRegsInfo[0].astI2cData[BR_FIRST_INDEX].u8DelayFrmNum        = 0;
+    pstSnsState->astRegsInfo[0].astI2cData[BR_FIRST_INDEX].u32RegAddr           = BR_FIRST_ADDR;
+    pstSnsState->astRegsInfo[0].astI2cData[PAGE_ADDR_1_BACK_INDEX].u8DelayFrmNum = 0;
+    pstSnsState->astRegsInfo[0].astI2cData[PAGE_ADDR_1_BACK_INDEX].u32RegAddr   = PAGE_SELECT_ADDR;
 
     pstSnsState->astRegsInfo[0].astI2cData[PAGE_ADDR_1_INDEX].u32Data           = 0x01; /* init the page, VTS enable */
     pstSnsState->astRegsInfo[0].astI2cData[VTS_ENABLE_INDEX].u32Data            = 0x10;
     pstSnsState->astRegsInfo[0].astI2cData[TRIGGER_INDEX].u32Data               = 0x01;
+    pstSnsState->astRegsInfo[0].astI2cData[PAGE_ADDR_2_INDEX].u32Data           = 0x02;
+    pstSnsState->astRegsInfo[0].astI2cData[PAGE_ADDR_1_BACK_INDEX].u32Data      = 0x01;
 
     pstSnsState->bSyncInit = GK_TRUE;
     return;
@@ -606,6 +653,7 @@ static GK_VOID cmos_comm_sns_reg_info_init(VI_PIPE ViPipe, ISP_SNS_STATE_S *pstS
 static GK_VOID cmos_sns_reg_info_update(VI_PIPE ViPipe, ISP_SNS_STATE_S *pstSnsState)
 {
     gk_u32 i;
+    GK_BOOL bPage2;
 
     for (i = 0; i < pstSnsState->astRegsInfo[0].u32RegNum; i++) {
         if (pstSnsState->astRegsInfo[0].astI2cData[i].u32Data == pstSnsState->astRegsInfo[1].astI2cData[i].u32Data) {
@@ -618,22 +666,72 @@ static GK_VOID cmos_sns_reg_info_update(VI_PIPE ViPipe, ISP_SNS_STATE_S *pstSnsS
     pstSnsState->astRegsInfo[0].astI2cData[PAGE_ADDR_1_INDEX].bUpdate = GK_TRUE;      /* always refresh the data  */
     pstSnsState->astRegsInfo[0].astI2cData[VTS_ENABLE_INDEX].bUpdate  = GK_TRUE;
     pstSnsState->astRegsInfo[0].astI2cData[TRIGGER_INDEX].bUpdate     = GK_TRUE;
+
+    /* select page 2, and come back, only when br_first changes */
+    bPage2 = pstSnsState->astRegsInfo[0].astI2cData[BR_FIRST_INDEX].bUpdate;
+    pstSnsState->astRegsInfo[0].astI2cData[PAGE_ADDR_2_INDEX].bUpdate      = bPage2;
+    pstSnsState->astRegsInfo[0].astI2cData[PAGE_ADDR_1_BACK_INDEX].bUpdate = bPage2;
     return;
+}
+
+GK_VOID sp2305_mirror_flip(VI_PIPE ViPipe, ISP_SNS_MIRRORFLIP_TYPE_E eSnsMirrorFlip)
+{
+    if (eSnsMirrorFlip > ISP_SNS_MIRROR_FLIP) {
+        eSnsMirrorFlip = ISP_SNS_NORMAL;
+    }
+    g_aenSp2305MirrorFlip[ViPipe] = eSnsMirrorFlip; /* the next frame applies it */
+}
+
+static GK_VOID sp2305_orient_to_regs(ISP_SNS_STATE_S *pstSnsState, ISP_SNS_MIRRORFLIP_TYPE_E enMirrorFlip)
+{
+    pstSnsState->astRegsInfo[0].astI2cData[MIRROR_FLIP_INDEX].u32Data = SP2305_MIRROR_FLIP_REG(enMirrorFlip);
+    pstSnsState->astRegsInfo[0].astI2cData[BR_FIRST_INDEX].u32Data = SP2305_BR_FIRST_REG(enMirrorFlip);
+}
+
+/*
+ * Keep the ISP's Bayer order on the orientation's.  Checked every frame, not
+ * set once: the application sets the public attributes, Bayer order included,
+ * from its sensor ini at start-up and whenever else it likes, and any of those
+ * would put BGGR back under a mirrored readout.  Reading is a few shared-memory
+ * loads; a Bayer-only change does not make the ISP switch modes.
+ *
+ * There is no call that sets the Bayer order alone, so this writes back the
+ * whole structure it just read.  An application SetPubAttr landing between the
+ * two would be undone; the window is two back-to-back calls, and opens only on
+ * the frame after the application has itself just written a different order.
+ */
+static GK_VOID sp2305_sync_bayer(VI_PIPE ViPipe, ISP_SNS_MIRRORFLIP_TYPE_E enMirrorFlip)
+{
+    ISP_PUB_ATTR_S stPubAttr;
+    ISP_BAYER_FORMAT_E enBayer = g_aenSp2305Bayer[enMirrorFlip];
+
+    if (GK_API_ISP_GetPubAttr(ViPipe, &stPubAttr) != GK_SUCCESS || stPubAttr.enBayer == enBayer) {
+        return;
+    }
+    stPubAttr.enBayer = enBayer;
+    if (GK_API_ISP_SetPubAttr(ViPipe, &stPubAttr) != GK_SUCCESS) {
+        ISP_TRACE(MODULE_DBG_ERR, "sp2305: set bayer %d failed!\n", enBayer);
+    }
 }
 
 static GK_S32 cmos_get_sns_regs_info(VI_PIPE ViPipe, ISP_SNS_REGS_INFO_S *pstSnsRegsInfo)
 {
     ISP_SNS_STATE_S *pstSnsState = GK_NULL;
+    ISP_SNS_MIRRORFLIP_TYPE_E enMirrorFlip;
 
     CMOS_CHECK_POINTER(pstSnsRegsInfo);
     SP2305_SENSOR_GET_CTX(ViPipe, pstSnsState);
     CMOS_CHECK_POINTER(pstSnsState);
 
+    enMirrorFlip = g_aenSp2305MirrorFlip[ViPipe]; /* one read: registers and Bayer agree */
     if ((pstSnsState->bSyncInit == GK_FALSE) || (pstSnsRegsInfo->bConfig == GK_FALSE)) {
         cmos_comm_sns_reg_info_init(ViPipe, pstSnsState);
+        sp2305_orient_to_regs(pstSnsState, enMirrorFlip);
     } else {
+        sp2305_orient_to_regs(pstSnsState, enMirrorFlip);
         cmos_sns_reg_info_update(ViPipe, pstSnsState);
     }
+    sp2305_sync_bayer(ViPipe, enMirrorFlip);
 
     pstSnsRegsInfo->bConfig = GK_FALSE;
     (gk_void)memcpy_s(pstSnsRegsInfo, sizeof(ISP_SNS_REGS_INFO_S),
@@ -849,6 +947,7 @@ static GK_S32 sensor_unregister_callback(VI_PIPE ViPipe, ALG_LIB_S *pstAeLib, AL
     }
 
     sensor_ctx_exit(ViPipe);
+    g_aenSp2305MirrorFlip[ViPipe] = ISP_SNS_NORMAL; /* a new session starts unflipped */
 
     return GK_SUCCESS;
 }
