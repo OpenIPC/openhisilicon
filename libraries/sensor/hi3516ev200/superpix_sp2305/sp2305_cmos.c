@@ -379,19 +379,29 @@ static GK_S32 cmos_get_awb_default(VI_PIPE ViPipe, AWB_SENSOR_DEFAULT_S *pstAwbS
 
     (gk_void)memset_s(pstAwbSnsDft, sizeof(AWB_SENSOR_DEFAULT_S), 0, sizeof(AWB_SENSOR_DEFAULT_S));
 
-    pstAwbSnsDft->u16WbRefTemp = 4850; /* Color Temp 4850 */
+    /*
+     * White-balance calibration measured on an hi3516ev300 + SP2305 module
+     * against a 24-patch chart in RAW, lit by two tunable LED bulbs at 3000-6000 K
+     * (ambient subtracted), and fitted through lib_hiawb's own curve
+     * (HI_MPI_ISP_CalGainByTemp): every point within 2%.  The vendor curve has
+     * nearly the same locus but its colour-temperature scale runs 5-9% off along
+     * it, so AWB reported 2695/3676/5263 K under 3000/4000/6000 K light (now
+     * 2976/4032/5988 K), and that estimate picks the colour matrix.
+     * as32WbPara[4] has to stay 128.
+     */
+    pstAwbSnsDft->u16WbRefTemp = 5000; /* Color Temp 5000 */
 
-    pstAwbSnsDft->au16GainOffset[0] = 0x1A6;
+    pstAwbSnsDft->au16GainOffset[0] = 379;
     pstAwbSnsDft->au16GainOffset[1] = 0x100;
     pstAwbSnsDft->au16GainOffset[2] = 0x100; /* 2 */
-    pstAwbSnsDft->au16GainOffset[3] = 0x1A5; /* 3 */
+    pstAwbSnsDft->au16GainOffset[3] = 434; /* 3 */
 
-    pstAwbSnsDft->as32WbPara[0] = -6;     /* -6 */
-    pstAwbSnsDft->as32WbPara[1] = 262;    /* 262 */
-    pstAwbSnsDft->as32WbPara[2] = 0;      /* 2 */
-    pstAwbSnsDft->as32WbPara[3] = 215604; /* 3, 215604 */
-    pstAwbSnsDft->as32WbPara[4] = 128;    /* 4, 128 */
-    pstAwbSnsDft->as32WbPara[5] = -165255; /* 5, -165255 */
+    pstAwbSnsDft->as32WbPara[0] = -22;
+    pstAwbSnsDft->as32WbPara[1] = 310;
+    pstAwbSnsDft->as32WbPara[2] = 56;      /* 2 */
+    pstAwbSnsDft->as32WbPara[3] = 204915;  /* 3 */
+    pstAwbSnsDft->as32WbPara[4] = 128;     /* 4 */
+    pstAwbSnsDft->as32WbPara[5] = -149266; /* 5 */
 
     pstAwbSnsDft->u16GoldenRgain = GOLDEN_RGAIN;
     pstAwbSnsDft->u16GoldenBgain = GOLDEN_BGAIN;
