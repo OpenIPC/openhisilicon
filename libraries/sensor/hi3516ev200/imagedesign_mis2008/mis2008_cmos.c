@@ -143,7 +143,7 @@ static GK_S32 cmos_get_ae_default(VI_PIPE ViPipe, AE_SENSOR_DEFAULT_S *pstAeSnsD
     pstAeSnsDft->au8HistThresh[2] = 0x60;
     pstAeSnsDft->au8HistThresh[3] = 0x80;
 
-    pstAeSnsDft->u32MaxAgain = 16128; //  1.81*128*32
+    pstAeSnsDft->u32MaxAgain = 16128; /* 15.75x, the last entry of g_au32AgainTab */
     pstAeSnsDft->u32MinAgain = 1024;
     pstAeSnsDft->u32MaxAgainTarget = pstAeSnsDft->u32MaxAgain;
     pstAeSnsDft->u32MinAgainTarget = pstAeSnsDft->u32MinAgain;
@@ -242,12 +242,22 @@ static GK_VOID cmos_inttime_update(VI_PIPE ViPipe, GK_U32 u32IntTime)
     return;
 }
 
-static const GK_U16 u16AgainTab[64] = { 1024,  1088,  1152,  1216,  1280,  1344,  1408,	 1472,	1536,  1600,  1664,
-                    1728,  1792,  1856,  1920,  1984,  2048,  2176,	 2304,	2432,  2560,  2688,
-                    2816,  2944,  3072,  3200,  3328,  3456,  3584,	 3712,	3840,  3968,  4096,
-                    4352,  4608,  4864,  5120,  5376,  5632,  5888,	 6144,	6400,  6656,  6912,
-                    7168,  7424,  7680,  7936,  8192,  8704,  9216,	 9728,	10240, 10752, 11264,
-                    11776, 12288, 12800, 13312, 13824, 14336, 14848, 15360, 15872 };
+/*
+ * 0x3102: [6:5] coarse gain 1x, 2x, 4x, 8x; [4:0] fine, (32 + n) / 32. The
+ * index into this table is the register value: 1x .. 15.75x in 128 steps,
+ * 0x400 + 0x20 * i, 0x800 + 0x40 * i, ...
+ */
+#define MIS2008_AGAIN_NUM (128)
+static GK_U32 g_au32AgainTab[MIS2008_AGAIN_NUM];
+
+static GK_VOID cmos_again_table_init(GK_VOID)
+{
+    GK_U32 i;
+
+    for (i = 0; i < MIS2008_AGAIN_NUM; i++) {
+        g_au32AgainTab[i] = (0x400 << (i / 32)) + (0x20 << (i / 32)) * (i % 32);
+    }
+}
 
 static GK_U32 Dgain_table[] = {
     1024,  1088,  1152,  1216,  1280,  1344,  1408,	 1472,	1536,  1600,  1664,  1728,  1792,  1856,  1920,	 1984,
@@ -387,25 +397,22 @@ static struct gain_tbl_info_s DgainInfo[] = {
 static GK_VOID cmos_again_calc_table(VI_PIPE ViPipe, GK_U32 *pu32AgainLin, GK_U32 *pu32AgainDb)
 {
     GK_U32 i;
-    static GK_U8 again_table_size = 63;
 
     CMOS_CHECK_POINTER_VOID(pu32AgainLin);
     CMOS_CHECK_POINTER_VOID(pu32AgainDb);
 
-    if (*pu32AgainLin >= u16AgainTab[again_table_size - 1]) {
-        *pu32AgainLin = u16AgainTab[again_table_size - 1];
-        *pu32AgainDb = again_table_size - 1;
-        return;
+    if (g_au32AgainTab[0] == 0) {
+        cmos_again_table_init();
     }
 
-    for (i = 1; i < again_table_size; i++) {
-        if (*pu32AgainLin < u16AgainTab[i]) {
-            *pu32AgainLin = u16AgainTab[i - 1];
-            *pu32AgainDb = i - 1;
+    /* the largest entry not above the request */
+    for (i = 1; i < MIS2008_AGAIN_NUM; i++) {
+        if (*pu32AgainLin < g_au32AgainTab[i]) {
             break;
         }
     }
-    return;
+    *pu32AgainLin = g_au32AgainTab[i - 1];
+    *pu32AgainDb = i - 1;
 }
 
 static GK_VOID cmos_dgain_calc_table(VI_PIPE ViPipe, GK_U32 *pu32DgainLin, GK_U32 *pu32DgainDb)
