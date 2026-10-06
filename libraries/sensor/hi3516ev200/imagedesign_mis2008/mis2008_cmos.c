@@ -68,6 +68,20 @@ extern int mis2008_read_register(VI_PIPE ViPipe, int addr);
 #define MIS2008_DGAIN_ADDR (0x3700)
 #define MIS2008_VMAX_ADDR (0x3200)
 #define MIS2008_FLIP_MIRROR_ADDR 0x3007
+#define MIS2008_WINDOW_ADDR (0x3204) /* row start/end, column start/end, 11 bit each */
+#define MIS2008_DS_SEL_ADDR (0x300B) /* 1: registers take effect at frame sync; 0: held */
+
+/*
+ * The readout window: 1920x1080 from row 8, column 7 of the 1936x1096 array.
+ * An even row and an odd column start the GRBG order the ISP is set up for;
+ * the other three start phases measure as the other three orders. Each
+ * flipped axis reads the array the other way, so its start moves on by one
+ * pixel to keep the order.
+ */
+#define MIS2008_WINDOW_ROW (8)
+#define MIS2008_WINDOW_COL (7)
+#define MIS2008_WINDOW_W (1920)
+#define MIS2008_WINDOW_H (1080)
 
 /* the slots cmos_get_sns_regs_info hands the ISP */
 enum {
@@ -761,52 +775,70 @@ static GK_S32 cmos_set_image_mode(VI_PIPE ViPipe, ISP_CMOS_SENSOR_IMAGE_MODE_S *
     return GK_SUCCESS;
 }
 
+/*
+ * The orientation asked for, per pipe. mis2008_init applies it at the end of
+ * its register table, which resets 0x3007 and the window, so a re-init keeps
+ * it.
+ */
+static volatile ISP_SNS_MIRRORFLIP_TYPE_E g_aenMis2008MirrorFlip[ISP_MAX_PIPE_NUM] = { ISP_SNS_NORMAL };
+
+/*
+ * Mirror/flip and the window move together. Writes are held (0x300B = 0) and
+ * released together, so the sensor switches at one frame sync: written one by
+ * one, some frames would come out a row or column short or in the wrong
+ * order. The window and 0x3007 are not in the ISP's sync list, so these writes
+ * cannot race it.
+ */
+GK_VOID mis2008_orientation_init(VI_PIPE ViPipe)
+{
+    GK_U8 u8Value;
+    GK_U32 u32Row = MIS2008_WINDOW_ROW;
+    GK_U32 u32Col = MIS2008_WINDOW_COL;
+
+    switch (g_aenMis2008MirrorFlip[ViPipe]) {
+    case ISP_SNS_MIRROR:
+        u8Value = 0x01;
+        break;
+    case ISP_SNS_FLIP:
+        u8Value = 0x02;
+        break;
+    case ISP_SNS_MIRROR_FLIP:
+        u8Value = 0x03;
+        break;
+    default:
+        u8Value = 0x00;
+        break;
+    }
+    u32Col += (u8Value & 0x01) ? 1 : 0;
+    u32Row += (u8Value & 0x02) ? 1 : 0;
+
+    mis2008_write_register(ViPipe, MIS2008_DS_SEL_ADDR, 0x00);
+    mis2008_write_register(ViPipe, MIS2008_WINDOW_ADDR + 0, HIGH_8BITS(u32Row));
+    mis2008_write_register(ViPipe, MIS2008_WINDOW_ADDR + 1, LOW_8BITS(u32Row));
+    mis2008_write_register(ViPipe, MIS2008_WINDOW_ADDR + 2, HIGH_8BITS(u32Row + MIS2008_WINDOW_H - 1));
+    mis2008_write_register(ViPipe, MIS2008_WINDOW_ADDR + 3, LOW_8BITS(u32Row + MIS2008_WINDOW_H - 1));
+    mis2008_write_register(ViPipe, MIS2008_WINDOW_ADDR + 4, HIGH_8BITS(u32Col));
+    mis2008_write_register(ViPipe, MIS2008_WINDOW_ADDR + 5, LOW_8BITS(u32Col));
+    mis2008_write_register(ViPipe, MIS2008_WINDOW_ADDR + 6, HIGH_8BITS(u32Col + MIS2008_WINDOW_W - 1));
+    mis2008_write_register(ViPipe, MIS2008_WINDOW_ADDR + 7, LOW_8BITS(u32Col + MIS2008_WINDOW_W - 1));
+    mis2008_write_register(ViPipe, MIS2008_FLIP_MIRROR_ADDR, u8Value);
+    mis2008_write_register(ViPipe, MIS2008_DS_SEL_ADDR, 0x01);
+}
+
 static GK_VOID sensor_mirror_flip(VI_PIPE ViPipe, ISP_SNS_MIRRORFLIP_TYPE_E eSnsMirrorFlip)
 {
     ISP_SNS_STATE_S *pstSnsState = GK_NULL;
-    MIS2008_SENSOR_GET_CTX(ViPipe, pstSnsState);
-    CMOS_CHECK_POINTER_VOID(pstSnsState);
-    GK_U8 FRAME_H_ST, FRAME_H_END;
-    GK_U8 FRAME_W_ST, FRAME_W_END;
-    GK_U8 value = 0;
-    switch (eSnsMirrorFlip) {
-    case ISP_SNS_NORMAL:
-        value |= 0;
-        FRAME_H_ST = 4;
-        FRAME_H_END = 0x3f;
-        FRAME_W_ST = 9;
-        FRAME_W_END = 0x88;
-        break;
-    case ISP_SNS_MIRROR:
-        value |= 0x01;
-        FRAME_H_ST = 4;
-        FRAME_H_END = 0x3f;
-        FRAME_W_ST = 0xa;
-        FRAME_W_END = 0x89;
-        break;
-    case ISP_SNS_FLIP:
-        value |= 0x02;
-        FRAME_H_ST = 5;
-        FRAME_H_END = 0x40;
-        FRAME_W_ST = 9;
-        FRAME_W_END = 0x88;
-        break;
-    case ISP_SNS_MIRROR_FLIP:
-        value |= 0x03;
-        FRAME_H_ST = 5;
-        FRAME_H_END = 0x40;
-        FRAME_W_ST = 0xa;
-        FRAME_W_END = 0x89;
-        break;
-    default:
+
+    if (eSnsMirrorFlip > ISP_SNS_MIRROR_FLIP) {
         return;
     }
+    g_aenMis2008MirrorFlip[ViPipe] = eSnsMirrorFlip;
 
-    mis2008_write_register(ViPipe, 0x3205, FRAME_H_ST);
-    mis2008_write_register(ViPipe, 0x3207, FRAME_H_END);
-    mis2008_write_register(ViPipe, 0x3209, FRAME_W_ST);
-    mis2008_write_register(ViPipe, 0x320b, FRAME_W_END);
-    mis2008_write_register(ViPipe, MIS2008_FLIP_MIRROR_ADDR, value);
+    /* before the sensor is initialised, mis2008_init applies it */
+    MIS2008_SENSOR_GET_CTX(ViPipe, pstSnsState);
+    if ((pstSnsState != GK_NULL) && (pstSnsState->bInit == GK_TRUE)) {
+        mis2008_orientation_init(ViPipe);
+    }
 }
 
 static GK_VOID sensor_global_init(VI_PIPE ViPipe)
@@ -965,6 +997,7 @@ static GK_S32 sensor_unregister_callback(VI_PIPE ViPipe, ALG_LIB_S *pstAeLib, AL
     }
 
     sensor_ctx_exit(ViPipe);
+    g_aenMis2008MirrorFlip[ViPipe] = ISP_SNS_NORMAL; /* a new session starts unflipped */
 
     return GK_SUCCESS;
 }

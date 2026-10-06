@@ -226,6 +226,8 @@ static void delay_ms(int ms)
 #define MIS2008_SENSOR_1080P_30FPS_LINEAR_MODE (1)
 #define MIS2008_SENSOR_1080P_30FPS_2t1_WDR_MODE (2)
 
+extern GK_VOID mis2008_orientation_init(VI_PIPE ViPipe);
+
 void mis2008_linear_1080p30_init(VI_PIPE ViPipe);
 void mis2008_linear_1080p30_10b_init(VI_PIPE ViPipe);
 void mis2008_default_reg_init(VI_PIPE ViPipe)
@@ -456,13 +458,13 @@ void mis2008_linear_1080p30_10b_init(VI_PIPE ViPipe)
 	mis2008_write_register(ViPipe, 0x3200, 0x04);
 	mis2008_write_register(ViPipe, 0x3203, 0xc0);
 	mis2008_write_register(ViPipe, 0x3202, 0x08);
-	mis2008_write_register(ViPipe, 0x3205, 0x00);
+	mis2008_write_register(ViPipe, 0x3205, 0x08); /* rows 8..1087 */
 	mis2008_write_register(ViPipe, 0x3204, 0x00);
-	mis2008_write_register(ViPipe, 0x3207, 0x37);
+	mis2008_write_register(ViPipe, 0x3207, 0x3f);
 	mis2008_write_register(ViPipe, 0x3206, 0x04);
-	mis2008_write_register(ViPipe, 0x3209, 0x00);
+	mis2008_write_register(ViPipe, 0x3209, 0x07); /* columns 7..1926: GRBG */
 	mis2008_write_register(ViPipe, 0x3208, 0x00);
-	mis2008_write_register(ViPipe, 0x320b, 0x7f);
+	mis2008_write_register(ViPipe, 0x320b, 0x86);
 	mis2008_write_register(ViPipe, 0x320a, 0x07);
 	mis2008_write_register(ViPipe, 0x3007, 0x00);
 	mis2008_write_register(ViPipe, 0x3300, 0x1c);
@@ -609,6 +611,7 @@ void mis2008_linear_1080p30_10b_init(VI_PIPE ViPipe)
 	mis2008_write_register(ViPipe, 0x3a0f, 0x18);
 	mis2008_write_register(ViPipe, 0x3a10, 0x20);
 	mis2008_write_register(ViPipe, 0x3a11, 0x3c);
+	mis2008_orientation_init(ViPipe); /* the window and 0x3007, for the orientation asked for */
 	mis2008_write_register(ViPipe, 0x3006, 0x00);
 	printf("===MIS2008 1080P 30fps 10bit LINE Init OK!===\n");
 }
