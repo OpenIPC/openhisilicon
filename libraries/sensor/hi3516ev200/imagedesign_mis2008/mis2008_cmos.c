@@ -23,13 +23,6 @@ extern "C" {
 #define MIS2008_ID 0x2008
 #define HIGH_8BITS(x) (((x)&0xFF00) >> 8)
 #define LOW_8BITS(x) ((x)&0x00FF)
-#define LOWER_4BITS(x) (((x)&0x000F) << 4)
-#define HIGHER_4BITS(x) (((x)&0xF000) >> 12)
-#define HIGHER_8BITS(x) (((x)&0x0FF0) >> 4)
-
-#ifndef MAX
-#define MAX(a, b) (((a) < (b)) ? (b) : (a))
-#endif
 
 #ifndef MIN
 #define MIN(a, b) (((a) > (b)) ? (b) : (a))
@@ -44,13 +37,11 @@ ISP_SNS_STATE_S *g_pastMis2008[ISP_MAX_PIPE_NUM] = { GK_NULL };
 ISP_SNS_COMMBUS_U g_aunMis2008BusInfo[ISP_MAX_PIPE_NUM] = { [0] = { .s8I2cDev = 0 },
                                 [1 ... ISP_MAX_PIPE_NUM - 1] = { .s8I2cDev = -1 } };
 
-static GK_U32 gu32MaxTimeGetCnt[ISP_MAX_PIPE_NUM] = { 0 };
 static GK_U32 g_au32InitExposure[ISP_MAX_PIPE_NUM] = { 0 };
 static GK_U32 g_au32LinesPer500ms[ISP_MAX_PIPE_NUM] = { 0 };
 static GK_U16 g_au16InitWBGain[ISP_MAX_PIPE_NUM][3] = { { 0 } };
 static GK_U16 g_au16SampleRgain[ISP_MAX_PIPE_NUM] = { 0 };
 static GK_U16 g_au16SampleBgain[ISP_MAX_PIPE_NUM] = { 0 };
-static GK_U32 au32WDRIntTime[4] = { 0 };
 
 /****************************************************************************
  * extern                                                                   *
@@ -87,8 +78,9 @@ enum {
 #define MIS2008_INCREASE_LINES (1) /* make real fps less than stand fps because NVR require*/
 
 #define MIS2008_VMAX_1080P30_LINEAR (1125 + MIS2008_INCREASE_LINES)
-#define MIS2008_FRAME_RATE_MIN (0x34BC)
-#define EXP_OFFSET_LINEAR (8)
+#define MIS2008_LINE_RATE (MIS2008_VMAX_1080P30_LINEAR * 30) /* lines per second */
+/* integration time up to VMAX - 2; the datasheet's limit is VMAX - 1 */
+#define EXP_OFFSET_LINEAR (2)
 /* lines, until AE first runs: the longest the 30 fps frame allows */
 #define MIS2008_INIT_INTTIME (MIS2008_VMAX_1080P30_LINEAR - EXP_OFFSET_LINEAR)
 
@@ -104,32 +96,6 @@ enum {
               pstSnsState->enWDRMode);                                                                 \
     } while (0)
 
-GK_U16 Dgain_mapping_realgain_to_sensorgain(GK_FLOAT gain_real);
-
-GK_U16 Dgain_mapping_realgain_to_sensorgain(GK_FLOAT gain_real)
-{
-    GK_U16 u16sensorgain;
-    GK_U32 u32Dgain = gain_real * 128;
-    GK_U8 dCoarseGain = 0;
-    GK_U8 dFineGain = 0;
-    GK_U8 u8Reg0x3e06 = 0;
-    for (dCoarseGain = 1; dCoarseGain <= 16; dCoarseGain = dCoarseGain * 2) //1,2,4,8,16
-    {
-        if (u32Dgain < (128 * 2 * dCoarseGain)) {
-            break;
-        }
-    }
-    dFineGain = u32Dgain / dCoarseGain;
-
-    for (; dCoarseGain >= 2; dCoarseGain = dCoarseGain / 2) {
-        u8Reg0x3e06 = (u8Reg0x3e06 << 1) | 0x01;
-    }
-    u16sensorgain = ((GK_U16)u8Reg0x3e06) << 8;
-    u16sensorgain += dFineGain;
-
-    return u16sensorgain;
-}
-
 static GK_S32 cmos_get_ae_default(VI_PIPE ViPipe, AE_SENSOR_DEFAULT_S *pstAeSnsDft)
 {
     ISP_SNS_STATE_S *pstSnsState = GK_NULL;
@@ -144,11 +110,10 @@ static GK_S32 cmos_get_ae_default(VI_PIPE ViPipe, AE_SENSOR_DEFAULT_S *pstAeSnsD
     pstAeSnsDft->stIntTimeAccu.f32Accuracy = 1;
     pstAeSnsDft->stIntTimeAccu.f32Offset = 0;
 
-    pstSnsState->u32FLStd = MIS2008_VMAX_1080P30_LINEAR ;
     pstAeSnsDft->u32FullLinesStd = pstSnsState->u32FLStd;
     pstAeSnsDft->u32FlickerFreq = 50 * 256;
     pstAeSnsDft->u32FullLinesMax = MIS2008_FULL_LINES_MAX_LINEAR;
-    pstAeSnsDft->u32HmaxTimes = (1000000) / (pstSnsState->u32FLStd * 30);
+    pstAeSnsDft->u32HmaxTimes = (1000000) / MIS2008_LINE_RATE;
 
     pstAeSnsDft->stAgainAccu.enAccuType = AE_ACCURACY_TABLE;
     pstAeSnsDft->stAgainAccu.f32Accuracy = 1; //1/128 0.0078125
@@ -168,7 +133,7 @@ static GK_S32 cmos_get_ae_default(VI_PIPE ViPipe, AE_SENSOR_DEFAULT_S *pstAeSnsD
     pstAeSnsDft->stAERouteAttrEx.u32TotalNum = 0;
 
     if (g_au32LinesPer500ms[ViPipe] == 0) {
-        pstAeSnsDft->u32LinesPer500ms = pstSnsState->u32FLStd * 30 / 2;
+        pstAeSnsDft->u32LinesPer500ms = MIS2008_LINE_RATE / 2;
     } else {
         pstAeSnsDft->u32LinesPer500ms = g_au32LinesPer500ms[ViPipe];
     }
@@ -196,7 +161,7 @@ static GK_S32 cmos_get_ae_default(VI_PIPE ViPipe, AE_SENSOR_DEFAULT_S *pstAeSnsD
 
     pstAeSnsDft->u32InitExposure = g_au32InitExposure[ViPipe] ? g_au32InitExposure[ViPipe] : 76151; //148859
 
-    pstAeSnsDft->u32MaxIntTime = pstSnsState->u32FLStd - 1;
+    pstAeSnsDft->u32MaxIntTime = pstSnsState->u32FLStd - EXP_OFFSET_LINEAR;
     pstAeSnsDft->u32MinIntTime = 1;
     pstAeSnsDft->u32MaxIntTimeTarget = 65535;
     pstAeSnsDft->u32MinIntTimeTarget = 1;
@@ -204,11 +169,17 @@ static GK_S32 cmos_get_ae_default(VI_PIPE ViPipe, AE_SENSOR_DEFAULT_S *pstAeSnsD
     return GK_SUCCESS;
 }
 
+static GK_VOID cmos_set_vmax(ISP_SNS_STATE_S *pstSnsState, GK_U32 u32FullLines)
+{
+    pstSnsState->au32FL[0] = u32FullLines;
+    pstSnsState->astRegsInfo[0].astI2cData[SLOT_VMAX_H].u32Data = HIGH_8BITS(u32FullLines);
+    pstSnsState->astRegsInfo[0].astI2cData[SLOT_VMAX_L].u32Data = LOW_8BITS(u32FullLines);
+}
+
 /* the function of sensor set fps */
 static GK_VOID cmos_fps_set(VI_PIPE ViPipe, GK_FLOAT f32Fps, AE_SENSOR_DEFAULT_S *pstAeSnsDft)
 {
     ISP_SNS_STATE_S *pstSnsState = GK_NULL;
-    GK_FLOAT f32maxFps;
     GK_U32 u32FullLines;
 
     CMOS_CHECK_POINTER_VOID(pstAeSnsDft);
@@ -217,39 +188,30 @@ static GK_VOID cmos_fps_set(VI_PIPE ViPipe, GK_FLOAT f32Fps, AE_SENSOR_DEFAULT_S
 
     switch (pstSnsState->u8ImgMode) {
     case MIS2008_SENSOR_1080P_30FPS_LINEAR_MODE:
-        f32maxFps = 30;
         if ((f32Fps <= 30) && (f32Fps >= 2.5)) { /* Minimum 2.5fps */
-            u32FullLines = MIS2008_VMAX_1080P30_LINEAR * f32maxFps / DIV_0_TO_1_FLOAT(f32Fps);
+            u32FullLines = MIS2008_LINE_RATE / DIV_0_TO_1_FLOAT(f32Fps);
         } else {
             ISP_TRACE(MODULE_DBG_ERR, "Not support Fps: %f\n", f32Fps);
             return;
         }
-        u32FullLines = (u32FullLines > MIS2008_FULL_LINES_MAX_LINEAR) ? MIS2008_FULL_LINES_MAX_LINEAR :
-                                        u32FullLines;
+        u32FullLines = MIN(u32FullLines, MIS2008_FULL_LINES_MAX_LINEAR);
         break;
 
     default:
-        printf("Not support this Mode\n");
+        ISP_TRACE(MODULE_DBG_ERR, "Not support this Mode\n");
         return;
-        break;
     }
 
     pstSnsState->u32FLStd = u32FullLines;
-
-    pstSnsState->astRegsInfo[0].astI2cData[SLOT_VMAX_H].u32Data = HIGH_8BITS(u32FullLines);
-    pstSnsState->astRegsInfo[0].astI2cData[SLOT_VMAX_L].u32Data = LOW_8BITS(u32FullLines);
+    cmos_set_vmax(pstSnsState, u32FullLines);
 
     pstAeSnsDft->f32Fps = f32Fps;
-    pstAeSnsDft->u32FullLinesStd = pstSnsState->u32FLStd;
-    pstSnsState->au32FL[0] = pstSnsState->u32FLStd;
-    pstAeSnsDft->u32FullLines = pstSnsState->au32FL[0];
-
-    pstAeSnsDft->u32MaxIntTime = (pstSnsState->u32FLStd << 1) - EXP_OFFSET_LINEAR;
-    // pstAeSnsDft->u32HmaxTimes = (1000000) / (pstSnsState->u32FLStd * DIV_0_TO_1_FLOAT(f32Fps));
-
-    return;
+    pstAeSnsDft->u32FullLinesStd = u32FullLines;
+    pstAeSnsDft->u32FullLines = u32FullLines;
+    pstAeSnsDft->u32MaxIntTime = u32FullLines - EXP_OFFSET_LINEAR;
 }
 
+/* AE lengthens the frame past the standard one for a longer exposure */
 static GK_VOID cmos_slow_framerate_set(VI_PIPE ViPipe, GK_U32 u32FullLines, AE_SENSOR_DEFAULT_S *pstAeSnsDft)
 {
     ISP_SNS_STATE_S *pstSnsState = GK_NULL;
@@ -258,35 +220,22 @@ static GK_VOID cmos_slow_framerate_set(VI_PIPE ViPipe, GK_U32 u32FullLines, AE_S
     MIS2008_SENSOR_GET_CTX(ViPipe, pstSnsState);
     CMOS_CHECK_POINTER_VOID(pstSnsState);
 
-    u32FullLines = (u32FullLines + EXP_OFFSET_LINEAR) >> 1;
-    u32FullLines = (u32FullLines > MIS2008_FRAME_RATE_MIN) ? MIS2008_FRAME_RATE_MIN : u32FullLines;
-    pstSnsState->au32FL[0] = u32FullLines;
-    pstSnsState->astRegsInfo[0].astI2cData[SLOT_VMAX_H].u32Data = HIGH_8BITS(u32FullLines);
-    pstSnsState->astRegsInfo[0].astI2cData[SLOT_VMAX_L].u32Data = LOW_8BITS(u32FullLines);
+    u32FullLines = MIN(u32FullLines, MIS2008_FULL_LINES_MAX_LINEAR);
+    cmos_set_vmax(pstSnsState, u32FullLines);
 
-    pstAeSnsDft->u32FullLines = pstSnsState->au32FL[0];
-
-    pstAeSnsDft->u32MaxIntTime = pstSnsState->au32FL[0] - EXP_OFFSET_LINEAR;
-
-    return;
+    pstAeSnsDft->u32FullLines = u32FullLines;
+    pstAeSnsDft->u32MaxIntTime = u32FullLines - EXP_OFFSET_LINEAR;
 }
 
 /* while isp notify ae to update sensor regs, ae call these funcs. */
 static GK_VOID cmos_inttime_update(VI_PIPE ViPipe, GK_U32 u32IntTime)
 {
     ISP_SNS_STATE_S *pstSnsState = GK_NULL;
-    static GK_BOOL bFirst = GK_TRUE;
-    static GK_U32 u32ShortIntTime = 0;
-    static GK_U32 u32LongIntTime = 0;
+
     MIS2008_SENSOR_GET_CTX(ViPipe, pstSnsState);
     CMOS_CHECK_POINTER_VOID(pstSnsState);
 
-    // Somehow values after this leads to picture loss
-    // XM limits this to 0x10000, but actually never sets higher also
-    if (u32IntTime > 0x545){
-        u32IntTime = 0x545;
-    }
-
+    /* AE keeps this within u32MaxIntTime, VMAX - 2 of the frame it set */
     pstSnsState->astRegsInfo[0].astI2cData[SLOT_EXP_H].u32Data = HIGH_8BITS(u32IntTime);
     pstSnsState->astRegsInfo[0].astI2cData[SLOT_EXP_L].u32Data = LOW_8BITS(u32IntTime);
 
@@ -511,25 +460,6 @@ static GK_VOID cmos_gains_update(VI_PIPE ViPipe, GK_U32 u32Again, GK_U32 u32Dgai
      return;
 }
 
-static GK_VOID cmos_get_inttime_max(VI_PIPE ViPipe, GK_U16 u16ManRatioEnable, GK_U32 *au32Ratio, GK_U32 *au32IntTimeMax,
-                    GK_U32 *au32IntTimeMin, GK_U32 *pu32LFMaxIntTime)
-{
-    GK_U32 u32ShortTimeMinLimit = 0;
-    GK_U32 u32ShortTimeMaxlimit = 0;
-
-    ISP_SNS_STATE_S *pstSnsState = GK_NULL;
-
-    CMOS_CHECK_POINTER_VOID(au32Ratio);
-    CMOS_CHECK_POINTER_VOID(au32IntTimeMax);
-    CMOS_CHECK_POINTER_VOID(au32IntTimeMin);
-    CMOS_CHECK_POINTER_VOID(pu32LFMaxIntTime);
-    MIS2008_SENSOR_GET_CTX(ViPipe, pstSnsState);
-    CMOS_CHECK_POINTER_VOID(pstSnsState);
-    u32ShortTimeMinLimit = 1;
-
-    return;
-}
-
 static GK_S32 cmos_init_ae_exp_function(AE_SENSOR_EXP_FUNC_S *pstExpFuncs)
 {
     CMOS_CHECK_POINTER(pstExpFuncs);
@@ -538,13 +468,11 @@ static GK_S32 cmos_init_ae_exp_function(AE_SENSOR_EXP_FUNC_S *pstExpFuncs)
 
     pstExpFuncs->pfn_cmos_get_ae_default = cmos_get_ae_default;
     pstExpFuncs->pfn_cmos_fps_set = cmos_fps_set;
-    // pstExpFuncs->pfn_cmos_slow_framerate_set = cmos_slow_framerate_set;
+    pstExpFuncs->pfn_cmos_slow_framerate_set = cmos_slow_framerate_set;
     pstExpFuncs->pfn_cmos_inttime_update = cmos_inttime_update;
     pstExpFuncs->pfn_cmos_gains_update = cmos_gains_update;
     pstExpFuncs->pfn_cmos_again_calc_table = cmos_again_calc_table;
     pstExpFuncs->pfn_cmos_dgain_calc_table = cmos_dgain_calc_table;
-    pstExpFuncs->pfn_cmos_get_inttime_max = cmos_get_inttime_max;
-    // pstExpFuncs->pfn_cmos_ae_fswdr_attr_set = cmos_ae_fswdr_attr_set;
 
     return GK_SUCCESS;
 }
@@ -715,38 +643,28 @@ static GK_VOID cmos_set_pixel_detect(VI_PIPE ViPipe, GK_BOOL bEnable)
     CMOS_CHECK_POINTER_VOID(pstSnsState);
 
     if (MIS2008_SENSOR_1080P_30FPS_LINEAR_MODE == pstSnsState->u8ImgMode) {
-        u32FullLines_5Fps = MIS2008_VMAX_1080P30_LINEAR * 30 / 5;
+        u32FullLines_5Fps = MIS2008_LINE_RATE / 5;
     } else {
         return;
     }
 
-    u32MaxIntTime_5Fps = u32FullLines_5Fps * 2 - EXP_OFFSET_LINEAR;
+    u32MaxIntTime_5Fps = u32FullLines_5Fps - EXP_OFFSET_LINEAR;
 
     if (bEnable) { /* setup for ISP pixel calibration mode */
         mis2008_write_register(ViPipe, MIS2008_VMAX_ADDR, HIGH_8BITS(u32FullLines_5Fps)); /* 5fps */
-        mis2008_write_register(ViPipe, MIS2008_VMAX_ADDR + 1, LOW_8BITS(u32FullLines_5Fps)); /* 5fps */
-        mis2008_write_register(ViPipe, MIS2008_EXP_ADDR,
-                       HIGHER_4BITS(u32MaxIntTime_5Fps)); /* max exposure lines */
-        mis2008_write_register(ViPipe, MIS2008_EXP_ADDR + 1,
-                       HIGHER_8BITS(u32MaxIntTime_5Fps)); /* max exposure lines */
-        // mis2008_write_register(ViPipe, MIS2008_EXP_ADDR + 2,
-        // 		       LOWER_4BITS(u32MaxIntTime_5Fps)); /* max exposure lines */
-
-        mis2008_write_register(ViPipe, MIS2008_DGAIN_ADDR, 0x00);
+        mis2008_write_register(ViPipe, MIS2008_VMAX_ADDR + 1, LOW_8BITS(u32FullLines_5Fps));
+        mis2008_write_register(ViPipe, MIS2008_EXP_ADDR, HIGH_8BITS(u32MaxIntTime_5Fps)); /* max exposure lines */
+        mis2008_write_register(ViPipe, MIS2008_EXP_ADDR + 1, LOW_8BITS(u32MaxIntTime_5Fps));
+        mis2008_write_register(ViPipe, MIS2008_DGAIN_ADDR, 0x00); /* 1x, 4.7 fixed point */
         mis2008_write_register(ViPipe, MIS2008_DGAIN_ADDR + 1, 0x80);
-        mis2008_write_register(ViPipe, MIS2008_AGAIN_ADDR, 0x00);
-        // mis2008_write_register(ViPipe, MIS2008_AGAIN_ADDR+1, 0x40);
+        mis2008_write_register(ViPipe, MIS2008_AGAIN_ADDR, 0x00); /* 1x */
     } else { /* setup for ISP 'normal mode' */
-        pstSnsState->u32FLStd = (pstSnsState->u32FLStd > MIS2008_FULL_LINES_MAX_LINEAR * 2) ?
-                        (MIS2008_FULL_LINES_MAX_LINEAR * 2) :
-                        pstSnsState->u32FLStd;
+        pstSnsState->u32FLStd = MIN(pstSnsState->u32FLStd, MIS2008_FULL_LINES_MAX_LINEAR);
         pstSnsState->au32FL[0] = pstSnsState->u32FLStd;
-        mis2008_write_register(ViPipe, MIS2008_VMAX_ADDR, HIGH_8BITS(pstSnsState->u32FLStd >> 1));
-        mis2008_write_register(ViPipe, MIS2008_VMAX_ADDR + 1, LOW_8BITS(pstSnsState->u32FLStd >> 1));
+        mis2008_write_register(ViPipe, MIS2008_VMAX_ADDR, HIGH_8BITS(pstSnsState->u32FLStd));
+        mis2008_write_register(ViPipe, MIS2008_VMAX_ADDR + 1, LOW_8BITS(pstSnsState->u32FLStd));
         pstSnsState->bSyncInit = GK_FALSE;
     }
-
-    return;
 }
 
 static GK_S32 cmos_get_sns_regs_info(VI_PIPE ViPipe, ISP_SNS_REGS_INFO_S *pstSnsRegsInfo)
