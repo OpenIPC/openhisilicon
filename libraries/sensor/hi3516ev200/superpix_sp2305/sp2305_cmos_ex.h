@@ -420,34 +420,34 @@ static const ISP_CMOS_SHARPEN_S g_stIspYuvSharpen = {
  * Fitted on the same RAW captures as the white-balance curve (sp2305_cmos.c):
  * per bulb colour temperature, white-balanced by the chart's greys, rows
  * summing to 1.0, minimising CIELAB error with lightness matched (the bulbs lit
- * the chart unevenly).  Each is held to no more than 1.25x the noise of the
- * matrix the camera ran at that light (Majestic's imx307.ini, the ev200
- * default.ini), so colour improves without the video getting noisier.  Mean
- * colour error 7.7 dE at 6000 K, 9.9 at 5000 K, 12.2 at 4300 K, 16.6 at 3000 K;
- * the vendor tables, whose 3700 K and 2650 K entries were one matrix, scored
- * 11-17 at 1.5-1.9x the noise.
+ * the chart unevenly): 7.3, 6.7, 7.0 and 7.8 dE at 6000, 5000, 4300, 3000 K.
+ * Not held to the noise of the matrices before them: held to 1.25x, the
+ * picture came out at 0.78 of the chart's saturation.  Unheld, the camera
+ * renders the chart at 0.97-1.05 (with g_stAwbAgcTable below) and 13-15 dE,
+ * and chroma noise on its greys goes from 4.0 to 4.4-5.6 a*b*, at or under
+ * the IMX335's 5.6-7.0 on the same SoC and scene.
  */
 static AWB_CCM_S g_stAwbCcm = {
     4,
     {
         {
             6000,
-            { 0x021F, 0x8104, 0x801B, 0x80B8, 0x0236, 0x807E, 0x8029, 0x80FE, 0x0227 },
+            { 0x024F, 0x813F, 0x8010, 0x80C2, 0x023E, 0x807C, 0x801F, 0x8122, 0x0241 },
         },
 
         {
             5000,
-            { 0x0220, 0x80F6, 0x802A, 0x80A7, 0x022F, 0x8088, 0x800F, 0x810A, 0x0219 },
+            { 0x021C, 0x8103, 0x8019, 0x811A, 0x02B3, 0x8099, 0x8043, 0x810E, 0x0251 },
         },
 
         {
             4300,
-            { 0x0220, 0x80DE, 0x8042, 0x80AA, 0x0228, 0x807E, 0x8016, 0x80FE, 0x0214 },
+            { 0x021B, 0x8106, 0x8015, 0x8136, 0x02D4, 0x809E, 0x8043, 0x8146, 0x0289 },
         },
 
         {
             3000,
-            { 0x0271, 0x80D4, 0x809D, 0x80B1, 0x0272, 0x80C1, 0x0002, 0x8150, 0x024E },
+            { 0x0221, 0x80DD, 0x8044, 0x81C7, 0x038D, 0x80C6, 0x80A6, 0x820A, 0x03B0 },
         },
     },
 };
@@ -457,8 +457,10 @@ static AWB_AGC_TABLE_S g_stAwbAgcTable = {
     1,
 
     /* 1,  2,  4,  8, 16, 32, 64, 128, 256, 512, 1024, 2048, 4096, 8192, 16384, 32768 */
-    /* saturation */
-    { 0x80, 0x80, 0x7e, 0x72, 0x68, 0x60, 0x58, 0x50, 0x48, 0x40, 0x38, 0x38, 0x38, 0x38, 0x38, 0x38 }
+    /* saturation: full up to 4x, eased from 8x; at the 4-8x of a lit room the
+     * vendor's 0x7e/0x72 left the picture at 0.9 of its colour on top of the
+     * matrix.  The night end (32x up) is unchanged. */
+    { 0x80, 0x80, 0x80, 0x7c, 0x6c, 0x60, 0x58, 0x50, 0x48, 0x40, 0x38, 0x38, 0x38, 0x38, 0x38, 0x38 }
 };
 
 static const ISP_CMOS_WDR_S g_stIspWDR = {
