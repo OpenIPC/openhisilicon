@@ -46,9 +46,9 @@ static GK_U16 g_au16SampleBgain[ISP_MAX_PIPE_NUM] = { 0 };
 /****************************************************************************
  * extern                                                                   *
  ****************************************************************************/
-extern const unsigned int mis2008_i2c_addr;
-extern unsigned int mis2008_addr_byte;
-extern unsigned int mis2008_data_byte;
+extern const unsigned char mis2008_i2c_addr;
+extern const unsigned int mis2008_addr_byte;
+extern const unsigned int mis2008_data_byte;
 
 extern void mis2008_init(VI_PIPE ViPipe);
 extern void mis2008_exit(VI_PIPE ViPipe);
