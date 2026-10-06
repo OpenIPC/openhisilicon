@@ -788,12 +788,21 @@ static volatile ISP_SNS_MIRRORFLIP_TYPE_E g_aenMis2008MirrorFlip[ISP_MAX_PIPE_NU
  * one, some frames would come out a row or column short or in the wrong
  * order. The window and 0x3007 are not in the ISP's sync list, so these writes
  * cannot race it.
+ *
+ * A failed write is retried with the whole group, since a window left half
+ * written gives the VI frames of the wrong size. The hold is released whatever
+ * happens: a sensor left held would take no further exposure, gain or VMAX
+ * either.
  */
-GK_VOID mis2008_orientation_init(VI_PIPE ViPipe)
+#define MIS2008_ORIENT_TRIES (2)
+
+GK_S32 mis2008_orientation_init(VI_PIPE ViPipe)
 {
     GK_U8 u8Value;
     GK_U32 u32Row = MIS2008_WINDOW_ROW;
     GK_U32 u32Col = MIS2008_WINDOW_COL;
+    GK_U32 i, u32Try;
+    GK_S32 s32Ret = GK_FAILURE;
 
     switch (g_aenMis2008MirrorFlip[ViPipe]) {
     case ISP_SNS_MIRROR:
@@ -812,17 +821,42 @@ GK_VOID mis2008_orientation_init(VI_PIPE ViPipe)
     u32Col += (u8Value & 0x01) ? 1 : 0;
     u32Row += (u8Value & 0x02) ? 1 : 0;
 
-    mis2008_write_register(ViPipe, MIS2008_DS_SEL_ADDR, 0x00);
-    mis2008_write_register(ViPipe, MIS2008_WINDOW_ADDR + 0, HIGH_8BITS(u32Row));
-    mis2008_write_register(ViPipe, MIS2008_WINDOW_ADDR + 1, LOW_8BITS(u32Row));
-    mis2008_write_register(ViPipe, MIS2008_WINDOW_ADDR + 2, HIGH_8BITS(u32Row + MIS2008_WINDOW_H - 1));
-    mis2008_write_register(ViPipe, MIS2008_WINDOW_ADDR + 3, LOW_8BITS(u32Row + MIS2008_WINDOW_H - 1));
-    mis2008_write_register(ViPipe, MIS2008_WINDOW_ADDR + 4, HIGH_8BITS(u32Col));
-    mis2008_write_register(ViPipe, MIS2008_WINDOW_ADDR + 5, LOW_8BITS(u32Col));
-    mis2008_write_register(ViPipe, MIS2008_WINDOW_ADDR + 6, HIGH_8BITS(u32Col + MIS2008_WINDOW_W - 1));
-    mis2008_write_register(ViPipe, MIS2008_WINDOW_ADDR + 7, LOW_8BITS(u32Col + MIS2008_WINDOW_W - 1));
-    mis2008_write_register(ViPipe, MIS2008_FLIP_MIRROR_ADDR, u8Value);
-    mis2008_write_register(ViPipe, MIS2008_DS_SEL_ADDR, 0x01);
+    {
+        const struct {
+            GK_U32 u32Addr, u32Data;
+        } astGroup[] = {
+            { MIS2008_WINDOW_ADDR + 0, HIGH_8BITS(u32Row) },
+            { MIS2008_WINDOW_ADDR + 1, LOW_8BITS(u32Row) },
+            { MIS2008_WINDOW_ADDR + 2, HIGH_8BITS(u32Row + MIS2008_WINDOW_H - 1) },
+            { MIS2008_WINDOW_ADDR + 3, LOW_8BITS(u32Row + MIS2008_WINDOW_H - 1) },
+            { MIS2008_WINDOW_ADDR + 4, HIGH_8BITS(u32Col) },
+            { MIS2008_WINDOW_ADDR + 5, LOW_8BITS(u32Col) },
+            { MIS2008_WINDOW_ADDR + 6, HIGH_8BITS(u32Col + MIS2008_WINDOW_W - 1) },
+            { MIS2008_WINDOW_ADDR + 7, LOW_8BITS(u32Col + MIS2008_WINDOW_W - 1) },
+            { MIS2008_FLIP_MIRROR_ADDR, u8Value },
+        };
+
+        for (u32Try = 0; u32Try < MIS2008_ORIENT_TRIES && s32Ret != GK_SUCCESS; u32Try++) {
+            s32Ret = mis2008_write_register(ViPipe, MIS2008_DS_SEL_ADDR, 0x00);
+            for (i = 0; i < sizeof(astGroup) / sizeof(astGroup[0]) && s32Ret == GK_SUCCESS; i++) {
+                s32Ret = mis2008_write_register(ViPipe, astGroup[i].u32Addr, astGroup[i].u32Data);
+            }
+        }
+    }
+
+    for (u32Try = 0; u32Try < MIS2008_ORIENT_TRIES; u32Try++) {
+        if (mis2008_write_register(ViPipe, MIS2008_DS_SEL_ADDR, 0x01) == GK_SUCCESS) {
+            break;
+        }
+    }
+    if (u32Try == MIS2008_ORIENT_TRIES) {
+        ISP_TRACE(MODULE_DBG_ERR, "MIS2008: could not release the register hold (0x300B)\n");
+        return GK_FAILURE;
+    }
+    if (s32Ret != GK_SUCCESS) {
+        ISP_TRACE(MODULE_DBG_ERR, "MIS2008: mirror/flip %d not applied\n", g_aenMis2008MirrorFlip[ViPipe]);
+    }
+    return s32Ret;
 }
 
 static GK_VOID sensor_mirror_flip(VI_PIPE ViPipe, ISP_SNS_MIRRORFLIP_TYPE_E eSnsMirrorFlip)

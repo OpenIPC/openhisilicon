@@ -137,7 +137,7 @@ static void delay_ms(int ms)
 #define MIS2008_SENSOR_1080P_30FPS_LINEAR_MODE (1)
 #define MIS2008_SENSOR_1080P_30FPS_2t1_WDR_MODE (2)
 
-extern GK_VOID mis2008_orientation_init(VI_PIPE ViPipe);
+extern GK_S32 mis2008_orientation_init(VI_PIPE ViPipe);
 
 void mis2008_linear_1080p30_init(VI_PIPE ViPipe);
 void mis2008_linear_1080p30_10b_init(VI_PIPE ViPipe);
