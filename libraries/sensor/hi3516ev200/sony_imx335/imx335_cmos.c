@@ -107,6 +107,8 @@ extern void IMX335_standby(VI_PIPE ViPipe);
 extern void IMX335_restart(VI_PIPE ViPipe);
 extern int IMX335_write_register(VI_PIPE ViPipe, int addr, int data);
 extern int IMX335_read_register(VI_PIPE ViPipe, int addr);
+extern void imx335_mirror_flip_set(VI_PIPE ViPipe, ISP_SNS_MIRRORFLIP_TYPE_E eMirrorFlip);
+extern GK_S32 imx335_orientation_init(VI_PIPE ViPipe);
 
 /****************************************************************************
  * local variables                                                            *
@@ -2150,6 +2152,7 @@ static GK_S32 sensor_unregister_callback(VI_PIPE ViPipe, ALG_LIB_S *pstAeLib,
 	}
 
 	sensor_ctx_exit(ViPipe);
+	imx335_mirror_flip_set(ViPipe, ISP_SNS_NORMAL); /* a new session starts unflipped */
 
 	return GK_SUCCESS;
 }
@@ -2169,12 +2172,32 @@ static GK_S32 sensor_set_init(VI_PIPE ViPipe, ISP_INIT_ATTR_S *pstInitAttr)
 	return GK_SUCCESS;
 }
 
+/*
+ * The sensor inverts its own readout; imx335_orientation_init() in
+ * imx335_sensor_ctl.c has what that takes. Before the sensor is initialised
+ * only the request is kept, and IMX335_init applies it.
+ */
+static GK_VOID sensor_mirror_flip(VI_PIPE ViPipe, ISP_SNS_MIRRORFLIP_TYPE_E eSnsMirrorFlip)
+{
+	ISP_SNS_STATE_S *pstSnsState = GK_NULL;
+
+	if (eSnsMirrorFlip > ISP_SNS_MIRROR_FLIP) {
+		return;
+	}
+	imx335_mirror_flip_set(ViPipe, eSnsMirrorFlip);
+
+	IMX335_SENSOR_GET_CTX(ViPipe, pstSnsState);
+	if ((pstSnsState != GK_NULL) && (pstSnsState->bInit == GK_TRUE)) {
+		imx335_orientation_init(ViPipe);
+	}
+}
+
 ISP_SNS_OBJ_S stSnsImx335Obj = {
 	.pfnRegisterCallback = sensor_register_callback,
 	.pfnUnRegisterCallback = sensor_unregister_callback,
 	.pfnStandby = IMX335_standby,
 	.pfnRestart = IMX335_restart,
-	.pfnMirrorFlip = GK_NULL,
+	.pfnMirrorFlip = sensor_mirror_flip,
 	.pfnWriteReg = IMX335_write_register,
 	.pfnReadReg = IMX335_read_register,
 	.pfnSetBusInfo = IMX335_set_bus_info,
