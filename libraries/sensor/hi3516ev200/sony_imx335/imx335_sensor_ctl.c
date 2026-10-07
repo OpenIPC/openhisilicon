@@ -158,6 +158,131 @@ void IMX335_restart(VI_PIPE ViPipe)
 	return;
 }
 
+/*
+ * Readout direction. HREVERSE (0x304E) mirrors and VREVERSE (0x304F) flips,
+ * and the sensor keeps its RGGB order either way: measured on a gk7205v300,
+ * the raw of every inverted orientation in every mode below lines up with the
+ * normal raw turned round at a colour-preserving offset, so the ISP's Bayer
+ * order never changes. What moves is the field of view, by about 25 px or 25
+ * lines per inverted axis: the readout is wider and taller than the picture,
+ * and the capture keeps the part that arrives first.
+ *
+ * Mirror is the one register. Flip is not (datasheet, "List of Setting
+ * Register" for each readout mode):
+ * - AREA3_ST_ADR_1 (0x3074/75) moves to the other end of the window. For
+ *   every all-pixel, window-crop and WDR mode that is start + width + 8:
+ *   0x00B0 -> 0x1010 at full height, 0x0410 -> 0x0CB0 for the 1080p crop.
+ * - 0x3081 and 0x3083 go from 0x02 to 0xFE. Left at 0x02 the raw saturates
+ *   and the picture is white.
+ * - 2/2 binning has its own table: start 0x1018, 0x3080-0x3087 and 0x30AD.
+ * The crop modes' BLACK_OFSET_ADR, UNRD_LINE_MAX and UNREAD_ED_ADR need no
+ * change: the 1080p crop flips correctly with them as they are.
+ *
+ * Each mode init notes its window, and imx335_orientation_init() writes the
+ * whole group between REGHOLD (0x3001) = 1 and 0, so the sensor switches at
+ * one frame. It runs at the end of every init, which writes 0x304E/0x304F
+ * back to normal, so a re-init or a mode change keeps the orientation. None
+ * of these registers is in the ISP's sync list, and the sensor has no page
+ * register, so the writes cannot race it.
+ */
+#define IMX335_REGHOLD_ADDR   (0x3001)
+#define IMX335_HREVERSE_ADDR  (0x304E)
+#define IMX335_VREVERSE_ADDR  (0x304F)
+#define IMX335_AREA3_ST_ADDR  (0x3074)
+#define IMX335_BINNING_ST_INV (0x1018)
+#define IMX335_ORIENT_TRIES   (2)
+
+static volatile ISP_SNS_MIRRORFLIP_TYPE_E g_aenImx335MirrorFlip[ISP_MAX_PIPE_NUM] = { ISP_SNS_NORMAL };
+
+static struct {
+	GK_U32 u32Start; /* AREA3_ST_ADR_1 for the normal readout */
+	GK_U32 u32Width; /* AREA3_WIDTH_1 */
+	GK_BOOL bBinning;
+} g_astImx335Window[ISP_MAX_PIPE_NUM];
+
+static void imx335_window_note(VI_PIPE ViPipe, GK_U32 u32Start, GK_U32 u32Width,
+			       GK_BOOL bBinning)
+{
+	g_astImx335Window[ViPipe].u32Start = u32Start;
+	g_astImx335Window[ViPipe].u32Width = u32Width;
+	g_astImx335Window[ViPipe].bBinning = bBinning;
+}
+
+void imx335_mirror_flip_set(VI_PIPE ViPipe, ISP_SNS_MIRRORFLIP_TYPE_E eMirrorFlip)
+{
+	g_aenImx335MirrorFlip[ViPipe] = eMirrorFlip;
+}
+
+GK_S32 imx335_orientation_init(VI_PIPE ViPipe)
+{
+	static const GK_U8 au8BinNormal[8] = { 0x04, 0xFD, 0x04, 0xFE, 0x04, 0xFB, 0x04, 0x02 };
+	static const GK_U8 au8BinInverted[8] = { 0xFC, 0x05, 0xFC, 0x02, 0xFC, 0x03, 0xFC, 0xFE };
+	ISP_SNS_MIRRORFLIP_TYPE_E eMirrorFlip = g_aenImx335MirrorFlip[ViPipe];
+	GK_BOOL bMirror = (eMirrorFlip == ISP_SNS_MIRROR) || (eMirrorFlip == ISP_SNS_MIRROR_FLIP);
+	GK_BOOL bFlip = (eMirrorFlip == ISP_SNS_FLIP) || (eMirrorFlip == ISP_SNS_MIRROR_FLIP);
+	GK_BOOL bBinning = g_astImx335Window[ViPipe].bBinning;
+	GK_U32 u32Start = g_astImx335Window[ViPipe].u32Start;
+	struct {
+		GK_U32 u32Addr, u32Data;
+	} astGroup[16];
+	GK_U32 i, u32Num = 0, u32Try;
+	GK_S32 s32Ret = GK_FAILURE;
+
+	if (u32Start == 0) {
+		ISP_TRACE(MODULE_DBG_ERR, "IMX335: no window noted for this mode, orientation not applied\n");
+		return GK_FAILURE;
+	}
+	if (bFlip) {
+		u32Start = bBinning ? IMX335_BINNING_ST_INV :
+				      u32Start + g_astImx335Window[ViPipe].u32Width + 8;
+	}
+
+	astGroup[u32Num].u32Addr = IMX335_HREVERSE_ADDR;
+	astGroup[u32Num++].u32Data = bMirror ? 0x01 : 0x00;
+	astGroup[u32Num].u32Addr = IMX335_VREVERSE_ADDR;
+	astGroup[u32Num++].u32Data = bFlip ? 0x01 : 0x00;
+	astGroup[u32Num].u32Addr = IMX335_AREA3_ST_ADDR;
+	astGroup[u32Num++].u32Data = u32Start & 0xFF;
+	astGroup[u32Num].u32Addr = IMX335_AREA3_ST_ADDR + 1;
+	astGroup[u32Num++].u32Data = (u32Start >> 8) & 0x1F;
+	if (bBinning) {
+		for (i = 0; i < 8; i++) {
+			astGroup[u32Num].u32Addr = 0x3080 + i;
+			astGroup[u32Num++].u32Data = bFlip ? au8BinInverted[i] : au8BinNormal[i];
+		}
+		astGroup[u32Num].u32Addr = 0x30AD;
+		astGroup[u32Num++].u32Data = bFlip ? 0x78 : 0x08;
+	} else {
+		astGroup[u32Num].u32Addr = 0x3081;
+		astGroup[u32Num++].u32Data = bFlip ? 0xFE : 0x02;
+		astGroup[u32Num].u32Addr = 0x3083;
+		astGroup[u32Num++].u32Data = bFlip ? 0xFE : 0x02;
+	}
+
+	/* A failed write retries the whole group, since a start address left
+	 * half written reads the wrong lines. The hold is released whatever
+	 * happens: a held sensor takes no exposure, gain or VMAX either. */
+	for (u32Try = 0; u32Try < IMX335_ORIENT_TRIES && s32Ret != GK_SUCCESS; u32Try++) {
+		s32Ret = IMX335_write_register(ViPipe, IMX335_REGHOLD_ADDR, 0x01);
+		for (i = 0; i < u32Num && s32Ret == GK_SUCCESS; i++) {
+			s32Ret = IMX335_write_register(ViPipe, astGroup[i].u32Addr, astGroup[i].u32Data);
+		}
+	}
+	for (u32Try = 0; u32Try < IMX335_ORIENT_TRIES; u32Try++) {
+		if (IMX335_write_register(ViPipe, IMX335_REGHOLD_ADDR, 0x00) == GK_SUCCESS) {
+			break;
+		}
+	}
+	if (u32Try == IMX335_ORIENT_TRIES) {
+		ISP_TRACE(MODULE_DBG_ERR, "IMX335: could not release the register hold (0x3001)\n");
+		return GK_FAILURE;
+	}
+	if (s32Ret != GK_SUCCESS) {
+		ISP_TRACE(MODULE_DBG_ERR, "IMX335: mirror/flip %d not applied\n", eMirrorFlip);
+	}
+	return s32Ret;
+}
+
 static void delay_ms(int ms)
 {
 	usleep(ms * 1000);
@@ -252,6 +377,7 @@ void IMX335_init(VI_PIPE ViPipe)
 	}
 
 	imx335_default_reg_init(ViPipe);
+	imx335_orientation_init(ViPipe); /* the init wrote 0x304E/0x304F back to normal */
 	g_pastImx335[ViPipe]->bInit = GK_TRUE;
 
 	return;
@@ -313,6 +439,7 @@ void IMX335_linear_5M30_12bit_40fps_init(VI_PIPE ViPipe)
 
 	IMX335_write_register(ViPipe, 0x3074, 0xB0); // AREA3_ST_ADR_1 (upper-left crop position)
 	IMX335_write_register(ViPipe, 0x3075, 0x00);
+	imx335_window_note(ViPipe, 0x00B0, 0x0F58, GK_FALSE);
 	IMX335_write_register(ViPipe, 0x30C6, 0x00);
 	IMX335_write_register(ViPipe, 0x30CE, 0x00); // UNRD_LINE_MAX
 	IMX335_write_register(ViPipe, 0x30D8, 0x4C); // UNREAD_ED_ADR
@@ -458,6 +585,7 @@ void IMX335_cropped_41fps_2592_1520_init(VI_PIPE ViPipe)
 
 	IMX335_write_register(ViPipe, 0x3076, 0x08);//// AREA3_WIDTH_1 Vert Cropping Size designation * 2 , = Y_OUT_SIZE*2
 	IMX335_write_register(ViPipe, 0x3077, 0x0C);
+	imx335_window_note(ViPipe, 0x00B0, 0x0C08, GK_FALSE);
 
 	
 	IMX335_write_register(ViPipe, 0x3050, 0x00);
@@ -619,6 +747,7 @@ void IMX335_cropped_60fps_1080p_init(VI_PIPE ViPipe)
 
 	IMX335_write_register(ViPipe, 0x3076, 0x98); // AREA3_WIDTH_1 = Y_OUT_SIZE * 2
 	IMX335_write_register(ViPipe, 0x3077, 0x08);
+	imx335_window_note(ViPipe, 0x0410, 0x0898, GK_FALSE);
 
 	
 	IMX335_write_register(ViPipe, 0x3050, 0x00);
@@ -823,6 +952,7 @@ void IMX335_cropped_flex_init(VI_PIPE ViPipe)
 
 	IMX335_write_register(ViPipe, 0x3076, area3_width        & 0xFF);
 	IMX335_write_register(ViPipe, 0x3077, (area3_width >> 8) & 0x1F);
+	imx335_window_note(ViPipe, area3_st, area3_width, GK_FALSE);
 
 	IMX335_write_register(ViPipe, 0x3050, 0x00);
 	IMX335_write_register(ViPipe, 0x30C6, 0x12);
@@ -949,6 +1079,7 @@ void IMX335_wdr_5M30_10bit_init(VI_PIPE ViPipe)
 	IMX335_write_register(ViPipe, 0x3075, 0x00);
 	IMX335_write_register(ViPipe, 0x3076, 0x58);
 	IMX335_write_register(ViPipe, 0x3077, 0x0F);
+	imx335_window_note(ViPipe, 0x00B0, 0x0F58, GK_FALSE);
 	IMX335_write_register(ViPipe, 0x3078, 0x01);
 	IMX335_write_register(ViPipe, 0x3079, 0x02);
 	IMX335_write_register(ViPipe, 0x307A, 0xFF);
@@ -1080,6 +1211,7 @@ void IMX335_wdr_4M25_10bit_init(VI_PIPE ViPipe) // use weighted binning mode
 	IMX335_write_register(ViPipe, 0x3075, 0x02);
 	IMX335_write_register(ViPipe, 0x3076, 0x68);
 	IMX335_write_register(ViPipe, 0x3077, 0x0b);
+	imx335_window_note(ViPipe, 0x02A8, 0x0B68, GK_FALSE);
 	IMX335_write_register(ViPipe, 0x30c6, 0x12);
 	IMX335_write_register(ViPipe, 0x30ce, 0x64);
 	IMX335_write_register(ViPipe, 0x30d8, 0x6c);
@@ -1259,6 +1391,7 @@ void IMX335_wdr_4M30_10bit_init(VI_PIPE ViPipe)
 	IMX335_write_register(ViPipe, 0x3075, 0x02);
 	IMX335_write_register(ViPipe, 0x3076, 0x18);
 	IMX335_write_register(ViPipe, 0x3077, 0x0C);
+	imx335_window_note(ViPipe, 0x0250, 0x0C18, GK_FALSE);
 	IMX335_write_register(ViPipe, 0x30C6, 0x12);
 	IMX335_write_register(ViPipe, 0x30CE, 0x64);
 	IMX335_write_register(ViPipe, 0x30D8, 0x38);
@@ -1398,6 +1531,7 @@ void IMX335_binning_60pfs_init(VI_PIPE ViPipe)
   
   IMX335_write_register(ViPipe, 0x3076, 0x60); 
   IMX335_write_register(ViPipe, 0x3077, 0x0F); 
+	imx335_window_note(ViPipe, 0x00A8, 0x0F60, GK_TRUE);
   
 
   // --- INCSEL
@@ -1528,6 +1662,7 @@ void IMX335_linear_5M30_12bit_init(VI_PIPE ViPipe)
 
 	IMX335_write_register(ViPipe, 0x3074, 0xB0); // AREA3_ST_ADR_1 upper-left crop position
 	IMX335_write_register(ViPipe, 0x3075, 0x00);
+	imx335_window_note(ViPipe, 0x00B0, 0x0F58, GK_FALSE);
 	IMX335_write_register(ViPipe, 0x30C6, 0x00); // Black-offset address
 	IMX335_write_register(ViPipe, 0x30CE, 0x00); // UNRD_LINE_MAX
 	IMX335_write_register(ViPipe, 0x30D8, 0x4C); // UNREAD_ED_ADR
