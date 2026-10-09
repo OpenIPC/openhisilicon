@@ -77,11 +77,12 @@ extern void sysconfig_module_set_clk(int mod_id, unsigned int clk_freq,
 
 static const u32 npu_mailbox[4] = { 0x1a8, 0x1ac, 0x1c8, 0x1cc };
 
-/* Device state, as the SDK numbers it */
+/* Device state; the first three as the SDK numbers them */
 enum {
 	NPU_IDLE = 1,
 	NPU_BUSY = 2,
 	NPU_ABORTED = 3,	/* DFX error; cleared by NPU_IOC_RESET */
+	NPU_DRAINING = 4,	/* an abandoned job still owns the NPU */
 };
 
 #define NPU_DESTROY_TIMEOUT	1000	/* jiffies, as the SDK driver */
@@ -94,13 +95,14 @@ struct npu_job {
 	struct list_head node;
 	struct npu_start_params params;
 	struct npu_job_status status;
+	bool orphan;		/* its queue is gone; free it once it ends */
 };
 
 struct npu_dev {
 	void __iomem *regs;
 	phys_addr_t regs_phys;
 	void __iomem *clk_gate;		/* CRG_NPU_CLK */
-	int irq;
+	int irq;			/* for remove */
 	struct miscdevice misc;
 
 	struct mutex ref_lock;		/* file opens, which hold the clock */
@@ -111,14 +113,15 @@ struct npu_dev {
 	unsigned int queues;
 
 	/*
-	 * state, cur, cur_id, last_id and both lists. The hard IRQ handler
-	 * only writes cur->status and state; everything that moves a job
-	 * runs in process or IRQ-thread context under this mutex.
+	 * state, cur, last_id and both lists. The hard IRQ handler only
+	 * writes cur->status and state; everything that moves a job runs in
+	 * process or IRQ-thread context under this mutex. cur is only ever
+	 * freed by the IRQ thread or after the IRQ is gone, never under the
+	 * hard handler. Lock order: open_lock, queue_lock, state_lock.
 	 */
 	struct mutex state_lock;
 	int state;
 	struct npu_job *cur;
-	u32 cur_id;
 	u32 last_id;
 	struct list_head pending;
 	struct list_head done;
@@ -179,8 +182,14 @@ static void npu_hw_open(struct npu_dev *npu, u32 base, u32 end)
 
 static void npu_hw_close(struct npu_dev *npu)
 {
-	npu_clear_int(npu, npu_read(npu, NPU_INT_STATUS));
-	npu_update(npu, NPU_INT_EN, NPU_INT_ALL, 0);
+	npu_update(npu, NPU_DEBUG, NPU_DEBUG_STCT_RPT, 0);
+	mutex_lock(&npu->state_lock);
+	/* a draining job still has to raise its interrupt to be let go */
+	if (npu->state != NPU_DRAINING) {
+		npu_clear_int(npu, npu_read(npu, NPU_INT_STATUS));
+		npu_update(npu, NPU_INT_EN, NPU_INT_ALL, 0);
+	}
+	mutex_unlock(&npu->state_lock);
 }
 
 static void npu_hw_start(struct npu_dev *npu, const struct npu_start_params *p)
@@ -225,8 +234,16 @@ static void npu_start_next(struct npu_dev *npu)
 	list_del(&job->node);
 	job->status.state = NPU_JOB_PROCESS;
 	npu->cur = job;
-	npu->cur_id = job->status.job_id;
 	npu_hw_start(npu, &job->params);
+}
+
+/* Caller holds state_lock. Hands a job that has ended to its collector. */
+static void npu_retire(struct npu_dev *npu, struct npu_job *job)
+{
+	if (job->orphan)
+		kfree(job);
+	else
+		list_add_tail(&job->node, &npu->done);
 }
 
 static irqreturn_t npu_irq(int irq, void *data)
@@ -262,19 +279,25 @@ static irqreturn_t npu_irq(int irq, void *data)
 static irqreturn_t npu_irq_thread(int irq, void *data)
 {
 	struct npu_dev *npu = data;
-	struct npu_job *job;
+	struct npu_job *job, *n;
 
 	mutex_lock(&npu->state_lock);
 	job = npu->cur;
 	if (job) {
 		switch (job->status.state) {
 		case NPU_JOB_SUCCESS:
-			list_add_tail(&job->node, &npu->done);
+			npu_retire(npu, job);
 			npu_start_next(npu);
 			break;
 		case NPU_JOB_ABORT:
-			list_add_tail(&job->node, &npu->done);
+			npu_retire(npu, job);
 			npu->cur = NULL;
+			/* nothing starts until reset: fail what was queued */
+			list_for_each_entry_safe(job, n, &npu->pending, node) {
+				list_del(&job->node);
+				job->status.state = NPU_JOB_ABORT;
+				list_add_tail(&job->node, &npu->done);
+			}
 			break;
 		default:
 			/* SI/PC stop: the job keeps the NPU, waiters see it */
@@ -305,19 +328,17 @@ static void npu_collect(struct npu_dev *npu, u32 id, struct npu_job_status *st)
 
 /*
  * Caller holds state_lock. Fills *st and returns true if job @id has
- * something to report: finished (collected), or stopped at SI/PC. Returns
- * false while it is still pending or running; st->state then says which.
+ * something to report: finished (collected), stopped at SI/PC, or gone
+ * (NPU_JOB_UNKNOWN: collected already, or dropped with its queue).
+ * Returns false while it is still pending or running; st->state then
+ * says which.
  */
 static bool npu_job_status(struct npu_dev *npu, u32 id,
 			   struct npu_job_status *st)
 {
-	struct npu_job *cur = npu->cur;
+	struct npu_job *cur = npu->cur, *job;
 
-	if (id < npu->cur_id || (id == npu->cur_id && !cur)) {
-		npu_collect(npu, id, st);
-		return true;
-	}
-	if (id == npu->cur_id) {
+	if (cur && !cur->orphan && cur->status.job_id == id) {
 		if (cur->status.state == NPU_JOB_SYNC ||
 		    cur->status.state == NPU_JOB_TEMP) {
 			*st = cur->status;
@@ -327,14 +348,22 @@ static bool npu_job_status(struct npu_dev *npu, u32 id,
 		st->state = NPU_JOB_PROCESS;
 		return false;
 	}
-	st->state = NPU_JOB_PEND;
-	return false;
+	list_for_each_entry(job, &npu->pending, node) {
+		if (job->status.job_id == id) {
+			st->state = NPU_JOB_PEND;
+			return false;
+		}
+	}
+	npu_collect(npu, id, st);
+	return true;
 }
 
 /*
  * Drops every job. One still running gets NPU_DESTROY_TIMEOUT to finish
- * first: it cannot be stopped, only abandoned, and abandoning it (or one
- * stopped at SI/PC) is reported as -EPERM, as is an abort meanwhile.
+ * first. The NPU cannot be stopped, so a job that outlives that, or sits
+ * at an SI/PC stop, keeps it: the device drains until the job ends and
+ * takes no new work meanwhile. Either case, or an abort while waiting,
+ * is reported as -EPERM. Waiters on dropped jobs see NPU_JOB_UNKNOWN.
  */
 static int npu_destroy_queue(struct npu_dev *npu)
 {
@@ -353,27 +382,25 @@ static int npu_destroy_queue(struct npu_dev *npu)
 	mutex_unlock(&npu->state_lock);
 
 	if (running) {
-		wait_event_timeout(npu->wq, npu->state != NPU_BUSY,
+		wait_event_timeout(npu->wq, READ_ONCE(npu->state) != NPU_BUSY,
 				   NPU_DESTROY_TIMEOUT);
-		if (npu->state == NPU_ABORTED)
+		if (READ_ONCE(npu->state) == NPU_ABORTED)
 			ret = -EPERM;
 	}
 
 	mutex_lock(&npu->state_lock);
 	job = npu->cur;
-	if (job) {
-		npu->cur = NULL;
+	if (job && !job->orphan) {
+		job->orphan = true;
 		if (npu->state == NPU_BUSY)
-			npu->state = NPU_IDLE;
-		/* the hard IRQ handler reads cur without the lock */
-		synchronize_irq(npu->irq);
-		kfree(job);
+			npu->state = NPU_DRAINING;
 		ret = -EPERM;
 	}
 	list_for_each_entry_safe(job, tmp, &npu->done, node) {
 		list_del(&job->node);
 		kfree(job);
 	}
+	npu_wake(npu);
 	mutex_unlock(&npu->state_lock);
 	return ret;
 }
@@ -384,7 +411,6 @@ static int npu_open_queue(struct npu_dev *npu)
 	if (npu->queues++ == 0) {
 		mutex_lock(&npu->state_lock);
 		npu->last_id = 0;
-		npu->cur_id = 0;
 		mutex_unlock(&npu->state_lock);
 	}
 	mutex_unlock(&npu->queue_lock);
@@ -403,10 +429,7 @@ static int npu_drop_queues(struct npu_dev *npu)
 static long npu_submit(struct npu_dev *npu, void __user *arg)
 {
 	struct npu_job *job;
-	u32 id;
-
-	if (!npu->queues || npu->state == NPU_ABORTED)
-		return -EFAULT;
+	long ret;
 
 	job = kzalloc(sizeof(*job), GFP_KERNEL);
 	if (!job)
@@ -416,23 +439,32 @@ static long npu_submit(struct npu_dev *npu, void __user *arg)
 		return -EFAULT;
 	}
 
+	/* queue_lock keeps a destroy or reset from slipping in between */
+	mutex_lock(&npu->queue_lock);
 	mutex_lock(&npu->state_lock);
-	id = ++npu->last_id;
-	job->status.job_id = id;
-	if (npu->state == NPU_IDLE) {
-		npu->state = NPU_BUSY;
-		job->status.state = NPU_JOB_PROCESS;
-		npu->cur = job;
-		npu->cur_id = id;
-		npu_hw_start(npu, &job->params);
+	if (!npu->queues || npu->state == NPU_ABORTED) {
+		ret = -EFAULT;
+	} else if (npu->state == NPU_DRAINING) {
+		ret = -EBUSY;
 	} else {
-		job->status.state = NPU_JOB_PEND;
-		list_add_tail(&job->node, &npu->pending);
+		/* the library takes the job id from the return value */
+		ret = job->status.job_id = ++npu->last_id;
+		if (npu->state == NPU_IDLE) {
+			npu->state = NPU_BUSY;
+			job->status.state = NPU_JOB_PROCESS;
+			npu->cur = job;
+			npu_hw_start(npu, &job->params);
+		} else {
+			job->status.state = NPU_JOB_PEND;
+			list_add_tail(&job->node, &npu->pending);
+		}
+		job = NULL;
 	}
 	mutex_unlock(&npu->state_lock);
+	mutex_unlock(&npu->queue_lock);
 
-	/* the library takes the job id from the return value */
-	return id;
+	kfree(job);
+	return ret;
 }
 
 static long npu_query(struct npu_dev *npu, void __user *arg, bool wait)
@@ -502,7 +534,6 @@ static long npu_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
 			mutex_lock(&npu->queue_lock);
 			npu_drop_queues(npu);
 			mutex_unlock(&npu->queue_lock);
-			npu_update(npu, NPU_DEBUG, NPU_DEBUG_STCT_RPT, 0);
 			npu_hw_close(npu);
 		}
 		mutex_unlock(&npu->open_lock);
@@ -521,13 +552,25 @@ static long npu_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
 		return ret;
 
 	case NPU_IOC_RESET:
+		mutex_lock(&npu->open_lock);
 		mutex_lock(&npu->queue_lock);
 		npu_drop_queues(npu);
-		mutex_unlock(&npu->queue_lock);
 		mutex_lock(&npu->state_lock);
-		npu->state = NPU_IDLE;
+		if (npu->cur) {
+			/* draining, or an abort the IRQ thread has yet to see */
+			ret = -EBUSY;
+		} else if (npu->state == NPU_ABORTED) {
+			/* clear the latched DFX, unmask what the IRQ masked */
+			npu_clear_int(npu, npu_read(npu, NPU_INT_STATUS));
+			if (npu->opened)
+				npu_update(npu, NPU_INT_EN, NPU_INT_ALL,
+					   NPU_INT_ALL);
+			npu->state = NPU_IDLE;
+		}
 		mutex_unlock(&npu->state_lock);
-		return 0;
+		mutex_unlock(&npu->queue_lock);
+		mutex_unlock(&npu->open_lock);
+		return ret;
 
 	case NPU_IOC_SUBMIT_JOB:
 		return npu_submit(npu, uarg);
@@ -601,7 +644,6 @@ static int npu_fop_release(struct inode *inode, struct file *file)
 		mutex_lock(&npu->open_lock);
 		if (npu->opened) {
 			npu->opened = 0;
-			npu_update(npu, NPU_DEBUG, NPU_DEBUG_STCT_RPT, 0);
 			npu_hw_close(npu);
 		}
 		mutex_unlock(&npu->open_lock);
@@ -697,11 +739,22 @@ static int npu_probe(struct platform_device *pdev)
 	return 0;
 }
 
+/*
+ * Only reached on module unload (bind/unbind via sysfs is off), so no file
+ * is open: every open one holds a module reference through npu_fops.owner.
+ */
 static int npu_remove(struct platform_device *pdev)
 {
 	struct npu_dev *npu = platform_get_drvdata(pdev);
+	struct npu_job *job, *tmp;
 
 	misc_deregister(&npu->misc);
+	disable_irq(npu->irq);
+	kfree(npu->cur);
+	list_for_each_entry_safe(job, tmp, &npu->pending, node)
+		kfree(job);
+	list_for_each_entry_safe(job, tmp, &npu->done, node)
+		kfree(job);
 	return 0;
 }
 
@@ -717,6 +770,7 @@ static struct platform_driver npu_driver = {
 	.driver = {
 		.name = "xmedia npu driver",
 		.of_match_table = npu_match,
+		.suppress_bind_attrs = true,
 	},
 };
 module_platform_driver(npu_driver);
