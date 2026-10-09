@@ -59,7 +59,7 @@ endif
 # kernel/ come first on the include path, ahead of the V4 headers the
 # per-sensor Makefiles add.
 ifeq ($(CHIPARCH),gk7205v500)
-    SUBDIRS := $(filter ./sensor/hi3516ev200/%,$(SUBDIRS))
+    SUBDIRS := $(filter ./sensor/hi3516ev200/% ./xmedia_npu/,$(SUBDIRS))
     XM_INC := $(CURDIR)/../kernel/include/gk7205v500
     XM_ISP := $(CURDIR)/../kernel/isp/gk7205v500
     SENSOR_CFLAGS := -I$(CURDIR)/sensor/compat/xmedia -I$(XM_INC) \
@@ -68,6 +68,10 @@ ifeq ($(CHIPARCH),gk7205v500)
 	-I$(XM_ISP)/kernel/arch/xm72050200/include -I$(XM_ISP)/kernel/mkp/include \
 	-I$(XM_ISP)/kernel/arch/include -I$(XM_ISP)/firmware/include \
 	-I$(XM_ISP)/firmware/arch/include -I$(XM_ISP)/ext_inc
+endif
+# xmedia_npu drives the XMedia NPU, which only the gk7205v500 family has.
+ifneq ($(CHIPARCH),gk7205v500)
+    SUBDIRS := $(filter-out ./xmedia_npu/,$(SUBDIRS))
 endif
 # hi3519dv500 sensors are aarch64-only — the 32-bit toolchains used by every
 # other chiparch can't compile their 64-bit-aligned vendor headers. Exclude
