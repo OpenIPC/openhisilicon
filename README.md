@@ -290,6 +290,7 @@ All modules are prefixed `open_` to distinguish from vendor SDK modules. The set
 | `open_ive` | Intelligent video engine | x | x | x | x | x | x | x | x |
 | `open_ive_neo` | IVE clean-room (C source) | | | | | | | x | |
 | `open_svp_npu` | SVP NPU (V5 successor to NNIE) | | | | | | | | x |
+| `open_npu` | XMedia NPU, C source (gk7205v500 V500 set) | | | | | | | x | |
 | `open_aiisp` | AI-assisted ISP | | | | | | | | x |
 | `open_tde` | 2D graphics engine | x | x | x | | x | x | x | |
 | `open_aio` | Audio I/O | | x | x | x | x | x | x | x |
