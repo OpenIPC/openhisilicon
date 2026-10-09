@@ -52,6 +52,8 @@ ISP_SNS_STATE_S *sp2305_get_ctx(VI_PIPE ViPipe)
 
 static GK_U32 g_au32MaxTimeGetCnt[ISP_MAX_PIPE_NUM] = {0};
 static GK_U32 g_au32InitExposure[ISP_MAX_PIPE_NUM]  = {0};
+/* Pixel calibration programs its own exposure straight into the sensor. */
+static GK_BOOL g_abPixelDetect[ISP_MAX_PIPE_NUM] = {GK_FALSE};
 static GK_U32 g_au32LinesPer500ms[ISP_MAX_PIPE_NUM] = {0};
 static GK_U16 g_au16InitWBGain[ISP_MAX_PIPE_NUM][3] = {{0}};
 static GK_U16 g_au16SampleRgain[ISP_MAX_PIPE_NUM] = {0};
@@ -552,6 +554,7 @@ static GK_VOID cmos_set_pixel_detect(VI_PIPE ViPipe, GK_BOOL bEnable)
     SP2305_SENSOR_GET_CTX(ViPipe, pstSnsState);
     CMOS_CHECK_POINTER_VOID(pstSnsState);
 
+    g_abPixelDetect[ViPipe] = bEnable;
     if (bEnable) { /* setup for ISP pixel calibration mode */
         sp2305_write_register(ViPipe, 0xfd, 0x01); /*  the first page 5fps */
         sp2305_write_register(ViPipe, 0x0d, 0x10); /*  manually modify VTS */
@@ -676,6 +679,25 @@ static GK_VOID cmos_sns_reg_info_update(VI_PIPE ViPipe, ISP_SNS_STATE_S *pstSnsS
     pstSnsState->astRegsInfo[0].astI2cData[PAGE_ADDR_1_INDEX].bUpdate = GK_TRUE;      /* always refresh the data  */
     pstSnsState->astRegsInfo[0].astI2cData[VTS_ENABLE_INDEX].bUpdate  = GK_TRUE;
     pstSnsState->astRegsInfo[0].astI2cData[TRIGGER_INDEX].bUpdate     = GK_TRUE;
+
+    /*
+     * The exposure too, changed or not.  Written only on a change, a value
+     * that goes wrong in the sensor stays wrong for as long as AE asks for
+     * the same byte -- and something else on the bus can make it go wrong:
+     * a sensor probe that reads a 2-byte register address here (ipctool's
+     * GalaxyCore check reads 0x3f0/0x3f1 at this I2C address) is taken by
+     * this 1-byte-address sensor as a write of 0xF0, then 0xF1, to 0x03.
+     * On the bench that held the exposure at 0xF1xx lines, a whole frame,
+     * while AE sat at two: a white picture until the scene darkened past
+     * 255 lines.  Two bytes a frame put it right on the next one.
+     *
+     * Not during pixel calibration, which writes its own exposure to the
+     * sensor directly; rewriting AE's over it every frame would undo it.
+     */
+    if (!g_abPixelDetect[ViPipe]) {
+        pstSnsState->astRegsInfo[0].astI2cData[EXP_ADDR_HIGH_INDEX].bUpdate = GK_TRUE;
+        pstSnsState->astRegsInfo[0].astI2cData[EXP_ADDR_LOW_INDEX].bUpdate  = GK_TRUE;
+    }
 
     /* select page 2, and come back, only when br_first changes */
     bPage2 = pstSnsState->astRegsInfo[0].astI2cData[BR_FIRST_INDEX].bUpdate;
