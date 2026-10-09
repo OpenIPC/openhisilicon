@@ -677,6 +677,20 @@ static GK_VOID cmos_sns_reg_info_update(VI_PIPE ViPipe, ISP_SNS_STATE_S *pstSnsS
     pstSnsState->astRegsInfo[0].astI2cData[VTS_ENABLE_INDEX].bUpdate  = GK_TRUE;
     pstSnsState->astRegsInfo[0].astI2cData[TRIGGER_INDEX].bUpdate     = GK_TRUE;
 
+    /*
+     * The exposure too, changed or not.  Written only on a change, a value
+     * that goes wrong in the sensor stays wrong for as long as AE asks for
+     * the same byte -- and something else on the bus can make it go wrong:
+     * a sensor probe that reads a 2-byte register address here (ipctool's
+     * GalaxyCore check reads 0x3f0/0x3f1 at this I2C address) is taken by
+     * this 1-byte-address sensor as a write of 0xF0, then 0xF1, to 0x03.
+     * On the bench that held the exposure at 0xF1xx lines, a whole frame,
+     * while AE sat at two: a white picture until the scene darkened past
+     * 255 lines.  Two bytes a frame put it right on the next one.
+     */
+    pstSnsState->astRegsInfo[0].astI2cData[EXP_ADDR_HIGH_INDEX].bUpdate = GK_TRUE;
+    pstSnsState->astRegsInfo[0].astI2cData[EXP_ADDR_LOW_INDEX].bUpdate  = GK_TRUE;
+
     /* select page 2, and come back, only when br_first changes */
     bPage2 = pstSnsState->astRegsInfo[0].astI2cData[BR_FIRST_INDEX].bUpdate;
     pstSnsState->astRegsInfo[0].astI2cData[PAGE_ADDR_2_INDEX].bUpdate      = bPage2;
