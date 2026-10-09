@@ -64,6 +64,7 @@ $CC -O2 $INC -o npu_abort_test test/npu_abort_test.c -lxmedia_npu
 $CC -O2 $INC -I../../kernel/npu/gk7205v500 -o npu_hang_test \
 	test/npu_hang_test.c -lxmedia_npu
 $CC -O2 -shared -fPIC -o ioctl_trace.so test/ioctl_trace.c -ldl
+$CC -O2 $INC -I../../kernel/npu/gk7205v500 -o npu_regtool test/npu_regtool.c
 
 # on the camera; <dir> holds neuron_network.xmm, input_data*.bin and
 # output_data*.bin, as in the SDK's sample/npu/xmm/*/data
@@ -71,7 +72,20 @@ $CC -O2 -shared -fPIC -o ioctl_trace.so test/ioctl_trace.c -ldl
 LD_PRELOAD=./ioctl_trace.so IOCTL_TRACE=/tmp/trace.log ./npu_bench <dir> 3
 ./npu_abort_test && ./npu_bench <dir> 50
 ./npu_hang_test && ./npu_hang_test mask && ./npu_bench <dir> 50
+NPU_BENCH_INFO=1 ./npu_bench <dir> 1     # print the graph's tensors first
+NPU_BENCH_ASYNC=1 ./npu_bench <dir> 300  # submit + wait instead of process
+./npu_regtool r 2c open r 2c reset       # registers and ioctls by hand
 ```
+
+`npu_bench` also reports CPU time per run: the whole process's, and the part
+spent inside the graph call. The first includes `libxmedia_cl`'s queue
+threads, and on about three process starts in four one of them spins while
+idle -- its `pthread_cond_timedwait` deadline is built with 32-bit struct
+offsets against the time64 symbols, so `tv_nsec` is its stack canary, and musl
+rejects it whenever that is not a valid count. The vendor and the open
+`libxmedia_npu` behave the same; majestic repairs the call
+(`docs/npu-detection.md` there). Compare the "in process" figure across runs,
+or the whole-process one only between starts that did not spin.
 
 Swap libraries with `LD_LIBRARY_PATH` and modules with `rmmod open_npu;
 insmod ...`; both can change with the camera up. The tables above are at 450 MHz: load
