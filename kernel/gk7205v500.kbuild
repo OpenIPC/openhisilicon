@@ -109,7 +109,7 @@ XM_BLOBS := base sys vi vpss rgn vgs chnl rc venc vedu h264e h265e jpege \
 ifeq ($(XM_SET),V200)
     XM_BLOBS += vo gfbg
 else
-    XM_BLOBS += npu pm
+    XM_BLOBS += pm
 endif
 ifdef DISABLE_TDE
     XM_BLOBS := $(filter-out tde,$(XM_BLOBS))
@@ -120,6 +120,14 @@ ifdef DISABLE_VO
 endif
 $(foreach b,$(XM_BLOBS),$(eval $(PREFIX)$(b)-objs := obj/gk7205v500/$(XM_SET)/$(b).o))
 obj-m += $(addprefix $(PREFIX),$(addsuffix .o,$(XM_BLOBS)))
+
+# --- NPU (source, V500-set dies only) ---
+# npu/gk7205v500/npu.c replaces the SDK's closed npu.o and serves the same
+# /dev/npu.0 ABI to libxmedia_npu.so.
+ifeq ($(XM_SET),V500)
+$(PREFIX)npu-objs := npu/gk7205v500/npu.o
+obj-m += $(PREFIX)npu.o
+endif
 
 # SPC020 predates GK7201V200: sys, vi, vpss and venc key their
 # capabilities on the efuse SKU code, and the die's 0xD0/0xD4 is unknown
