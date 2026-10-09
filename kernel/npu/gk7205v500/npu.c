@@ -88,7 +88,7 @@ enum {
 	NPU_DRAINING = 4,	/* an abandoned job still owns the NPU */
 };
 
-#define NPU_RESET_POLLS		10000	/* x 10 us */
+#define NPU_RESET_POLLS		10000	/* x 10-20 us */
 
 #define NPU_DESTROY_TIMEOUT	1000	/* jiffies, as the SDK driver */
 
@@ -167,16 +167,21 @@ static void npu_clock(struct npu_dev *npu, bool on)
  * stops whatever it was executing, as the SDK's library does from
  * userspace.
  */
-static void npu_soft_reset(struct npu_dev *npu)
+static int npu_soft_reset(struct npu_dev *npu)
 {
 	int polls = 0;
 
 	writel(readl(npu->clk_gate) | CRG_NPU_SRST, npu->clk_gate);
 	while (npu_read(npu, NPU_RUN_CYCLES) && ++polls < NPU_RESET_POLLS)
-		udelay(10);
+		usleep_range(10, 20);
 	writel(readl(npu->clk_gate) & ~CRG_NPU_SRST, npu->clk_gate);
-	if (polls == NPU_RESET_POLLS)
-		dev_warn(npu->dev, "soft reset: cycle counter did not clear\n");
+	if (polls == NPU_RESET_POLLS) {
+		dev_err(npu->dev, "soft reset: the NPU did not stop\n");
+		return -EIO;
+	}
+	/* write-one-to-clear what is left of the DFX report */
+	npu_write(npu, NPU_DFX_RPT, npu_read(npu, NPU_DFX_RPT));
+	return 0;
 }
 
 static void npu_clear_int(struct npu_dev *npu, u32 status)
@@ -583,23 +588,32 @@ static long npu_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
 		mutex_lock(&npu->queue_lock);
 		npu_drop_queues(npu);
 		mutex_lock(&npu->state_lock);
-		/* draining, or an abort the IRQ thread has yet to see */
+		/*
+		 * A job still here is draining, or aborted with the IRQ
+		 * thread yet to see it; after a DFX abort the sequencer keeps
+		 * running too. Either way, stop the NPU before reusing it,
+		 * and if it will not stop, keep it out of service.
+		 */
 		job = npu->cur;
-		/* after a DFX abort the sequencer keeps running: stop it too */
-		if (job || npu->state == NPU_ABORTED)
-			npu_soft_reset(npu);
-		if (job) {
-			npu->cur = NULL;
-			dev_warn(npu->dev, "reset stopped job %u\n",
-				 job->status.job_id);
-		}
 		if (job || npu->state == NPU_ABORTED) {
-			/* clear the latched status, unmask what the IRQ masked */
-			npu_clear_int(npu, npu_read(npu, NPU_INT_STATUS));
-			if (npu->opened)
-				npu_update(npu, NPU_INT_EN, NPU_INT_ALL,
-					   NPU_INT_ALL);
-			npu->state = NPU_IDLE;
+			ret = npu_soft_reset(npu);
+			if (ret) {
+				job = NULL;
+			} else {
+				if (job)
+					dev_warn(npu->dev,
+						 "reset stopped job %u\n",
+						 job->status.job_id);
+				npu->cur = NULL;
+				/* clear the latched status, unmask what the
+				 * IRQ masked */
+				npu_clear_int(npu,
+					      npu_read(npu, NPU_INT_STATUS));
+				if (npu->opened)
+					npu_update(npu, NPU_INT_EN,
+						   NPU_INT_ALL, NPU_INT_ALL);
+				npu->state = NPU_IDLE;
+			}
 		}
 		mutex_unlock(&npu->state_lock);
 		if (job) {

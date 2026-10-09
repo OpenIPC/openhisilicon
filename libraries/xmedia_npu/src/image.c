@@ -5,6 +5,7 @@
  * against.
  */
 
+#include <pthread.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -36,21 +37,28 @@ _Static_assert(sizeof(struct npu_image_hdr) == 128, "image header is 128 bytes")
 #define IMAGE_MAGIC		0x5a5a5a5a
 #define IMAGE_SHDR_ENTSIZE	80
 
+static uint32_t crc_table[256];
+static pthread_once_t crc_table_once = PTHREAD_ONCE_INIT;
+
+static void crc_table_init(void)
+{
+	int i, j;
+
+	for (i = 0; i < 256; i++) {
+		uint32_t c = i;
+
+		for (j = 0; j < 8; j++)
+			c = c & 1 ? 0xedb88320 ^ (c >> 1) : c >> 1;
+		crc_table[i] = c;
+	}
+}
+
 /* Plain CRC-32 (reflected 0xedb88320), without the pre/post inversion */
 uint32_t xmedia_crc32(uint32_t crc, const uint8_t *buf, int len)
 {
-	static uint32_t table[256];
-	int i, j;
+	const uint32_t *table = crc_table;
 
-	if (!table[1]) {
-		for (i = 0; i < 256; i++) {
-			uint32_t c = i;
-
-			for (j = 0; j < 8; j++)
-				c = c & 1 ? 0xedb88320 ^ (c >> 1) : c >> 1;
-			table[i] = c;
-		}
-	}
+	pthread_once(&crc_table_once, crc_table_init);
 	while (len-- > 0)
 		crc = table[(crc ^ *buf++) & 0xff] ^ (crc >> 8);
 	return crc;
@@ -133,15 +141,19 @@ int copy_buff_to_file(const void *buf, const char *file, int off,
 	return fclose(fp);
 }
 
+/* 0 once all @size bytes are in @buf, -1 if the file is shorter */
 int copy_file_to_buff(const char *file, void *buf, int off, size_t size)
 {
 	FILE *fp = fopen(file, "r");
+	size_t n;
 
 	if (!fp)
 		return -1;
 	fseek(fp, off, SEEK_SET);
-	fread(buf, 1, size, fp);
-	return fclose(fp);
+	n = fread(buf, 1, size, fp);
+	if (fclose(fp) || n != size)
+		return -1;
+	return 0;
 }
 
 /* Appends @size bytes of @src, from @off, to @dst */
@@ -199,11 +211,14 @@ int copy_file_to_file(const char *src, const char *dst, int off, int keep)
 int get_image_hdr(const char *file, void *hdr)
 {
 	FILE *fp = fopen(file, "r");
+	size_t n;
 
 	if (!fp)
 		return -1;
-	fread(hdr, 1, sizeof(struct npu_image_hdr), fp);
-	return fclose(fp);
+	n = fread(hdr, 1, sizeof(struct npu_image_hdr), fp);
+	if (fclose(fp) || n != sizeof(struct npu_image_hdr))
+		return -1;
+	return 0;
 }
 
 size_t get_image_data(const char *file, int off, size_t size, void *buf)
@@ -292,8 +307,10 @@ int get_image(const char *file)
 {
 	struct npu_image_hdr hdr;
 
-	memset(&hdr, 0, sizeof(hdr));
-	get_image_hdr(file, &hdr);
+	if (get_image_hdr(file, &hdr)) {
+		puts("Bad Header");
+		return -1;
+	}
 	if (!image_check_hcrc(&hdr, file)) {
 		puts("Bad Header Checksum");
 		return -1;

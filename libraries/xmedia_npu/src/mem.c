@@ -90,6 +90,7 @@ int xmedia_sys_mmzalloc(uint32_t *phys, uint32_t *virt, const char *mmb,
 		ret = ioctl(mmz_fd, IOC_MMB_USER_REMAP, &info);
 		if (ret) {
 			xmedia_printf("System remap mmz memory failed!\n");
+			ioctl(mmz_fd, IOC_MMB_FREE, &info);
 		} else {
 			phys[0] = info.phys_addr;
 			phys[1] = 0;

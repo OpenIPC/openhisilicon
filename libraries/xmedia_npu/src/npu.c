@@ -40,7 +40,7 @@ int uncache_mem_uninit(void);
 int get_uncache_mem_size(void);
 
 /* Each access maps the register page for just that access, as the SDK does */
-int xmedia_npu_register_write(int fd, int reg, int val)
+static int reg_access(int fd, int reg, int *val, int write)
 {
 	volatile uint32_t *regs;
 
@@ -49,24 +49,25 @@ int xmedia_npu_register_write(int fd, int reg, int val)
 		xmedia_printf("%s error, line = %d\n", __func__, __LINE__);
 		return -1;
 	}
-	regs[reg / 4] = val;
+	if (write)
+		regs[reg / 4] = *val;
+	else
+		*val = regs[reg / 4];
 	munmap((void *)regs, 0x1000);
 	return 0;
 }
 
+int xmedia_npu_register_write(int fd, int reg, int val)
+{
+	return reg_access(fd, reg, &val, 1);
+}
+
+/* The value, or -1 if the page cannot be mapped (as the SDK's) */
 int xmedia_npu_register_read(int fd, int reg)
 {
-	volatile uint32_t *regs;
 	int val;
 
-	regs = mmap(NULL, 0x1000, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
-	if (regs == MAP_FAILED) {
-		xmedia_printf("%s error, line = %d\n", __func__, __LINE__);
-		return -1;
-	}
-	val = regs[reg / 4];
-	munmap((void *)regs, 0x1000);
-	return val;
+	return reg_access(fd, reg, &val, 0) ? -1 : val;
 }
 
 int xmedia_register_assign(int set, int mask, int *val)
@@ -295,7 +296,9 @@ int gh_npu_get_mailbox_reg(int fd, int idx)
 
 /*
  * Soft reset through the CRG: hold the NPU in reset until its running
- * cycle counter reads zero, then let it go.
+ * cycle counter reads zero, then let it go. Kept for the SDK's API; it
+ * goes behind the driver's back (and needs /dev/mem), so xmedia_npu_reset()
+ * leaves resetting to the driver.
  */
 int gh_npu_reset(int fd)
 {
@@ -524,32 +527,16 @@ int xmedia_npu_lowpower(int dev_fd, int en)
 }
 
 /*
- * Drops the device's queue (and with it any job), resets the NPU and
- * leaves it with clear status and every interrupt enabled.
+ * Drops the device's queue (and with it any job) and gets the NPU back to
+ * clear status with every interrupt enabled. The driver does all of it,
+ * soft-resetting the NPU if a job or an abort left it running; the SDK's
+ * library pulsed the reset again from /dev/mem and rewrote the interrupt
+ * registers itself, racing every other process on the NPU.
  */
 int xmedia_npu_reset(xmedia_u32 dev_fd)
 {
-	int val;
-
-	if (npu_check(!ioctl(dev_fd, NPU_IOC_RESET, 0)) ||
-	    npu_check(!gh_npu_reset(dev_fd)))
+	if (npu_check(!ioctl(dev_fd, NPU_IOC_RESET, 0)))
 		return 1;
-
-	val = gh_npu_get_cfg_dfx_rpt(dev_fd);
-	if (npu_check(val >= 0))
-		return 1;
-	gh_npu_clr_cfg_dfx_rpt(dev_fd, val);
-	if (npu_check(!gh_npu_get_cfg_dfx_rpt(dev_fd)))
-		return 1;
-
-	val = gh_npu_get_int_status(dev_fd);
-	if (npu_check(val >= 0))
-		return 1;
-	gh_npu_clr_int_status(dev_fd, val);
-	if (npu_check(!gh_npu_get_int_status(dev_fd)))
-		return 1;
-
-	gh_npu_enable_interrupt(dev_fd, 1, 1, 1, 1);
 	return 0;
 }
 
@@ -620,16 +607,12 @@ xmedia_s32 xmedia_npu_get_capability(xmedia_u32 dev_fd,
 	return 0;
 }
 
+/* Reads mailbox @idx, which a job may use for results, into @value */
 int xmedia_npu_communicate(int dev_fd, int idx, int *value)
 {
-	int val;
-
 	if (npu_check(value))
 		return 1;
-	val = gh_npu_get_mailbox_reg(dev_fd, idx);
-	if (val > 0) {
-		*value = val;
-		return 0;
-	}
-	return val;
+	if (idx < 0 || idx > 3)
+		return -1;
+	return reg_access(dev_fd, npu_mailbox[idx], value, 0);
 }
