@@ -74,7 +74,8 @@ LD_PRELOAD=./ioctl_trace.so IOCTL_TRACE=/tmp/trace.log ./npu_bench <dir> 3
 ```
 
 Swap libraries with `LD_LIBRARY_PATH` and modules with `rmmod open_npu;
-insmod ...`; both can change with the camera up.
+insmod ...`; both can change with the camera up. The tables above are at 450 MHz: load
+`open_npu` with `clk_mhz=450` to compare against them (it defaults to 600, see below).
 
 ## NPU clock
 

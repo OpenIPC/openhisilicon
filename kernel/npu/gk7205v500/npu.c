@@ -786,6 +786,16 @@ static int npu_probe(struct platform_device *pdev)
 		return ret;
 	}
 
+	/* before the device appears, so no job can start at another rate */
+	switch (clk_mhz) {
+	case 257: case 330: case 360: case 450: case 495: case 600:
+		break;
+	default:
+		dev_warn(dev, "clk_mhz=%u unsupported, using 600\n", clk_mhz);
+		clk_mhz = 600;
+	}
+	sysconfig_module_set_clk(NPU_MOD_ID, clk_mhz, NULL);
+
 	npu->misc.minor = MISC_DYNAMIC_MINOR;
 	npu->misc.name = "npu.0";
 	npu->misc.fops = &npu_fops;
@@ -797,14 +807,6 @@ static int npu_probe(struct platform_device *pdev)
 	}
 	platform_set_drvdata(pdev, npu);
 
-	switch (clk_mhz) {
-	case 257: case 330: case 360: case 450: case 495: case 600:
-		break;
-	default:
-		dev_warn(dev, "clk_mhz=%u unsupported, using 600\n", clk_mhz);
-		clk_mhz = 600;
-	}
-	sysconfig_module_set_clk(NPU_MOD_ID, clk_mhz, NULL);
 	dev_info(dev, "registers %pa, irq %d, %u MHz\n", &res->start, irq,
 		 clk_mhz);
 	return 0;
