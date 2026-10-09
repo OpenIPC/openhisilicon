@@ -8,7 +8,8 @@ graph runtime on top of both, as it ships.
 ## Test conditions
 
 - Board: GK7205V510 (Cortex-A7 @ 1 GHz, 128 MB), OpenIPC, kernel 4.9.37,
-  `HZ=100`, no cpufreq/cpuidle (fixed clocks), NPU clock 450 MHz
+  `HZ=100`, no cpufreq/cpuidle (fixed clocks), NPU clock 450 MHz (the SDK's
+  setting; `open_npu` now defaults to 600 MHz, see "NPU clock" below)
 - Models: the SDK's `sample/npu/xmm` graphs, run with their own inputs and
   golden outputs:
   - `normal`: person detector, 640x360 NV12, 731 KB `.xmm`, 3 outputs
@@ -73,4 +74,18 @@ LD_PRELOAD=./ioctl_trace.so IOCTL_TRACE=/tmp/trace.log ./npu_bench <dir> 3
 ```
 
 Swap libraries with `LD_LIBRARY_PATH` and modules with `rmmod open_npu;
-insmod ...`; both can change with the camera up.
+insmod ...`; both can change with the camera up. The tables above are at 450 MHz: load
+`open_npu` with `clk_mhz=450` to compare against them (it defaults to 600, see below).
+
+## NPU clock
+
+The NPU is clocked synchronously: a job takes the same number of NPU cycles at any of the
+frequencies `sys_config` offers (257, 330, 360, 450, 495, 600 MHz), so latency scales with the
+clock. The SDK uses 450 MHz; `open_npu` defaults to 600 (`clk_mhz=` module parameter selects
+another). Same graph, same cycle count (6.9 M), golden-exact at both:
+
+| NPU clock | `c3_128_40` conv stack, min latency |
+|---|---|
+| 450 MHz | 15.32 ms |
+| 600 MHz | 11.60 ms (x1.32) |
+
