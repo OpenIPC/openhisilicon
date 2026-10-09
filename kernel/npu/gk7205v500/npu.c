@@ -108,6 +108,7 @@ struct npu_dev {
 	phys_addr_t regs_phys;
 	void __iomem *clk_gate;		/* CRG_NPU_CLK */
 	int irq;			/* for remove */
+	struct device *dev;
 	struct miscdevice misc;
 
 	struct mutex ref_lock;		/* file opens, which hold the clock */
@@ -174,6 +175,8 @@ static void npu_soft_reset(struct npu_dev *npu)
 	while (npu_read(npu, NPU_RUN_CYCLES) && ++polls < NPU_RESET_POLLS)
 		udelay(10);
 	writel(readl(npu->clk_gate) & ~CRG_NPU_SRST, npu->clk_gate);
+	if (polls == NPU_RESET_POLLS)
+		dev_warn(npu->dev, "soft reset: cycle counter did not clear\n");
 }
 
 static void npu_clear_int(struct npu_dev *npu, u32 status)
@@ -412,6 +415,8 @@ static int npu_destroy_queue(struct npu_dev *npu)
 	mutex_lock(&npu->state_lock);
 	job = npu->cur;
 	if (job && !job->orphan) {
+		dev_warn(npu->dev, "job %u still owns the NPU, draining\n",
+			 job->status.job_id);
 		job->orphan = true;
 		if (npu->state == NPU_BUSY)
 			npu->state = NPU_DRAINING;
@@ -580,9 +585,13 @@ static long npu_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
 		mutex_lock(&npu->state_lock);
 		/* draining, or an abort the IRQ thread has yet to see */
 		job = npu->cur;
-		if (job) {
+		/* after a DFX abort the sequencer keeps running: stop it too */
+		if (job || npu->state == NPU_ABORTED)
 			npu_soft_reset(npu);
+		if (job) {
 			npu->cur = NULL;
+			dev_warn(npu->dev, "reset stopped job %u\n",
+				 job->status.job_id);
 		}
 		if (job || npu->state == NPU_ABORTED) {
 			/* clear the latched status, unmask what the IRQ masked */
@@ -728,6 +737,7 @@ static int npu_probe(struct platform_device *pdev)
 	if (IS_ERR(npu->regs))
 		return PTR_ERR(npu->regs);
 	npu->regs_phys = res->start;
+	npu->dev = dev;
 
 	npu->clk_gate = devm_ioremap(dev, CRG_BASE + CRG_NPU_CLK, 4);
 	if (!npu->clk_gate)

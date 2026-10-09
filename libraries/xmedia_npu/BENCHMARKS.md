@@ -28,6 +28,8 @@ graph runtime on top of both, as it ships.
 | Outputs of the last run, md5 across the 4 combinations | identical, both models |
 | ioctl stream (`test/ioctl_trace.so`), vendor vs open library, `normal` x 4 | identical commands and payloads; only userspace addresses of MMZ mappings differ |
 | DFX abort (`test/npu_abort_test`: 0xff command stream in a 64 KB window), both libraries | state 5, report 0x50000 (`rwddr_out_of_bound_err`, `dma_r_resp_p_err`); reset 0; next inference matches golden |
+| Job that never ends (`test/npu_hang_test`: RISC-V `j .` command stream) | DFX abort 0x80 (`dec_inst_err`), with the sequencer still running (cycle counter +45M per 100 ms); driver RESET alone stops it (counter 0, stays 0); next inference matches golden |
+| Same, interrupts masked first (`npu_hang_test mask`), so the driver never hears from the job | wait times out (`EAGAIN`) with the NPU running; queue destroy gives up after 10.4 s (`EPERM`, "job 1 still owns the NPU, draining"); submit gets `EBUSY`; driver RESET stops it ("reset stopped job 1", counter 0); next inference matches golden |
 
 ### Latency (ms per inference, majestic stopped, 3 rounds x 300 runs)
 
@@ -58,6 +60,8 @@ CC=arm-openipc-linux-musleabi-gcc
 INC=-I../../kernel/include/gk7205v500
 $CC -O2 $INC -o npu_bench test/npu_bench.c -lxmedia_cl -lxmedia_npu
 $CC -O2 $INC -o npu_abort_test test/npu_abort_test.c -lxmedia_npu
+$CC -O2 $INC -I../../kernel/npu/gk7205v500 -o npu_hang_test \
+	test/npu_hang_test.c -lxmedia_npu
 $CC -O2 -shared -fPIC -o ioctl_trace.so test/ioctl_trace.c -ldl
 
 # on the camera; <dir> holds neuron_network.xmm, input_data*.bin and
@@ -65,6 +69,7 @@ $CC -O2 -shared -fPIC -o ioctl_trace.so test/ioctl_trace.c -ldl
 ./npu_bench <dir> 300 [dump-dir]
 LD_PRELOAD=./ioctl_trace.so IOCTL_TRACE=/tmp/trace.log ./npu_bench <dir> 3
 ./npu_abort_test && ./npu_bench <dir> 50
+./npu_hang_test && ./npu_hang_test mask && ./npu_bench <dir> 50
 ```
 
 Swap libraries with `LD_LIBRARY_PATH` and modules with `rmmod open_npu;
