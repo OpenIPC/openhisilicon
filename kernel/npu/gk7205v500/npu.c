@@ -11,6 +11,7 @@
  */
 
 #include <linux/interrupt.h>
+#include <linux/delay.h>
 #include <linux/io.h>
 #include <linux/kernel.h>
 #include <linux/list.h>
@@ -34,9 +35,10 @@
 extern void sysconfig_module_set_clk(int mod_id, unsigned int clk_freq,
 				     void *ext_param);
 
-/* NPU clock gate in the CRG */
+/* NPU clock gate and soft reset in the CRG */
 #define CRG_BASE		0x12010000
 #define CRG_NPU_CLK		0xb4
+#define CRG_NPU_SRST		BIT(0)
 #define CRG_NPU_CLK_EN		BIT(1)
 
 /* Registers */
@@ -50,6 +52,7 @@ extern void sysconfig_module_set_clk(int mod_id, unsigned int clk_freq,
 #define NPU_START		0x020
 #define NPU_DEBUG		0x024
 #define NPU_DEBUG_BRKPC		0x028
+#define NPU_RUN_CYCLES		0x02c
 #define NPU_STCT_ADDR		0x034
 #define NPU_STCT_SIZE		0x038
 #define NPU_DFX_RPT		0x03c
@@ -84,6 +87,8 @@ enum {
 	NPU_ABORTED = 3,	/* DFX error; cleared by NPU_IOC_RESET */
 	NPU_DRAINING = 4,	/* an abandoned job still owns the NPU */
 };
+
+#define NPU_RESET_POLLS		10000	/* x 10 us */
 
 #define NPU_DESTROY_TIMEOUT	1000	/* jiffies, as the SDK driver */
 
@@ -154,6 +159,21 @@ static void npu_clock(struct npu_dev *npu, bool on)
 	else
 		v &= ~CRG_NPU_CLK_EN;
 	writel(v, npu->clk_gate);
+}
+
+/*
+ * Holds the NPU in reset until its running cycle counter clears, which
+ * stops whatever it was executing, as the SDK's library does from
+ * userspace.
+ */
+static void npu_soft_reset(struct npu_dev *npu)
+{
+	int polls = 0;
+
+	writel(readl(npu->clk_gate) | CRG_NPU_SRST, npu->clk_gate);
+	while (npu_read(npu, NPU_RUN_CYCLES) && ++polls < NPU_RESET_POLLS)
+		udelay(10);
+	writel(readl(npu->clk_gate) & ~CRG_NPU_SRST, npu->clk_gate);
 }
 
 static void npu_clear_int(struct npu_dev *npu, u32 status)
@@ -360,10 +380,11 @@ static bool npu_job_status(struct npu_dev *npu, u32 id,
 
 /*
  * Drops every job. One still running gets NPU_DESTROY_TIMEOUT to finish
- * first. The NPU cannot be stopped, so a job that outlives that, or sits
- * at an SI/PC stop, keeps it: the device drains until the job ends and
- * takes no new work meanwhile. Either case, or an abort while waiting,
- * is reported as -EPERM. Waiters on dropped jobs see NPU_JOB_UNKNOWN.
+ * first. Teardown does not stop the NPU, so a job that outlives that, or
+ * sits at an SI/PC stop, keeps it: the device drains, taking no new work,
+ * until the job ends or NPU_IOC_RESET resets the NPU. Either case, or an
+ * abort while waiting, is reported as -EPERM. Waiters on dropped jobs see
+ * NPU_JOB_UNKNOWN.
  */
 static int npu_destroy_queue(struct npu_dev *npu)
 {
@@ -509,6 +530,7 @@ static long npu_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
 	void __user *uarg = (void __user *)arg;
 	struct npu_open_params open;
 	struct npu_profiling prof;
+	struct npu_job *job;
 	long ret = 0;
 	u32 val;
 
@@ -556,11 +578,14 @@ static long npu_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
 		mutex_lock(&npu->queue_lock);
 		npu_drop_queues(npu);
 		mutex_lock(&npu->state_lock);
-		if (npu->cur) {
-			/* draining, or an abort the IRQ thread has yet to see */
-			ret = -EBUSY;
-		} else if (npu->state == NPU_ABORTED) {
-			/* clear the latched DFX, unmask what the IRQ masked */
+		/* draining, or an abort the IRQ thread has yet to see */
+		job = npu->cur;
+		if (job) {
+			npu_soft_reset(npu);
+			npu->cur = NULL;
+		}
+		if (job || npu->state == NPU_ABORTED) {
+			/* clear the latched status, unmask what the IRQ masked */
 			npu_clear_int(npu, npu_read(npu, NPU_INT_STATUS));
 			if (npu->opened)
 				npu_update(npu, NPU_INT_EN, NPU_INT_ALL,
@@ -568,6 +593,12 @@ static long npu_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
 			npu->state = NPU_IDLE;
 		}
 		mutex_unlock(&npu->state_lock);
+		if (job) {
+			/* the hard handler reads cur unlocked; the thread
+			 * takes state_lock, so this waits outside it */
+			synchronize_irq(npu->irq);
+			kfree(job);
+		}
 		mutex_unlock(&npu->queue_lock);
 		mutex_unlock(&npu->open_lock);
 		return ret;

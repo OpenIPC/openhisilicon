@@ -139,7 +139,8 @@ No `#ifdef` soup in driver code — the compat header handles everything. This i
 │   ├── isp/arch/<chiparch>/     ISP algorithm source per platform
 │   ├── mpi_neo/                 libmpi_neo.so (platform-agnostic)
 │   ├── ive_neo/                 libive_neo.so (platform-agnostic)
-│   └── ivp_neo/                 libivp_neo.so (platform-agnostic)
+│   ├── ivp_neo/                 libivp_neo.so (platform-agnostic)
+│   └── xmedia_npu/              libxmedia_npu.so (gk7205v500 NPU)
 │
 ├── include/                     Shared headers (kernel + userspace, V4)
 └── scripts/                     Build utilities
@@ -340,8 +341,11 @@ Three clean-room libraries replace vendor binaries for IVE motion detection, MMZ
 | `libmpi_neo.so` | `libmpi.so` | `HI_MPI_SYS_Init/Exit/MmzAlloc/MmzFree/MmzFlushCache` |
 | `libive_neo.so` | `libive.so` | `HI_MPI_IVE_*` (19 IVE ops) + SVP/XNN helpers |
 | `libivp_neo.so` | `libivp.so` | `hi_ivp_*` object-detection API |
+| `libxmedia_npu.so` | `libxmedia_npu.so` (XMedia SPC020) | `xmedia_npu_*`, `gh_npu_*`, NPU memory and model-file helpers |
 
 These are **platform-agnostic** — the same binaries work across all CHIPARCH targets. The public headers match the vendor ABI byte-for-byte (struct sizes locked via `_Static_assert` in CI).
+
+`libxmedia_npu.so` keeps the vendor's name because the vendor's graph runtime, `libxmedia_cl.so`, links against it by that name; it is gk7205v500-only and talks to `open_npu.ko`. `libraries/xmedia_npu/BENCHMARKS.md` has its cross-check against the vendor library.
 
 The `open_ive_neo.ko` kernel module (the driver that `libive_neo.so` talks to) is currently **hi3516ev200/ev300 only**. On other platforms, use the vendor `open_ive.ko` blob with `libive_neo.so` in userspace.
 
