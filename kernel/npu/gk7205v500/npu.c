@@ -29,9 +29,8 @@
 
 #include "npu_ioctl.h"
 
-/* sys_config/gk7205v500: MOD_ID_NPU = 64, 450 MHz is the SDK's setting */
+/* sys_config/gk7205v500: MOD_ID_NPU = 64 */
 #define NPU_MOD_ID		64
-#define NPU_CLK_MHZ		450
 extern void sysconfig_module_set_clk(int mod_id, unsigned int clk_freq,
 				     void *ext_param);
 
@@ -95,6 +94,15 @@ enum {
 static unsigned int memsize = 0x400000;
 module_param(memsize, uint, 0444);
 MODULE_PARM_DESC(memsize, "memsize=0x400000");
+
+/*
+ * The NPU clock sys_config offers runs from 257 to 600 MHz. The SDK picks
+ * 450; the NPU is clocked synchronously, so a job takes the same number of
+ * cycles at any of them and 600 runs it a third faster.
+ */
+static unsigned int clk_mhz = 600;
+module_param(clk_mhz, uint, 0444);
+MODULE_PARM_DESC(clk_mhz, "NPU clock in MHz: 257, 330, 360, 450, 495 or 600 (default)");
 
 struct npu_job {
 	struct list_head node;
@@ -789,8 +797,16 @@ static int npu_probe(struct platform_device *pdev)
 	}
 	platform_set_drvdata(pdev, npu);
 
-	sysconfig_module_set_clk(NPU_MOD_ID, NPU_CLK_MHZ, NULL);
-	dev_info(dev, "registers %pa, irq %d\n", &res->start, irq);
+	switch (clk_mhz) {
+	case 257: case 330: case 360: case 450: case 495: case 600:
+		break;
+	default:
+		dev_warn(dev, "clk_mhz=%u unsupported, using 600\n", clk_mhz);
+		clk_mhz = 600;
+	}
+	sysconfig_module_set_clk(NPU_MOD_ID, clk_mhz, NULL);
+	dev_info(dev, "registers %pa, irq %d, %u MHz\n", &res->start, irq,
+		 clk_mhz);
 	return 0;
 }
 
