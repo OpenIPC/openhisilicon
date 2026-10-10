@@ -173,6 +173,17 @@ extern GK_S32 imx335_orientation_init(VI_PIPE ViPipe);
  * long frame at "20 ms" while the sensor exposed 26.8 ms, which is not a whole
  * number of half-periods, so the band it exists to remove came back. */
 #define IMX335_WDR_5M_FPS_MAX ((GK_FLOAT)22.34)
+/* The slowest it was ever asked for: the floor used to be a request of 15,
+ * which at the old 30-for-22.34 conversion was VMAX 9000. Kept as that frame,
+ * in the rate it really is, so nothing reachable before stops being so. */
+#define IMX335_WDR_5M_FPS_MIN (15 * IMX335_WDR_5M_FPS_MAX / 30)
+
+/* The rate 5M WDR was last set to, per pipe, as cmos_fps_set() worked it out:
+ * the AE default derives the frame from it. gu32STimeFps is the integer one
+ * every mode shares and starts at 30, so for this mode it described a frame
+ * shorter than the one programmed until the first rate request, and 22 rather
+ * than 22.34 after it. 0 until set, which means the mode's own rate. */
+static GK_FLOAT g_af32Wdr5mFps[ISP_MAX_PIPE_NUM] = { 0 };
 
 /* The slowest rate 20-bit VMAX can express in the 5M linear mode, and hence the
  * longest exposure it can reach: VMAX scales as 30/fps from the 30 fps value,
@@ -271,7 +282,9 @@ static GK_S32 cmos_get_ae_default(VI_PIPE ViPipe,
 		U32MaxFps = 30;
 
 		pstSnsState->u32FLStd =
-			u32Fll * IMX335_WDR_5M_FPS_MAX / DIV_0_TO_1_FLOAT(gu32STimeFps);
+			u32Fll * IMX335_WDR_5M_FPS_MAX /
+			(g_af32Wdr5mFps[ViPipe] > 0 ? g_af32Wdr5mFps[ViPipe] :
+						      IMX335_WDR_5M_FPS_MAX);
 
 		if (0 != (pstSnsState->u32FLStd % 4)) {
 			pstSnsState->u32FLStd =
@@ -577,7 +590,7 @@ static GK_VOID cmos_fps_set(VI_PIPE ViPipe, GK_FLOAT f32Fps,
 	}; break;
 
 	case IMX335_5M_30FPS_10BIT_WDR_MODE:
-		if ((f32Fps <= 30.0) && (f32Fps >= 15.0)) {
+		if ((f32Fps <= 30.0) && (f32Fps >= IMX335_WDR_5M_FPS_MIN)) {
 			/* Still accepted up to 30, which is what the ISP asks for out
 			 * of the box, but answered with the rate the sensor can give:
 			 * f32Fps is what AE is told below, and the line it converts
@@ -585,6 +598,7 @@ static GK_VOID cmos_fps_set(VI_PIPE ViPipe, GK_FLOAT f32Fps,
 			if (f32Fps > IMX335_WDR_5M_FPS_MAX) {
 				f32Fps = IMX335_WDR_5M_FPS_MAX;
 			}
+			g_af32Wdr5mFps[ViPipe] = f32Fps;
 			u32Lines = IMX335_VMAX_5M_30FPS_10BIT_WDR *
 				   IMX335_WDR_5M_FPS_MAX / DIV_0_TO_1_FLOAT(f32Fps);
 			pstAeSnsDft->u32LinesPer500ms =
@@ -2182,6 +2196,7 @@ static GK_S32 sensor_unregister_callback(VI_PIPE ViPipe, ALG_LIB_S *pstAeLib,
 
 	sensor_ctx_exit(ViPipe);
 	imx335_mirror_flip_set(ViPipe, ISP_SNS_NORMAL); /* a new session starts unflipped */
+	g_af32Wdr5mFps[ViPipe] = 0; /* and at the mode's own rate */
 
 	return GK_SUCCESS;
 }
