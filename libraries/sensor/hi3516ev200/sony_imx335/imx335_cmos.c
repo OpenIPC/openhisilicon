@@ -157,6 +157,23 @@ extern GK_S32 imx335_orientation_init(VI_PIPE ViPipe);
 #define IMX335_VMAX_4M_30FPS_10BIT_WDR (3300 + IMX335_INCREASE_LINES)//0xCE4
 #define IMX335_VMAX_4M_25FPS_10BIT_WDR (0xBB8 + IMX335_INCREASE_LINES)
 
+/* The rate 5M line WDR actually runs at with VMAX 0x1194, which is not 30.
+ *
+ * The mode init writes HMAX 0x12C, and at 74.25 MHz a DOL frame of 2 x VMAX
+ * lines would then take 36.4 ms. The sensor does not run that line: measured
+ * by frame count over 30 s on a gk7205v300, VMAX 8440, 6752, 5400 and 4500 gave
+ * 11.92, 14.88, 18.64 and 22.34 fps, a frame period of 9.94-9.95 us per VMAX
+ * line at every one of them -- HMAX 0x12C behaves as about 0x171 here. The 4M
+ * WDR mode (HMAX 0x177) and linear 5M (HMAX 0x226) run exactly the rate their
+ * HMAX gives, measured the same way.
+ *
+ * Taking 30 for it made every rate come out at 0.745 of the one asked for, and
+ * told AE there were 30/22.34 more lines in a second than there are: each
+ * exposure ran 1.34x what AE believed. Under 50 Hz anti-flicker that held the
+ * long frame at "20 ms" while the sensor exposed 26.8 ms, which is not a whole
+ * number of half-periods, so the band it exists to remove came back. */
+#define IMX335_WDR_5M_FPS_MAX ((GK_FLOAT)22.34)
+
 /* The slowest rate 20-bit VMAX can express in the 5M linear mode, and hence the
  * longest exposure it can reach: VMAX scales as 30/fps from the 30 fps value,
  * so the floor is the fps at which that product fills the field. Derived rather
@@ -254,7 +271,7 @@ static GK_S32 cmos_get_ae_default(VI_PIPE ViPipe,
 		U32MaxFps = 30;
 
 		pstSnsState->u32FLStd =
-			u32Fll * U32MaxFps / DIV_0_TO_1_FLOAT(gu32STimeFps);
+			u32Fll * IMX335_WDR_5M_FPS_MAX / DIV_0_TO_1_FLOAT(gu32STimeFps);
 
 		if (0 != (pstSnsState->u32FLStd % 4)) {
 			pstSnsState->u32FLStd =
@@ -341,6 +358,12 @@ static GK_S32 cmos_get_ae_default(VI_PIPE ViPipe,
 		pstAeSnsDft->u32LinesPer500ms = (u32Fll * U32MaxFps) >> 1;
 		if (IMX335_CROP_FLEX_LINEAR_MODE == pstSnsState->u8ImgMode) {
 			pstAeSnsDft->u32LinesPer500ms = IMX335_FLEX_LINE_RATE / 2;
+		}
+		/* A DOL frame is 2 x VMAX of these lines, at the rate the mode
+		 * really runs -- what cmos_fps_set() works out, so the two agree. */
+		if (IMX335_5M_30FPS_10BIT_WDR_MODE == pstSnsState->u8ImgMode) {
+			pstAeSnsDft->u32LinesPer500ms =
+				(GK_U32)(u32Fll * IMX335_WDR_5M_FPS_MAX);
 		}
 	} else {
 		pstAeSnsDft->u32LinesPer500ms = g_au32LinesPer500ms[ViPipe];
@@ -555,11 +578,17 @@ static GK_VOID cmos_fps_set(VI_PIPE ViPipe, GK_FLOAT f32Fps,
 
 	case IMX335_5M_30FPS_10BIT_WDR_MODE:
 		if ((f32Fps <= 30.0) && (f32Fps >= 15.0)) {
-			u32MaxFps = 30;
-			u32Lines = IMX335_VMAX_5M_30FPS_10BIT_WDR * u32MaxFps /
-				   DIV_0_TO_1_FLOAT(f32Fps);
+			/* Still accepted up to 30, which is what the ISP asks for out
+			 * of the box, but answered with the rate the sensor can give:
+			 * f32Fps is what AE is told below, and the line it converts
+			 * exposure with is derived from it. */
+			if (f32Fps > IMX335_WDR_5M_FPS_MAX) {
+				f32Fps = IMX335_WDR_5M_FPS_MAX;
+			}
+			u32Lines = IMX335_VMAX_5M_30FPS_10BIT_WDR *
+				   IMX335_WDR_5M_FPS_MAX / DIV_0_TO_1_FLOAT(f32Fps);
 			pstAeSnsDft->u32LinesPer500ms =
-				IMX335_VMAX_5M_30FPS_10BIT_WDR * 30;
+				IMX335_VMAX_5M_30FPS_10BIT_WDR * IMX335_WDR_5M_FPS_MAX;
 			if (0 != (u32Lines % 4)) {
 				u32Lines =
 					u32Lines - (u32Lines % 4) +
