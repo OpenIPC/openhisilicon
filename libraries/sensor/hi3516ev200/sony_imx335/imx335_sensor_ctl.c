@@ -139,7 +139,9 @@ int IMX335_write_register(VI_PIPE ViPipe, GK_U32 addr, GK_U32 data)
 	}
 
 	ret = write(g_fd[ViPipe], buf, imx335_addr_byte + imx335_data_byte);
-	if (ret < 0) {
+	/* A short transfer is a failed one: the orientation group retries on
+	 * failure, and a register left half written must not count as set. */
+	if (ret != imx335_addr_byte + imx335_data_byte) {
 		ISP_TRACE(MODULE_DBG_ERR, "I2C_WRITE error!\n");
 		return GK_FAILURE;
 	}
