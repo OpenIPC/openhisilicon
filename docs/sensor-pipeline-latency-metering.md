@@ -41,14 +41,16 @@ light changes
   ├─ VENC encode (H.264 / H.265)
   │     starts after the whole frame unless isp.lowDelay lets VPSS hand it
   │     over by lines. Full-frame encode is the bulk of capture→wire:
-  │     ~25 ms at 1080p, ~9 ms at 720p, ~60 ms at 5M on gk7205v300
+  │     ~25 ms at 1080p, ~9 ms at 720p, ~60 ms at 5M on gk7205v300.
+  │     Slices come out together once the whole frame is encoded (measured);
+  │     they pay off at a receiver that decodes slice by slice (see FAQ)
   │
   ├─ majestic packetiser: RTP (RTSP, WebRTC) or fMP4 (/ws/video, MSE)
-  │     whole access units; slices do not leave early (measured)
   │
   ├─ kernel send, wire (LAN ≤ 1 ms; radio 5-50 ms)
   │
-  ├─ receiver: jitter buffer / MSE buffer, decode
+  ├─ receiver: jitter buffer / MSE buffer, decode (per frame in browsers,
+  │     ffplay, VLC; per slice in OpenIPC/research vdec on hi3536dv100)
   │     WebRTC ~17 ms; WebUI MSE player 60+ ms (see below)
   │
   └─ display: refresh wait + panel response
@@ -179,8 +181,26 @@ At 5M (~15 fps delivered) the gap grows: MSE 108 ms, WebRTC 26 ms.
   it off while `motionDetect` is enabled ("motion detection reads an extended
   channel, which a low-delay channel does not feed"), and it rules out
   `storageSaver` frame dropping.
-- **Do slices (`sliceUnits` / `sliceBytes`) help?** No. majestic sends whole
-  access units, so nothing leaves before the frame is done.
+- **Do slices (`sliceUnits` / `sliceBytes`) help?** Not on the camera side,
+  but they can on the receiving side.
+  - *Camera:* the encoder hands a frame's slices over together, once the whole
+    frame is encoded. On gk7205v300 it raises one interrupt per frame, slices
+    or not (`VencInt` in `/proc/umap/venc` keeps pace with `StartOk`). Polling
+    `HI_MPI_VENC_QueryStatus` the way OpenIPC/research `venc` does (IMX335
+    1296x972@60, 16 slices of 4 macroblock rows), every frame's first slice
+    was found with all 16 already waiting, at the same age as the whole frame
+    in frame mode (26.5 ms; 19.6 ms with VPSS low delay). hi3516av300 behaves
+    the same. So slices do not make the first packet leave earlier, and the
+    table above, which times the last packet of each frame, shows no gain
+    (80.6 ms with `sliceUnits: 17` against 77.6 ms without).
+  - *Receiver:* a decoder fed slice by slice starts on the top of the frame
+    while the rest is still arriving, so decoding overlaps transmission. That
+    is how the OpenIPC/research `vdec` FPV receiver works: it hands each NAL to
+    the hi3536dv100 decoder (`VIDEO_MODE_STREAM`) as soon as it is
+    reassembled. The saving grows with the time a frame takes on the link,
+    and a lost packet costs one slice instead of the whole frame. Browsers,
+    ffplay and VLC decode whole frames and get neither. The receive-side
+    saving has not been measured here.
 - **Does latency scale with fps in the small modes?** Roughly with the frame
   period: 720p120 halves 1080p55. The encoder must run at the sensor rate,
   though: the same 120 fps mode encoded at 60 fps lost 15 ms.
