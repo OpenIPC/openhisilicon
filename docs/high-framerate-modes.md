@@ -74,6 +74,47 @@ What the table shows:
   at about 121 and 54 fps, whatever the sensor does.
 - **What is not measured.** gk7205v300 has not been re-measured.
 
+### Full resolution: the encoder binds
+
+The table above streams 1920x1080, where the encoder is not the bottleneck.
+Encoding the full 2592x1944 frame, it is. Measured on `openipc-gk7205v300`
+in the stock full-scale mode (sensor at 30), 60 s per reading, frames lost
+read from VI's `LostFrame`/`VbFail` in `/proc/umap/vi`:
+
+| Encoded 2592x1944 | H.265 | H.264 | VI lost |
+|---|---|---|---|
+| asked for 26 | 21 fps | 21 fps | 5 a second |
+| asked for 20 | 20 fps | 20 fps | none |
+
+So the two codecs still agree at full resolution, and about 21 fps (some
+107 Mpixel/s) is the ceiling; 20 is the highest rate delivered in full. That
+is the same pixel rate as the hi3516ev300's 54 fps at 1080p and 121 fps at
+720p in the HMAX table above.
+
+**In 2:1 line WDR the sensor must stay at that rate as well.** The 5M WDR
+mode runs at about 22 fps. There VI writes both exposures of every frame to
+DDR from the same buffer pool the encoder's input comes from, so a stall in
+the encoder reaches VI, and a 2592x1944 keyframe is such a stall. With the
+sensor at 22 and the stream decimated to 20 or 15 fps, VI still lost one
+frame per keyframe; with the sensor at 20, none. A linear mode does not need
+this: a 30 fps sensor decimated to a 20 fps stream lost nothing. Past the
+limit in WDR, H.264 degrades more than H.265 (17 fps against 21 with the
+sensor at 22).
+
+Ruled out along the way, each leaving the losses unchanged:
+
+- **ISP back-end clock.** VIPROC already runs at its fastest documented
+  offline clock, 257 MHz (`PERI_CRG63[2:0]=0`). Setting `PERI_CRG63[3]`
+  hands it the 360 MHz VI pixel clock instead, which the user guide lists as
+  not selectable in that mode. Its hardware time per WDR frame (both
+  exposures, one pass) fell from 23.2 to 16.6 ms, with no errors or visible
+  damage over 90 s. The frame losses did not change. VI capture (360 MHz),
+  VPSS (257 MHz) and VEDU (450 MHz) are already on their top settings.
+- **A bigger VB pool.** Eight blocks rather than six lost as many.
+- **JPEG snapshots.** Off, the same.
+
+The SoC read 84-89 °C throughout, and nothing throttled.
+
 ## IMX307 high-framerate modes (hi3516ev200 / gk7205v200)
 
 Wire fps from VENC `Send` counter (5 s window, h.265 @ 4 Mbps wire) on
