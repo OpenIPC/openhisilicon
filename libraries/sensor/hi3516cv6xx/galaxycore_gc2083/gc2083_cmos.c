@@ -3,7 +3,9 @@
  */
 
 #include <stdio.h>
-#include <unistd.h>
+#include <sys/ioctl.h>
+#include <linux/i2c.h>
+#include <linux/i2c-dev.h>
 #include "sensor_common.h"
 #include "ot_mpi_isp.h"
 #include "ot_mpi_ae.h"
@@ -293,16 +295,34 @@ static td_void cmos_again_calc_table(ot_vi_pipe pipe, td_u32 *lin, td_u32 *db)
     *db = i - 1;
 }
 
+/*
+ * One combined transfer (address write, repeated start, read): two separate
+ * write()/read() calls, as the vendor driver does, let an ISP sync write
+ * land in between and move the sensor's register pointer.
+ */
+static td_s32 gc2083_read_reg(const cis_i2c *i2c, td_u32 addr, td_u8 *value)
+{
+    td_u8 reg[GC2083_ADDR_BYTE] = { high_8bits(addr), low_8bits(addr) };
+    struct i2c_msg msg[2] = {
+        { .addr = i2c->addr >> 1, .flags = 0, .len = sizeof(reg), .buf = reg },
+        { .addr = i2c->addr >> 1, .flags = I2C_M_RD, .len = 1, .buf = value },
+    };
+    struct i2c_rdwr_ioctl_data rdwr = { .msgs = msg, .nmsgs = 2 };
+
+    if (i2c->fd < 0 || ioctl(i2c->fd, I2C_RDWR, &rdwr) != 2) {
+        return TD_FAILURE;
+    }
+    return TD_SUCCESS;
+}
+
 /* VENDOR reads 040c and sets both trims only on every fifth gain update. */
 static td_void cmos_update_gain_trim(cis_info *cis)
 {
-    td_u8 addr[2] = {0x04, 0x0c};
     td_u8 value;
     td_u8 trim;
     td_s32 ret_171;
     td_s32 ret_172;
-    if (cis->i2c.fd < 0 || write(cis->i2c.fd, addr, sizeof(addr)) != sizeof(addr) ||
-        read(cis->i2c.fd, &value, sizeof(value)) != sizeof(value)) {
+    if (gc2083_read_reg(&cis->i2c, 0x040c, &value) != TD_SUCCESS) {
         isp_err_trace("GC2083 read 0x040c failed; retain previous gain trim\n");
         return;
     }
@@ -913,9 +933,20 @@ static td_s32 cmos_write_register(ot_vi_pipe vi_pipe, td_u32 addr, td_u32 data)
 
 static td_s32 cmos_read_register(ot_vi_pipe vi_pipe, td_u32 addr)
 {
-    ot_unused(vi_pipe);
-    ot_unused(addr);
-    return TD_SUCCESS;
+    cis_info *cis = TD_NULL;
+    td_u8 value;
+
+    sns_check_pipe_return(vi_pipe);
+
+    cis = cmos_get_info(vi_pipe);
+    sns_check_pointer_return(cis);
+
+    if (gc2083_read_reg(&cis->i2c, addr, &value) != TD_SUCCESS) {
+        isp_err_trace("gc2083 read register 0x%x failed!\n", addr);
+        return TD_FAILURE;
+    }
+
+    return value;
 }
 
 static td_s32 cmos_set_bus_info(ot_vi_pipe vi_pipe, ot_isp_sns_commbus sns_bus_info)
