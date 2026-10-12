@@ -22,6 +22,7 @@
 
 #define SENSOR_NAME_SC4336P "sc4336p"
 #define SENSOR_NAME_GC4023 "gc4023"
+#define SENSOR_NAME_GC2083 "gc2083"
 #define SENSOR_NAME_SC450AI "sc450ai"
 #define SENSOR_NAME_SC500AI "sc500ai"
 #define SENSOR_NAME_SC431HAI "sc431hai"
@@ -284,6 +285,7 @@ static unsigned int parse_sensor_clock(const char *name, unsigned int name_len)
     /* get clock from sensor name. */
     if ((strncmp(SENSOR_NAME_SC4336P, name, len) == 0) ||
         (strncmp(SENSOR_NAME_GC4023, name, len) == 0) ||
+        (strncmp(SENSOR_NAME_GC2083, name, len) == 0) ||
         (strncmp(SENSOR_NAME_SC431HAI, name, len) == 0) ||
         (strncmp(SENSOR_NAME_SC450AI, name, len) == 0) ||
         (strncmp(SENSOR_NAME_SC500AI, name, len) == 0)) {

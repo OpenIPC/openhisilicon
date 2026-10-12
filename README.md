@@ -253,6 +253,7 @@ sensor driver found online came from — see
 | | JXF23 | | x | | | | | | |
 | | JXF37 | | | | | | | x | |
 | **GalaxyCore** | GC2053 | | | | | | x | x | |
+| | GC2083 | | | | | | | | x |
 | | GC4023 | | | | | | | | x |
 
 Each sensor has `.so` (shared) and `.a` (static) library builds. The goal is to eventually unify sensor drivers across platforms where the same sensor model is used.
