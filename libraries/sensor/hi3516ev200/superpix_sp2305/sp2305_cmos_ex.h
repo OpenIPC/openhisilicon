@@ -417,37 +417,29 @@ static const ISP_CMOS_SHARPEN_S g_stIspYuvSharpen = {
 };
 
 /*
- * Fitted on the same RAW captures as the white-balance curve (sp2305_cmos.c):
- * per bulb colour temperature, white-balanced by the chart's greys, rows
- * summing to 1.0, minimising CIELAB error with lightness matched (the bulbs lit
- * the chart unevenly): 7.3, 6.7, 7.0 and 7.8 dE at 6000, 5000, 4300, 3000 K.
- * Not held to the noise of the matrices before them: held to 1.25x, the
- * picture came out at 0.78 of the chart's saturation.  Unheld, the camera
- * renders the chart at 0.97-1.05 (with g_stAwbAgcTable below) and 13-15 dE,
- * and chroma noise on its greys goes from 4.0 to 4.4-5.6 a*b*, at or under
- * the IMX335's 5.6-7.0 on the same SoC and scene.
+ * The module maker's colour matrices for this sensor, as its library carries
+ * them, on the colour-temperature scale of the white-balance curve in
+ * sp2305_cmos.c, which the chart fit they replace (#249) was not; that fit
+ * also put a 3.5x gain on green at 3000 K, which a dim room's noise does not
+ * forgive.  The IQ profile carries its own [static_ccm]; these are what a
+ * camera without one runs.
  */
 static AWB_CCM_S g_stAwbCcm = {
-    4,
+    3,
     {
         {
-            6000,
-            { 0x024F, 0x813F, 0x8010, 0x80C2, 0x023E, 0x807C, 0x801F, 0x8122, 0x0241 },
+            4900,
+            { 0x01C4, 0x80B8, 0x800C, 0x804D, 0x0164, 0x8017, 0x8001, 0x80C5, 0x01C6 },
         },
 
         {
-            5000,
-            { 0x021C, 0x8103, 0x8019, 0x811A, 0x02B3, 0x8099, 0x8043, 0x810E, 0x0251 },
+            3850,
+            { 0x01C0, 0x80AB, 0x8015, 0x8041, 0x0164, 0x8023, 0x8001, 0x80DA, 0x01DB },
         },
 
         {
-            4300,
-            { 0x021B, 0x8106, 0x8015, 0x8136, 0x02D4, 0x809E, 0x8043, 0x8146, 0x0289 },
-        },
-
-        {
-            3000,
-            { 0x0221, 0x80DD, 0x8044, 0x81C7, 0x038D, 0x80C6, 0x80A6, 0x820A, 0x03B0 },
+            2650,
+            { 0x01EB, 0x8103, 0x0018, 0x8055, 0x0161, 0x800C, 0x0020, 0x8157, 0x0237 },
         },
     },
 };
@@ -457,10 +449,8 @@ static AWB_AGC_TABLE_S g_stAwbAgcTable = {
     1,
 
     /* 1,  2,  4,  8, 16, 32, 64, 128, 256, 512, 1024, 2048, 4096, 8192, 16384, 32768 */
-    /* saturation: full up to 4x, eased from 8x; at the 4-8x of a lit room the
-     * vendor's 0x7e/0x72 left the picture at 0.9 of its colour on top of the
-     * matrix.  The night end (32x up) is unchanged. */
-    { 0x80, 0x80, 0x80, 0x7c, 0x6c, 0x60, 0x58, 0x50, 0x48, 0x40, 0x38, 0x38, 0x38, 0x38, 0x38, 0x38 }
+    /* the module maker's saturation by gain */
+    { 0x80, 0x78, 0x73, 0x6e, 0x64, 0x55, 0x50, 0x50, 0x48, 0x40, 0x38, 0x38, 0x38, 0x38, 0x38, 0x38 }
 };
 
 static const ISP_CMOS_WDR_S g_stIspWDR = {
