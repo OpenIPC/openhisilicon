@@ -755,6 +755,21 @@ static long mmz_userdev_ioctl(struct file *file, unsigned int cmd, unsigned long
         area.dirty_size = (area.dirty_size + (orig_addr - area.dirty_phys_start) +
                            (CACHE_LINE_SIZE - 1)) & ~(CACHE_LINE_SIZE - 1);
 
+        /* Widening to cache lines stays inside the block as long as the block
+         * is cache-line aligned, which MMZ's page-granular allocator gives;
+         * check it rather than rely on it, before flushing. */
+        if ((area.dirty_phys_start < mmb->phys_addr) ||
+            (area.dirty_size > mmb->length - (area.dirty_phys_start - mmb->phys_addr))) {
+            printk(KERN_WARNING "\ndirty area overflow after alignment!\n");
+            ret = -EFAULT;
+#if LINUX_VERSION_CODE < KERNEL_VERSION(5, 10, 0)
+            up_read(&mm->mmap_sem);
+#else
+            up_read(&mm->mmap_lock);
+#endif
+            goto __error_exit;
+        }
+
         mmz_flush_dcache_mmb_dirty(&area);
 #if LINUX_VERSION_CODE < KERNEL_VERSION(5, 10, 0)
         up_read(&mm->mmap_sem);
