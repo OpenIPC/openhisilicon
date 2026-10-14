@@ -1,0 +1,71 @@
+#ifndef __GC2083_H__
+#define __GC2083_H__
+
+#include "sns_comm.h"
+
+#ifdef __cplusplus
+extern "C" {
+#endif
+
+// sensor fps mode
+#define GC2083_FULL_LINES_MAX          0x3FFF
+#define GC2083_VMAX_2M_LINEAR          1125
+
+#define GC2083_EXP_OFFSET_LINEAR       2
+#define GC2083_S_EXP_MAX_DEFAULT_1620P 0xcc
+
+// the value of the gc2083 exposure register is in half line units, (<< 1) for AE calculation, (>> 1) for EXP reg
+#define GC2083_EXP_SHIFT 1
+
+#define GC2083_REG_ADDR_EXP_H     0x0d04
+#define GC2083_REG_ADDR_EXP_L     0x0d03
+#define GC2083_REG_ADDR_AGAIN_1   0x00d0
+#define GC2083_REG_ADDR_AGAIN_2   0x0155
+#define GC2083_REG_ADDR_AGAIN_3   0x0410
+#define GC2083_REG_ADDR_AGAIN_4   0x0411
+#define GC2083_REG_ADDR_AGAIN_5   0x0412
+#define GC2083_REG_ADDR_AGAIN_6   0x0413
+#define GC2083_REG_ADDR_AGAIN_7   0x0414
+#define GC2083_REG_ADDR_AGAIN_8   0x0415
+#define GC2083_REG_ADDR_AGAIN_9   0x0416
+#define GC2083_REG_ADDR_AGAIN_10  0x0417
+#define GC2083_REG_ADDR_AGAIN_11  0x00b8
+#define GC2083_REG_ADDR_AGAIN_12  0x00b9
+#define GC2083_REG_ADDR_AGAIN_13  0x031d
+#define GC2083_REG_ADDR_AGAIN_14  0x0dc1
+#define GC2083_REG_ADDR_AGAIN_15  0x031d
+#define GC2083_REG_ADDR_DGAIN_H   0x00b1
+#define GC2083_REG_ADDR_DGAIN_L   0x00b2
+#define GC2083_REG_ADDR_VMAX_H    0x0d41
+#define GC2083_REG_ADDR_VMAX_L    0x0d42
+
+typedef enum {
+    GC2083_REG_EXP_H = 0,
+    GC2083_REG_EXP_L,
+    GC2083_REG_AGAIN_1,
+    GC2083_REG_AGAIN_2,
+    GC2083_REG_AGAIN_3,
+    GC2083_REG_AGAIN_4,
+    GC2083_REG_AGAIN_5,
+    GC2083_REG_AGAIN_6,
+    GC2083_REG_AGAIN_7,
+    GC2083_REG_AGAIN_8,
+    GC2083_REG_AGAIN_9,
+    GC2083_REG_AGAIN_10,
+    GC2083_REG_AGAIN_11,
+    GC2083_REG_AGAIN_12,
+    GC2083_REG_AGAIN_13,
+    GC2083_REG_AGAIN_14,
+    GC2083_REG_AGAIN_15,
+    GC2083_REG_DGAIN_H,
+    GC2083_REG_DGAIN_L,
+    GC2083_REG_VMAX_H, // VMAX_H需先于VMAX_L更新
+    GC2083_REG_VMAX_L,
+    GC2083_REG_MAX_NUM
+} gc2083_reg_info;
+
+#ifdef __cplusplus
+}
+#endif
+
+#endif // __GC2083_H__

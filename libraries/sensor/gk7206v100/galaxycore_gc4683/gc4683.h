@@ -1,0 +1,57 @@
+#ifndef __GC4683_H__
+#define __GC4683_H__
+
+#include "sns_comm.h"
+
+#ifdef __cplusplus
+extern "C" {
+#endif
+
+#define GC4683_VMAX_4M_LINEAR 0x0c80
+
+#define GC4683_FULL_LINES_MAX 0x3FFF
+
+// GC4683 Register Address
+#define GC4683_REG_ADDR_EXP_H   0x0202
+#define GC4683_REG_ADDR_EXP_L   0x0203
+
+#define GC4683_REG_ADDR_AGAIN_1 0x02aa
+#define GC4683_REG_ADDR_AGAIN_2 0x02ab
+#define GC4683_REG_ADDR_AGAIN_3 0x02a9
+#define GC4683_REG_ADDR_AGAIN_4 0x14ac
+#define GC4683_REG_ADDR_AGAIN_5 0x1476
+#define GC4683_REG_ADDR_AGAIN_6 0x1467
+#define GC4683_REG_ADDR_AGAIN_7 0x1468
+#define GC4683_REG_ADDR_AGAIN_8 0x00a8
+#define GC4683_REG_ADDR_AGAIN_9 0x00a9
+#define GC4683_REG_ADDR_DGAIN_H 0x0064
+#define GC4683_REG_ADDR_DGAIN_L 0x0065
+#define GC4683_REG_ADDR_VMAX_H  0x0340
+#define GC4683_REG_ADDR_VMAX_L  0x0341
+
+#define GC4683_EXP_OFFSET 8
+
+typedef enum {
+    GC4683_REG_EXP_H = 0,
+    GC4683_REG_EXP_L,
+    GC4683_REG_AGAIN_1,
+    GC4683_REG_AGAIN_2,
+    GC4683_REG_AGAIN_3,
+    GC4683_REG_AGAIN_4,
+    GC4683_REG_AGAIN_5,
+    GC4683_REG_AGAIN_6,
+    GC4683_REG_AGAIN_7,
+    GC4683_REG_AGAIN_8,
+    GC4683_REG_AGAIN_9,
+    GC4683_REG_DGAIN_H,
+    GC4683_REG_DGAIN_L,
+    GC4683_REG_VMAX_H,
+    GC4683_REG_VMAX_L,
+    GC4683_REG_MAX_NUM
+} gc4683_reg_index;
+
+#ifdef __cplusplus
+}
+#endif
+
+#endif // __GC4683_H__

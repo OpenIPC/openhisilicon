@@ -1,0 +1,53 @@
+#ifndef __SC285SL_H__
+#define __SC285SL_H__
+
+#include "sns_comm.h"
+
+#ifdef __cplusplus
+extern "C" {
+#endif
+
+// sensor fps mode
+#define SC285SL_FULL_LINES_MAX 0x3FFFFF
+
+#define SC285SL_VMAX_2M_4LANE_1080_LINEAR 2320
+#define SC285SL_VMAX_2M_2LANE_1080_LINEAR 2250
+
+#define SC285SL_REG_ADDR_STANDBY 0x0100
+
+#define SC285SL_EXP_OFFSET_LINEAR 8
+#define SC285SL_EXP_SHIFT         1
+
+#define SC285SL_REG_ADDR_EXP_HIGHER  0x3e20
+#define SC285SL_REG_ADDR_EXP_H       0x3e00
+#define SC285SL_REG_ADDR_EXP_M       0x3e01
+#define SC285SL_REG_ADDR_EXP_L       0x3e02
+#define SC285SL_REG_ADDR_AGAIN_H     0x3e08
+#define SC285SL_REG_ADDR_AGAIN_L     0x3e09
+#define SC285SL_REG_ADDR_DGAIN_H     0x3e06
+#define SC285SL_REG_ADDR_DGAIN_L     0x3e07
+#define SC285SL_REG_ADDR_VMAX_H      0x326d
+#define SC285SL_REG_ADDR_VMAX_M      0x320e
+#define SC285SL_REG_ADDR_VMAX_L      0x320f
+
+typedef enum {
+    SC285SL_REG_EXP_HIGHER = 0,
+    SC285SL_REG_EXP_H,
+    SC285SL_REG_EXP_M,
+    SC285SL_REG_EXP_L,
+    SC285SL_REG_AGAIN_H,
+    SC285SL_REG_AGAIN_L,
+    SC285SL_REG_DGAIN_H,
+    SC285SL_REG_DGAIN_L,
+    SC285SL_REG_VMAX_H,
+    SC285SL_REG_VMAX_M,
+    SC285SL_REG_VMAX_L,
+    SC285SL_REG_L_MAX_NUM,
+    SC285SL_REG_MAX_NUM
+} sc285sl_reg_info;
+
+#ifdef __cplusplus
+}
+#endif
+
+#endif // __SC285SL_H__

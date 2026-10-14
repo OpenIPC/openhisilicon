@@ -36,6 +36,8 @@ else ifeq ($(CHIPARCH),hi3519dv500)
     include $(src)/hi3519dv500.kbuild
 else ifeq ($(CHIPARCH),gk7205v500)
     include $(src)/gk7205v500.kbuild
+else ifeq ($(CHIPARCH),gk7206v100)
+    include $(src)/gk7206v100.kbuild
 else
 
 ccflags-y += -I$(src)/../include

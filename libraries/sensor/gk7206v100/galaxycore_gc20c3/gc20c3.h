@@ -1,0 +1,55 @@
+#ifndef __GC20C3_H__
+#define __GC20C3_H__
+
+#include "sns_comm.h"
+#include "gc20c3_ctrl.h"
+
+#ifdef __cplusplus
+extern "C" {
+#endif
+
+// sensor fps mode
+#define GC20C3_FULL_LINES_MAX        0x3FFF
+#if GC20C3_2LANE_LINEAR_1920X1080_30FPS
+#define GC20C3_VMAX_1920X1080_LINEAR 0x465
+#else
+#define GC20C3_VMAX_1920X1080_LINEAR 1501
+#endif
+#define GC20C3_EXP_OFFSET_LINEAR     2
+
+#define GC20C3_REG_ADDR_EXP_H   0x0202
+#define GC20C3_REG_ADDR_EXP_L   0x0203
+#define GC20C3_REG_ADDR_AGAIN_1 0x0D04
+#define GC20C3_REG_ADDR_AGAIN_2 0x0D05
+#define GC20C3_REG_ADDR_AGAIN_3 0x0E36
+#define GC20C3_REG_ADDR_AGAIN_4 0x0E39
+#define GC20C3_REG_ADDR_AGAIN_5 0x04A8
+#define GC20C3_REG_ADDR_AGAIN_6 0x04A9
+#define GC20C3_REG_ADDR_AGAIN_7 0x0052
+#define GC20C3_REG_ADDR_DGAIN_H 0x0474
+#define GC20C3_REG_ADDR_DGAIN_L 0x0475
+#define GC20C3_REG_ADDR_VMAX_H  0x0340
+#define GC20C3_REG_ADDR_VMAX_L  0x0341
+
+typedef enum {
+    GC20C3_REG_EXP_H = 0,
+    GC20C3_REG_EXP_L,
+    GC20C3_REG_AGAIN_1,
+    GC20C3_REG_AGAIN_2,
+    GC20C3_REG_AGAIN_3,
+    GC20C3_REG_AGAIN_4,
+    GC20C3_REG_AGAIN_5,
+    GC20C3_REG_AGAIN_6,
+    GC20C3_REG_AGAIN_7,
+    GC20C3_REG_DGAIN_H,
+    GC20C3_REG_DGAIN_L,
+    GC20C3_REG_VMAX_H,
+    GC20C3_REG_VMAX_L,
+    GC20C3_REG_MAX_NUM
+} gc20c3_reg_info;
+
+#ifdef __cplusplus
+}
+#endif
+
+#endif // __GC20C3_H__

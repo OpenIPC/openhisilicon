@@ -1,0 +1,64 @@
+#ifndef __SC235HAI_H__
+#define __SC235HAI_H__
+
+#include "sns_comm.h"
+
+#ifdef __cplusplus
+extern "C" {
+#endif
+
+// sensor fps mode
+#define SC235HAI_FULL_LINES_MAX      0x7FF0
+#define SC235HAI_VMAX_2M_1080_LINEAR 1125
+
+#define SC235HAI_EXP_OFFSET_LINEAR 11
+#define SC235HAI_EXP_SHIFT 1
+
+#define SC235HAI_REG_ADDR_EXP_H       0x3e00
+#define SC235HAI_REG_ADDR_EXP_M       0x3e01
+#define SC235HAI_REG_ADDR_EXP_L       0x3e02
+#define SC235HAI_REG_ADDR_AGAIN_H     0x3e08
+#define SC235HAI_REG_ADDR_AGAIN_L     0x3e09
+#define SC235HAI_REG_ADDR_DGAIN_H     0x3e06
+#define SC235HAI_REG_ADDR_DGAIN_L     0x3e07
+#define SC235HAI_REG_ADDR_VMAX_H      0x320e
+#define SC235HAI_REG_ADDR_VMAX_L      0x320f
+
+#define SC235HAI_REG_ADDR_S_EXP_H     0x3e04
+#define SC235HAI_REG_ADDR_S_EXP_L     0x3e05
+#define SC235HAI_REG_ADDR_S_AGAIN_H   0x3e12
+#define SC235HAI_REG_ADDR_S_AGAIN_L   0x3e13
+#define SC235HAI_REG_ADDR_S_DGAIN_H   0x3e10
+#define SC235HAI_REG_ADDR_S_DGAIN_L   0x3e11
+#define SC235HAI_REG_ADDR_S_EXP_MAX_H 0x3e23
+#define SC235HAI_REG_ADDR_S_EXP_MAX_L 0x3e24
+
+typedef enum {
+    SC235HAI_REG_EXP_H = 0,
+    SC235HAI_REG_EXP_M,
+    SC235HAI_REG_EXP_L,
+    SC235HAI_REG_AGAIN_H,
+    SC235HAI_REG_AGAIN_L,
+    SC235HAI_REG_DGAIN_H,
+    SC235HAI_REG_DGAIN_L,
+    SC235HAI_REG_VMAX_H,
+    SC235HAI_REG_VMAX_L,
+    SC235HAI_REG_L_MAX_NUM,
+
+  // short frame reg info from here
+    SC235HAI_REG_S_EXP_H = SC235HAI_REG_L_MAX_NUM,
+    SC235HAI_REG_S_EXP_L,
+    SC235HAI_REG_S_AGAIN_H,
+    SC235HAI_REG_S_AGAIN_L,
+    SC235HAI_REG_S_DGAIN_H,
+    SC235HAI_REG_S_DGAIN_L,
+    SC235HAI_REG_S_EXP_MAX_H,
+    SC235HAI_REG_S_EXP_MAX_L,
+    SC235HAI_REG_MAX_NUM
+} sc235hai_reg_info;
+
+#ifdef __cplusplus
+}
+#endif
+
+#endif // __SC235HAI_H__

@@ -17,6 +17,7 @@ Replaces the proprietary SDK that HiSilicon ships to camera manufacturers. Used 
 | V4 | hi3516ev200 | hi3516ev200, hi3516ev300, hi3518ev300, hi3516dv200 | Cortex-A7 | `hi3516ev200` |
 | V4/Goke | gk7205v200 | gk7205v200, gk7205v300, gk7202v300, gk7605v100 | Cortex-A7 | `gk7205v200` |
 | V4/XMedia | gk7205v500 | gk7205v500, gk7205v510, gk7205v530, gk7202v330, gk7201v200 | Cortex-A7 | `gk7205v500` (`XM_SET=V200` for gk7201v200) |
+| Goke/XMedia Lotus | gk7206v100 | gk7206v10, gk7206v10b, gk7206v11, gk7206v11a, gk7206v11at, gk7206v12a | 2× Cortex-A7 + RISC-V MCU | `gk7206v100` |
 | V5 | hi3516cv610 | hi3516cv610, hi3516cv608 | Cortex-A7 | `hi3516cv6xx` |
 | V5 | hi3519dv500 | hi3519dv500, hi3516dv500 | Cortex-A55 (aarch64) | `hi3519dv500` |
 
@@ -94,6 +95,7 @@ No `#ifdef` soup in driver code — the compat header handles everything. This i
 | 4.9.37 (vendor) | Production | hi3516cv200, hi3516av100, hi3516cv500, hi3516ev300, gk7205v200, gk7205v500 |
 | 5.10.221 (vendor) | Production | hi3516cv6xx |
 | 5.10.0 (vendor) | Production | hi3519dv500 |
+| 5.10.130 (vendor, XMedia Lotus SDK) | Build-tested | gk7206v100 |
 | 6.6 LTS | Production | hi3516ev300 (neo) |
 | 6.18 LTS | Tested | hi3516ev300 (CI-verified) |
 | 7.0-rc6 (mainline) | Production | hi3516ev300 (neo) |
@@ -111,6 +113,7 @@ No `#ifdef` soup in driver code — the compat header handles everything. This i
 │   ├── hi3516cv6xx.kbuild       V5 monolithic build config (OSAL + MMZ split)
 │   ├── hi3519dv500.kbuild       V5 aarch64 build config (64-bit, OSAL + MMZ split)
 │   ├── gk7205v500.kbuild        XMedia build config (V200/V500 blob sets, XM_SET)
+│   ├── gk7206v100.kbuild        GK7206V1 (XMedia Lotus) build config (vendor .ko relinked)
 │   ├── Kbuild                   Main entry — dispatches by CHIPARCH
 │   ├── compat/                  Kernel version compatibility (3.0 – 7.0)
 │   ├── obj/<chiparch>/          Pre-built vendor .o blobs
@@ -140,7 +143,8 @@ No `#ifdef` soup in driver code — the compat header handles everything. This i
 │   ├── mpi_neo/                 libmpi_neo.so (platform-agnostic)
 │   ├── ive_neo/                 libive_neo.so (platform-agnostic)
 │   ├── ivp_neo/                 libivp_neo.so (platform-agnostic)
-│   └── xmedia_npu/              libxmedia_npu.so (gk7205v500 NPU)
+│   ├── xmedia_npu/              libxmedia_npu.so (gk7205v500 NPU)
+│   └── gk7206v100/              GK7206 SDK userspace rebuilt from source (msensor, svp, dump tools)
 │
 ├── include/                     Shared headers (kernel + userspace, V4)
 └── scripts/                     Build utilities
@@ -323,6 +327,19 @@ All modules are prefixed `open_` to distinguish from vendor SDK modules. The set
 | `open_nnie` | Neural network engine | | | | | | x | | |
 | `open_gdc` | Geometric distortion | | | | | | x | | |
 | `open_dis` | Digital stabilization | | | | | | x | | |
+
+gk7206v100 (GK7206V1, XMedia Lotus SDK) has its own module set and is not in the table. Its SDK ships only
+finished `xm_*.ko` files, which [`scripts/ko2obj.sh`](scripts/ko2obj.sh) turns into relinkable objects; base
+and sys are folded into `open_common`, MIPI RX into `open_vi`, pin muxing into the device tree, and the ISP
+kernel half is closed. From source: `open_osal`, `open_adc`, `open_misc`, `open_msensor_{spi,mng,chip}`.
+Relinked: `open_common`, `open_pm`, `open_vgs`, `open_tde`, `open_region`, `open_isp`, `open_vpss`,
+`open_npu`, `open_vi`, `open_chnl`, `open_vedu`, `open_rc`, `open_jpege`, `open_h265e`, `open_h264e`,
+`open_venc`, `open_vo`, `open_fb`, `open_cipher_drv`, `open_ive`, and audio `open_acomm`/`aio`/`ao`/`ai`/
+`aenc`/`adec`. The blobs import symbols only the SDK's 5.10.130 kernel exports (its `lotus/` tree), so
+that kernel is the only target. All SDK userspace with source is built here too: the 52 sensor drivers in
+`libraries/sensor/gk7206v100`, and `libxmedia_msensor`, `libxmedia_svp` and the VI/VPSS/VO dump tools in
+`libraries/gk7206v100` (SVP links the SDK's sourceless `libwarp_affine.a`). The vendor libraries are
+hard-float, so this family's firmware uses a musleabihf toolchain.
 
 ### Module load order
 

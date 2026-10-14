@@ -82,6 +82,23 @@ ifneq ($(CHIPARCH),hi3519dv500)
     SUBDIRS := $(filter-out ./sensor/hi3519dv500/%,$(SUBDIRS))
 endif
 
+# gk7206v100 (GK7206V1, XMedia Lotus SDK): sensor drivers from SDK source,
+# built here with the firmware's musl toolchain -- the SDK's own libsns_*.so
+# are linked against uClibc-ng (libc.so.0). They include only the SDK
+# headers imported under kernel/include/gk7206v100. Like the dv500 tree,
+# keep them out of every other chiparch, the V4 pair included, whose build
+# would otherwise sweep them in.
+#
+# gk7206v100/ holds the rest of the SDK's userspace source, rebuilt so its
+# uClibc binaries need not ship: libxmedia_msensor, libxmedia_svp and the
+# VI/VPSS/VO dump tools (which link the vendor libxmedia_*.so, so they build
+# only when XMEDIA_LIBDIR points at them).
+ifeq ($(CHIPARCH),gk7206v100)
+    SUBDIRS := $(filter ./sensor/gk7206v100/% ./gk7206v100/%,$(SUBDIRS))
+else
+    SUBDIRS := $(filter-out ./sensor/gk7206v100/% ./gk7206v100/%,$(SUBDIRS))
+endif
+
 all:
 	@failed=""; \
 	for dir in $(SUBDIRS); do \
