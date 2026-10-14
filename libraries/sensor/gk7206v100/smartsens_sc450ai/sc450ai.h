@@ -1,0 +1,78 @@
+#ifndef __SC450AI_H__
+#define __SC450AI_H__
+
+#include "sns_comm.h"
+
+#ifdef __cplusplus
+extern "C" {
+#endif
+
+// sensor fps mode
+#define SC450AI_FULL_LINES_MAX      0x7FFF
+#define SC450AI_VMAX_4M_1440_LINEAR 1600
+#define SC450AI_VMAX_4M_1440_WDR    3200
+#define SC450AI_VMAX_4M_1520_LINEAR 1560
+#define SC450AI_VMAX_1M_760_LINEAR  780
+
+#define SC450AI_EXP_OFFSET_LINEAR 8
+
+#define SC450AI_FRAME_RATE_MIN 0x4B00
+
+#define SC450AI_EXP_OFFSET_WDR 13
+
+#define SC450AI_S_EXP_MAX_DEFAULT 0xc6
+
+// the value of the sc450ai exposure register is in half line units, (<< 1) for AE calculation, (>> 1) for EXP reg
+#define SC450AI_EXP_SHIFT 1
+
+#define SC450AI_REG_ADDR_EXP_H        0x3e00
+#define SC450AI_REG_ADDR_EXP_M        0x3e01
+#define SC450AI_REG_ADDR_EXP_L        0x3e02
+#define SC450AI_REG_ADDR_AGAIN_H      0x3e08
+#define SC450AI_REG_ADDR_AGAIN_L      0x3e09
+#define SC450AI_REG_ADDR_DGAIN_H      0x3e06
+#define SC450AI_REG_ADDR_DGAIN_L      0x3e07
+#define SC450AI_REG_ADDR_VMAX_H       0x320e
+#define SC450AI_REG_ADDR_VMAX_L       0x320f
+#define SC450AI_REG_ADDR_GROUP_HOLD_0 0x3812
+#define SC450AI_REG_ADDR_GROUP_HOLD_1 0x363a
+#define SC450AI_REG_ADDR_GROUP_HOLD_2 0x3812
+
+#define SC450AI_REG_ADDR_S_EXP_H     0x3e04
+#define SC450AI_REG_ADDR_S_EXP_L     0x3e05
+#define SC450AI_REG_ADDR_S_AGAIN_H   0x3e12
+#define SC450AI_REG_ADDR_S_AGAIN_L   0x3e13
+#define SC450AI_REG_ADDR_S_DGAIN_H   0x3e10
+#define SC450AI_REG_ADDR_S_DGAIN_L   0x3e11
+#define SC450AI_REG_ADDR_S_EXP_MAX_H 0x3e23
+#define SC450AI_REG_ADDR_S_EXP_MAX_L 0x3e24
+
+typedef enum {
+    SC450AI_REG_EXP_H = 0,
+    SC450AI_REG_EXP_M,
+    SC450AI_REG_EXP_L,
+    SC450AI_REG_AGAIN_H,
+    SC450AI_REG_AGAIN_L,
+    SC450AI_REG_DGAIN_H,
+    SC450AI_REG_DGAIN_L,
+    SC450AI_REG_VMAX_H,
+    SC450AI_REG_VMAX_L,
+    SC450AI_REG_L_MAX_NUM,
+
+  // short frame reg info from here
+    SC450AI_REG_S_EXP_H = SC450AI_REG_L_MAX_NUM,
+    SC450AI_REG_S_EXP_L,
+    SC450AI_REG_S_AGAIN_H,
+    SC450AI_REG_S_AGAIN_L,
+    SC450AI_REG_S_DGAIN_H,
+    SC450AI_REG_S_DGAIN_L,
+    SC450AI_REG_S_EXP_MAX_H,
+    SC450AI_REG_S_EXP_MAX_L,
+    SC450AI_REG_MAX_NUM
+} sc450ai_reg_info;
+
+#ifdef __cplusplus
+}
+#endif
+
+#endif // __SC450AI_H__

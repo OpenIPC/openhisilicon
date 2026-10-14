@@ -1,0 +1,128 @@
+# gk7206v100 SoC family (Goke GK7206V1 series: GK7206V10/V10B/V11/V11A/V11AT/
+# V12A; XMedia SDK name xm7206v1x, chip codename "xmorca") build configuration
+#
+# Vendor SDK: the XMedia "Lotus" SDK as republished by ShiMetaPi
+# (github.com/ShiMetaPi/shimetapi_pico_gx, V1.0.0, boards xm7206v11a/
+# xm7206v12a). Kernel target: the SDK's own linux-5.10.y (5.10.130, with
+# its lotus/ machine and driver tree), dual Cortex-A7 SMP, Thumb-2.
+#
+# Layout under kernel/:
+#   obj/gk7206v100/nolog/   closed modules, source/gmp/ko/linux-5.10.y/multi/
+#   obj/gk7206v100/log/       arm-gcc12.2.0-linux-uclibceabi/{nolog,log}
+#   init/gk7206v100/        module_init/exit wrappers for those
+#   include/gk7206v100/     SDK headers (gmp/include, gmp/drv/include,
+#                           gmp/usr/isp/include)
+#   osal/gk7206v100/        OSAL + MMZ + media bus (gmp/drv/osal)
+#   adc|misc|msensor/gk7206v100/  gmp/drv/{lsadc,misc,ext/msensor}
+#
+# This is not gk7205v500 with a new chip ID, though both come out of XMedia:
+#   - gk7205v500's SDK (SPC020) ships module *objects* and builds sys_config,
+#     mipi_rx and the ISP kernel driver from source. This SDK ships only
+#     finished .ko files; base and sys are folded into xm_common, MIPI RX
+#     into xm_vi, pin muxing into the device tree, and the ISP kernel half
+#     is closed (xm_isp). Only the six modules below have source.
+#   - The .ko files are turned into relinkable objects by scripts/ko2obj.sh
+#     (strategy 2 in CLAUDE.md: init_module renamed, wrapper in init/).
+#   - The blobs import symbols only the SDK kernel exports, from its lotus/
+#     tree: lotus_get_cmd_line, lotus_rtc_aov_*, get_chip_temperature,
+#     get_cpu_freq, get_ddr_freq, get_ddr_type, get_mem_type,
+#     pm_ddr_param_get, pm_set_aux_src. So the kernel has to be that tree,
+#     built from xmorca_defconfig's options (SMP, PREEMPT, MODULE_UNLOAD,
+#     THUMB2_KERNEL): the objects call kernel APIs directly and were laid out
+#     for those structs. A mainline (_neo) build would need every one of
+#     those symbols reimplemented and is not attempted.
+#   - Only the 5.10 set is used. The SDK also ships a 4.9.y set; OpenIPC's
+#     4.9.37 is not the SDK's 4.9 and has no lotus/ tree either, so it buys
+#     nothing over 5.10.
+#   - Userspace is uClibc-ng (libc.so.0), hard-float (-mfloat-abi=hard), and
+#     speaks lower-case xmedia_*; the firmware gives this family a musleabihf
+#     toolchain and runs the vendor libraries through uclibc-compat. Nothing
+#     in the kernel depends on that.
+#
+# KO_LOG picks the verbose or the default nolog set, as for gk7205v200.
+
+KO_LOG ?= nolog
+ifeq ($(filter $(KO_LOG),log nolog),)
+    $(error KO_LOG must be 'log' or 'nolog', got '$(KO_LOG)')
+endif
+
+# The SDK builds with -D<chip> -D<arch>; only "xmorca" is ever tested, so the
+# chip define is left out rather than tied to one of the six dies.
+ccflags-y += -Dxmorca -D_USE_LLI_
+# build/version.mk: what /proc/umap/*'s version lines print.
+ccflags-y += -D'VERSION_MAJOR="SPC030"' -D'VERSION_MINOR=""' \
+	-DSDK_VERSION_RELEASE -DSDK_MAJOR_XM
+ccflags-y += -I$(src)/include/gk7206v100
+ccflags-y += -I$(src)/osal/gk7206v100/include
+ccflags-y += -I$(src)/osal/gk7206v100
+ccflags-y += -I$(src)/osal/gk7206v100/media
+ccflags-y += -I$(src)/osal/gk7206v100/mmz
+
+# --- OSAL (source) ---
+# Replaces xm_osal.ko: every blob depends on it, and it is the module that
+# takes mmz_allocator= and mmz= at insmod.
+$(PREFIX)osal-objs := $(addprefix osal/gk7206v100/, \
+	osal_fileops.o osal_vmalloc.o osal_addr.o osal_init.o osal_atomic.o \
+	osal_barrier.o osal_cache.o osal_debug.o osal_device.o osal_interrupt.o \
+	osal_math.o osal_mutex.o osal_proc.o osal_schedule.o osal_semaphore.o \
+	osal_spinlock.o osal_string.o osal_task.o osal_timer.o osal_wait.o \
+	osal_workqueue.o osal_notifier.o osal_platform.o \
+	media/base.o media/media.o mmz/media-mem.o mmz/mmz-userdev.o \
+	mmz/drv_mmz.o mmz/allocator.o)
+ifeq ($(CONFIG_CMA),y)
+$(PREFIX)osal-objs += osal/gk7206v100/mmz/cma_allocator.o
+endif
+obj-m += $(PREFIX)osal.o
+
+# --- LSADC, misc (source) ---
+$(PREFIX)adc-objs := adc/gk7206v100/adc.o adc/gk7206v100/adc_init.o
+CFLAGS_misc/gk7206v100/src/drv_misc.o := -I$(src)/misc/gk7206v100/include
+CFLAGS_misc/gk7206v100/src/drv_osd_draw_time.o := -I$(src)/misc/gk7206v100/include
+CFLAGS_misc/gk7206v100/src/drv_sensor.o := -I$(src)/misc/gk7206v100/include
+$(PREFIX)misc-objs := $(addprefix misc/gk7206v100/src/, \
+	drv_misc.o drv_osd_draw_time.o drv_sensor.o)
+obj-m += $(PREFIX)adc.o $(PREFIX)misc.o
+
+# --- motion sensor (source): ICM-42670 IMU over SPI, for EIS ---
+XM_MS := msensor/gk7206v100
+XM_MS_FLAGS := -I$(src)/$(XM_MS)/include -I$(src)/$(XM_MS)/ext_inc \
+	-I$(src)/$(XM_MS) -I$(src)/$(XM_MS)/msensor_spi \
+	-I$(src)/$(XM_MS)/msensor_mng/include -I$(src)/$(XM_MS)/msensor_chip/main \
+	-I$(src)/$(XM_MS)/msensor_chip/proc \
+	-I$(src)/$(XM_MS)/msensor_chip/sensor_dev/icm42670 \
+	-I$(src)/$(XM_MS)/msensor_chip/transfer_type/spi \
+	-DCONFIG_PROC_SHOW_SUPPORT
+$(PREFIX)msensor_spi-objs := $(XM_MS)/msensor_spi/msensor_spi.o
+$(PREFIX)msensor_mng-objs := $(addprefix $(XM_MS)/msensor_mng/src/, \
+	msensor_exe.o msensor_buf.o msensor_mng_proc.o)
+$(PREFIX)msensor_chip-objs := $(addprefix $(XM_MS)/msensor_chip/, \
+	main/msensor.o proc/msensor_chip_proc.o sensor_dev/icm42670/icm42670.o \
+	sensor_dev/icm42670/msensor_gpio.o transfer_type/spi/spi_dev.o)
+$(foreach o,$($(PREFIX)msensor_spi-objs) $($(PREFIX)msensor_mng-objs) \
+	$($(PREFIX)msensor_chip-objs),$(eval CFLAGS_$(o) := $(XM_MS_FLAGS)))
+$(foreach o,$($(PREFIX)msensor_chip-objs), \
+	$(eval CFLAGS_$(o) += -DTRANSFER_SPI -DICM42670_PARAM_PROC))
+obj-m += $(PREFIX)msensor_spi.o $(PREFIX)msensor_mng.o $(PREFIX)msensor_chip.o
+
+# --- closed modules (relinked) ---
+# Order and names follow the SDK's load script; insmod order is the
+# firmware's business, not Kbuild's.
+XM_BLOBS := common pm vgs tde region isp vpss npu vi chnl vedu rc jpege \
+	h265e h264e venc vo fb cipher_drv ive acomm aio ao ai aenc adec
+# region (OSD) imports from tde, and vo from region, so tde cannot go alone.
+ifdef DISABLE_TDE
+    XM_BLOBS := $(filter-out tde region vo fb,$(XM_BLOBS))
+endif
+ifdef DISABLE_ISP
+    XM_BLOBS := $(filter-out isp,$(XM_BLOBS))
+endif
+ifdef DISABLE_PM
+    XM_BLOBS := $(filter-out pm,$(XM_BLOBS))
+endif
+# fb (gfbg) needs fbdev (register_framebuffer), which OpenIPC kernels leave out.
+ifdef DISABLE_VO
+    XM_BLOBS := $(filter-out vo fb,$(XM_BLOBS))
+endif
+$(foreach b,$(XM_BLOBS),$(eval $(PREFIX)$(b)-objs := \
+	obj/gk7206v100/$(KO_LOG)/$(b).o init/gk7206v100/$(b)_init.o))
+obj-m += $(addprefix $(PREFIX),$(addsuffix .o,$(XM_BLOBS)))

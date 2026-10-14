@@ -1,0 +1,42 @@
+/*
+ * Copyright (c); XMEDIA. All rights reserved.
+ */
+
+#ifndef __MSENSOR_MNG_IOCTL_H__
+#define __MSENSOR_MNG_IOCTL_H__
+
+#include "xmedia_msensor.h"
+
+#ifdef __cplusplus
+#if __cplusplus
+extern "C" {
+#endif
+#endif /* end of #ifdef __cplusplus */
+
+#define MSENSOR_TYPE_MNG 10
+
+typedef enum {
+    IOC_NR_MSENSOR_MNG_FLAG2FD,
+    IOC_NR_MSENSOR_MNG_GET_DATA,
+    IOC_NR_MSENSOR_MNG_RELEASE_BUF,
+    IOC_NR_MSENSOR_MNG_ADD_USER,
+    IOC_NR_MSENSOR_MNG_DELETE_USER,
+    IOC_NR_MSENSOR_MNG_SEND_DATA,
+    IOC_NR_MSENSOR_MNG_BUTT
+} ioc_nr_msensor_mng;
+
+#define MSENSOR_CMD_MNG_BIND_FLAG2FD   _IOW(MSENSOR_TYPE_MNG, IOC_NR_MSENSOR_MNG_FLAG2FD, xmedia_u32)
+#define MSENSOR_CMD_GET_DATA    _IOWR(MSENSOR_TYPE_MNG, IOC_NR_MSENSOR_MNG_GET_DATA, xmedia_msensor_data_info)
+#define MSENSOR_CMD_RELEASE_BUF _IOWR(MSENSOR_TYPE_MNG, IOC_NR_MSENSOR_MNG_RELEASE_BUF, xmedia_msensor_data_info)
+#define MSENSOR_CMD_ADD_USER    _IOWR(MSENSOR_TYPE_MNG, IOC_NR_MSENSOR_MNG_ADD_USER, xmedia_s32)
+#define MSENSOR_CMD_DELETE_USER _IOWR(MSENSOR_TYPE_MNG, IOC_NR_MSENSOR_MNG_DELETE_USER, xmedia_s32)
+#define MSENSOR_CMD_SEND_DATA   _IOW(MSENSOR_TYPE_MNG, IOC_NR_MSENSOR_MNG_SEND_DATA, xmedia_msensor_data)
+
+#ifdef __cplusplus
+#if __cplusplus
+}
+#endif
+#endif /* end of #ifdef __cplusplus */
+
+#endif
+
