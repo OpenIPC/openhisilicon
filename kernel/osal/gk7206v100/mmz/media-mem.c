@@ -881,14 +881,18 @@ int __init media_mem_init(void)
                 mmz_para_len = boot_mmz_para_end - boot_mmz_para_start;
             }
 
-            mmz_para_len = ((mmz_para_len > MMZ_ALLOCATOR_NAME_LEN) ? MMZ_ALLOCATOR_NAME_LEN : mmz_para_len);
+            /* Terminated: the buffer still holds the "xmedia" default, so a
+             * bare memcpy of "cma" would leave "cmadia". */
+            mmz_para_len = ((mmz_para_len > MMZ_ALLOCATOR_NAME_LEN - 1) ? MMZ_ALLOCATOR_NAME_LEN - 1 : mmz_para_len);
             memcpy(setup_allocator, boot_mmz_para_start, mmz_para_len);
+            setup_allocator[mmz_para_len] = '\0';
 
-            boot_mmz_para_start = lotus_get_cmd_line();
-            /*no need judge here*/
-            boot_mmz_para_start = strstr(boot_mmz_para_start, "mmz=") + strlen("mmz=");
+            boot_mmz_para_start = strstr(lotus_get_cmd_line(), "mmz=");
+            if (boot_mmz_para_start != NULL) {
+                boot_mmz_para_start += strlen("mmz=");
+            }
 
-            printk("mmz zone setting from bootargs:%s\n", boot_mmz_para_start);
+            printk("mmz zone setting from bootargs:%s\n", boot_mmz_para_start == NULL ? "none" : boot_mmz_para_start);
             if (boot_mmz_para_start != NULL) {
 
                 /*find mmz parameter end*/
@@ -901,8 +905,9 @@ int __init media_mem_init(void)
                     mmz_para_len = boot_mmz_para_end - boot_mmz_para_start;
                 }
 
-                mmz_para_len = ((mmz_para_len > MMZ_SETUP_CMDLINE_LEN) ? MMZ_SETUP_CMDLINE_LEN : mmz_para_len);
+                mmz_para_len = ((mmz_para_len > MMZ_SETUP_CMDLINE_LEN - 1) ? MMZ_SETUP_CMDLINE_LEN - 1 : mmz_para_len);
                 memcpy(setup_zones, boot_mmz_para_start, mmz_para_len);
+                setup_zones[mmz_para_len] = '\0';
                 printk("mmz cfg from bootargs allocator:%s zones:%s\n", setup_allocator, setup_zones);
             }
         }

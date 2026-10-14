@@ -126,6 +126,41 @@ int osal_set_timer(osal_timer_t *timer, unsigned long interval)
 EXPORT_SYMBOL(osal_set_timer);
 #endif
 
+/*
+ * del_timer() returns as soon as the timer is off the list; it does not wait
+ * for a callback already running on the other CPU, so deleting and then
+ * freeing leaves that callback writing into freed memory, and a callback that
+ * re-arms itself schedules a freed timer. Same fix as the V4 OSAL
+ * (kernel/osal/linux/kernel/osal_timer.c, #211): wait with del_timer_sync(),
+ * repeated for callbacks that re-arm themselves, and never from interrupt
+ * context, where waiting for the handler can deadlock on this CPU.
+ */
+#define OSAL_TIMER_STOP_TRIES 5
+
+/* 0 when the timer is off the list with no callback running, -1 when that
+ * could not be established -- the caller must not free it in that case. */
+static int osal_timer_stop(struct timer_list *t)
+{
+    int i;
+
+    if (in_interrupt()) {
+        osal_printk("%s - called from interrupt, cannot wait for the timer callback\n",
+                    __FUNCTION__);
+        del_timer(t);
+        return -1;
+    }
+
+    for (i = 0; i < OSAL_TIMER_STOP_TRIES; i++) {
+        if (!del_timer_sync(t)) {
+            return 0;
+        }
+    }
+
+    osal_printk("%s - timer keeps re-arming itself, gave up after %d tries\n",
+                __FUNCTION__, OSAL_TIMER_STOP_TRIES);
+    return -1;
+}
+
 int osal_del_timer(osal_timer_t *timer)
 {
     struct timer_list *t = NULL;
@@ -147,7 +182,13 @@ int osal_timer_destory(osal_timer_t *timer)
     }
 
     t = timer->timer;
-    del_timer(t);
+    if (osal_timer_stop(t)) {
+        /* Leaking the timer is the lesser fault: freeing one that is still
+         * queued, or whose callback may still be running, is the
+         * use-after-free this exists to prevent. */
+        osal_printk("%s - timer still live, leaked rather than freed\n", __FUNCTION__);
+        return -1;
+    }
     kfree(t);
     timer->timer = NULL;
     return 0;
@@ -163,7 +204,13 @@ int osal_timer_destroy(osal_timer_t *timer)
     }
 
     t = timer->timer;
-    del_timer(t);
+    if (osal_timer_stop(t)) {
+        /* Leaking the timer is the lesser fault: freeing one that is still
+         * queued, or whose callback may still be running, is the
+         * use-after-free this exists to prevent. */
+        osal_printk("%s - timer still live, leaked rather than freed\n", __FUNCTION__);
+        return -1;
+    }
     kfree(t);
     timer->timer = NULL;
     return 0;

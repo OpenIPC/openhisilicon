@@ -384,6 +384,18 @@ static struct osal_fileops g_lsadc_fops =
 };
 
 static osal_dev_t* g_lsadc_dev;
+/* Set when lsadc_init() mapped the registers itself; a mapping that came from
+ * the probe is devm-managed and must not be unmapped here as well. */
+static xmedia_s32 g_lsadc_reg_owned;
+
+static xmedia_void lsadc_unmap(xmedia_void)
+{
+    if (g_lsadc_reg_owned) {
+        osal_iounmap((xmedia_void*)lsadc_reg);
+        g_lsadc_reg_owned = 0;
+    }
+    lsadc_reg = XMEDIA_NULL;
+}
 
 xmedia_s32 lsadc_init(xmedia_void)
 {
@@ -396,6 +408,7 @@ xmedia_s32 lsadc_init(xmedia_void)
             lsadc_print("lsadc ioremap error.\n");
             return -1;
         }
+        g_lsadc_reg_owned = 1;
     }
 
 #ifdef ENABLE_ADC_IRQ
@@ -411,12 +424,20 @@ xmedia_s32 lsadc_init(xmedia_void)
 
     if (ret != 0) {
         lsadc_print("lsadc request irq error.\n");
-        osal_iounmap((xmedia_void*)lsadc_reg);
+        lsadc_unmap();
         return -1;
     }
 #endif
 
     g_lsadc_dev = osal_createdev("lsadc");
+    if (g_lsadc_dev == XMEDIA_NULL) {
+        lsadc_print("lsadc create device error.\n");
+#ifdef ENABLE_ADC_IRQ
+        osal_free_irq(lsadc_irq, &g_lsadc_fops);
+#endif
+        lsadc_unmap();
+        return -ENOMEM;
+    }
     g_lsadc_dev->minor = 255;
     g_lsadc_dev->fops = &g_lsadc_fops;
     ret = osal_registerdevice(g_lsadc_dev);
@@ -424,8 +445,11 @@ xmedia_s32 lsadc_init(xmedia_void)
     if (ret != 0) {
         osal_destroydev(g_lsadc_dev);
         lsadc_print("lsadc register device error.\n");
+#ifdef ENABLE_ADC_IRQ
         osal_free_irq(lsadc_irq, &g_lsadc_fops);
-        osal_iounmap((xmedia_void*)lsadc_reg);
+#endif
+        lsadc_unmap();
+        return ret;
     }
 
     osal_printk("load xm_adc.ko OK!\n");

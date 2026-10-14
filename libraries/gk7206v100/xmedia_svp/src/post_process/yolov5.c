@@ -43,6 +43,12 @@ static inline xmedia_float sigmoid_table(xmedia_float* table, xmedia_float x)
     if ((x >= TABLE_MIN) && (x <= TABLE_MAX)) {
         index = (x + TABLE_MAX) * TABLE_500; // (x + TABLE_MAX) * TABLE_SIZE / TABLE_200
         lower_index = (xmedia_u32)index;
+        /* x == TABLE_MAX lands on index TABLE_SIZE, one past the table, and
+         * the interpolation reads the entry after that; compute those
+         * directly instead. */
+        if (lower_index + 1 >= TABLE_SIZE) {
+            return (1.f / (1.f + exp(-x)));
+        }
         fraction = index - lower_index;
         lower_result = *(table + lower_index);
         result = *(table + lower_index + 1);

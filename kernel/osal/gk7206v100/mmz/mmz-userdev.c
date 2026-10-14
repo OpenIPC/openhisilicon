@@ -717,7 +717,10 @@ static long mmz_userdev_ioctl(struct file *file, unsigned int cmd, unsigned long
             ret = -EFAULT;
             goto __error_exit;
         }
-        if (area.dirty_phys_start + area.dirty_size > mmb->phys_addr + mmb->length) {
+        /* offset = dirty_phys_start - mmb->phys_addr < mmb->length, from the
+         * lookup above. Compare against what is left of the block instead of
+         * adding, which a large dirty_size could wrap past the bound. */
+        if (area.dirty_size > mmb->length - offset) {
             printk(KERN_WARNING "\ndirty area overflow!\n");
             ret = -EFAULT;
             goto __error_exit;
@@ -805,6 +808,7 @@ int mmz_userdev_mmap(struct file *file, struct vm_area_struct *vma)
     unsigned long offset = vma->vm_pgoff << PAGE_SHIFT;
     mmz_mmb_t *mmb = NULL;
     int mmb_cached = 0;
+    unsigned long remain;
 
     p = get_mmbinfo(offset, pmu);
 
@@ -816,12 +820,22 @@ int mmz_userdev_mmap(struct file *file, struct vm_area_struct *vma)
         } else {
             mmb_cached = mmb->flags & MMZ_MMB_MAP2KERN_CACHED;
         }
+        remain = mmb->length - mmb_offset;
     } else {
         if (p->mapped != NULL) {
             error_mmz("mmb(0x%08lX) have been mapped already?!\n", offset);
             return -EIO;
         }
         mmb_cached = p->map_cached;
+        remain = p->phys_addr + p->size - offset;
+    }
+
+    /* The lookups above only place the start inside a block; without this the
+     * mapping could run on into whatever physical memory follows it. */
+    if (vma->vm_end - vma->vm_start > PAGE_ALIGN(remain)) {
+        error_mmz("mmap of 0x%lx bytes at 0x%08lX runs past its block (0x%lx left)\n",
+                  vma->vm_end - vma->vm_start, offset, remain);
+        return -EINVAL;
     }
 
     if (file->f_flags & O_SYNC) {
@@ -891,7 +905,8 @@ int mmz_userdev_mmap(struct file *file, struct vm_area_struct *vma)
 #if LINUX_VERSION_CODE < KERNEL_VERSION(5, 10, 0)
             if (pfn_valid(pfn)) {
 #else
-            if (memblock_is_map_memory(__pfn_to_phys(vma->vm_pgoff))) {
+            /* Each page, not the first one over and over. */
+            if (memblock_is_map_memory(__pfn_to_phys(pfn))) {
 #endif
                 if (vm_insert_page(vma, start, pfn_to_page(pfn))) {
                     error_mmz("insert page failed.\n");

@@ -201,6 +201,12 @@ static inline xmedia_float sigmoid_table(xmedia_float* table, xmedia_float x)
     if ((x >= TABLE_MIN) && (x <= TABLE_MAX)) {
         index = (x + TABLE_MAX) * TABLE_SIZE / TABLE_200;
         lower_index = (xmedia_u32)index;
+        /* x == TABLE_MAX lands on index TABLE_SIZE, one past the table, and
+         * the interpolation reads the entry after that; compute those
+         * directly instead. */
+        if (lower_index + 1 >= TABLE_SIZE) {
+            return (1.f / (1.f + exp(-x)));
+        }
         fraction = index - lower_index;
         lower_result = *(table + lower_index);
         result = *(table + lower_index + 1);
@@ -277,7 +283,7 @@ xmedia_s32 svp_get_detect_result_bz(yolov5_detect_param *param, xmedia_svp_yolov
                             bbox[idx].kpt[kp_idx].x = STD_MAX(0.0f,
                                 STD_MIN((xmedia_float)param->w, bbox[idx].kpt[kp_idx].x));
                             bbox[idx].kpt[kp_idx].y = STD_MAX(0.0f,
-                                STD_MIN((xmedia_float)param->w, bbox[idx].kpt[kp_idx].y));
+                                STD_MIN((xmedia_float)param->h, bbox[idx].kpt[kp_idx].y));
                         }
                         idx++;
                     }
@@ -460,7 +466,14 @@ static xmedia_s32 svp_yolov8_get_detect_result(yolov8_detect_param *param, xmedi
     }
 
     yolov8_det_nms(param->bbox, idx, param->iou_threshold,&out_box_len);
+    /* Start from an empty result, as the 0- and 1-box paths above do, and stop
+     * at the targets[] array as well as at the caller's max_target_num. */
+    output->target_num = 0;
     for (i = 0; i < out_box_len; i++) {
+        if ((output->target_num >= param->max_target_num) ||
+            (output->target_num >= XMEDIA_SVP_MAX_TARGET_NUM)) {
+            break;
+        }
         output->targets[output->target_num].detect_score = param->bbox[i].detect_score;
         output->targets[output->target_num].rect         = param->bbox[i].rect;
         output->targets[output->target_num].class_type   = param->bbox[i].class_type;

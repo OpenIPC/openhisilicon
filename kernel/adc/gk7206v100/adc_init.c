@@ -18,19 +18,27 @@ extern void  lsadc_exit(void);
 static int adc_probe(struct platform_device *pdev)
 {
     struct resource *mem;
+    void __iomem *reg;
+    int irq;
 
-    lsadc_irq = platform_get_irq(pdev, 0);
-    if (lsadc_irq <= 0)
-    {
-        dev_err(&pdev->dev, "cannot find lsadc IRQ%d. \n", lsadc_irq);
+    /* lsadc_init() falls back to the fixed LSADC IRQ and register base when
+     * these are 0/NULL, so a missing resource is reported and handed over as
+     * that -- not as a negative IRQ in an unsigned, or an ERR_PTR it would
+     * then use as the register base. */
+    irq = platform_get_irq(pdev, 0);
+    if (irq <= 0) {
+        dev_err(&pdev->dev, "cannot find lsadc IRQ (%d), using the default\n", irq);
+        irq = 0;
     }
+    lsadc_irq = irq;
 
     mem = platform_get_resource(pdev, IORESOURCE_MEM, 0);
-    lsadc_reg = (volatile void *)devm_ioremap_resource(&pdev->dev, mem);
-    if (IS_ERR((void* )lsadc_reg))
-    {
-        dev_err(&pdev->dev, "lsadc reg map failed. \n");
+    reg = devm_ioremap_resource(&pdev->dev, mem);
+    if (IS_ERR(reg)) {
+        dev_err(&pdev->dev, "lsadc reg map failed (%ld), using the default\n", PTR_ERR(reg));
+        reg = NULL;
     }
+    lsadc_reg = (volatile void *)reg;
 
     return lsadc_init();
 }

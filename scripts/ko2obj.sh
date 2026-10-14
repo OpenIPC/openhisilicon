@@ -8,10 +8,22 @@
 # modules only as finished .ko files. Kbuild cannot relink one of those as-is:
 # it already carries a struct module (.gnu.linkonce.this_module) and a
 # .modinfo with the SDK kernel's vermagic, so the module modpost builds around
-# it would have two of each. This strips both and renames the blob's
-# init_module/cleanup_module to _<prefix>_<mod>_init/_exit, which the wrapper
-# in kernel/init/<chiparch>/ calls from its own module_init/module_exit. The
-# module name <mod> is the .ko basename without its xm_/hi_/gk_ prefix.
+# it would have two of each.
+#
+# .modinfo is dropped. The struct module cannot simply be dropped too: a blob
+# that uses THIS_MODULE (fops .owner, platform_driver .owner, ...) relocates
+# against __this_module, and objcopy refuses to leave that symbol behind
+# without its section. Keeping it as a linkonce section, as the hi3516cv200
+# objects do, makes ld keep whichever copy it sees first -- the blob's, laid
+# out for the SDK kernel's struct module, so the module only loads while this
+# kernel's config matches the SDK's field for field. Instead the section
+# becomes ordinary data and __this_module turns weak: the strong definition in
+# modpost's <mod>.mod.o wins, every THIS_MODULE in the blob points at the real
+# struct module, and the blob's copy is a few hundred dead bytes.
+#
+# init_module/cleanup_module become _<prefix>_<mod>_init/_exit, which the
+# wrapper in kernel/init/<chiparch>/ calls from its own module_init/
+# module_exit. <mod> is the .ko basename without its xm_/hi_/gk_ prefix.
 #
 # Left intact on purpose:
 #   __ksymtab*  the blob's EXPORT_SYMBOLs survive, so the wrapper must not
@@ -21,10 +33,11 @@
 #               looks at to learn what a module exports: without them every
 #               module importing from this one fails "undefined!". They are
 #               put back, one per 12-byte struct kernel_symbol (32-bit, no
-#               PREL32) in the merged __ksymtab, named after the symbol its
-#               value relocates against. modpost files them as "(unknown)"
-#               rather than EXPORT_SYMBOL/_GPL, since the section is no
-#               longer ___ksymtab+<sym>; that only feeds its GPL check.
+#               PREL32) in the merged __ksymtab and __ksymtab_gpl, named
+#               after the symbol its value relocates against. modpost files
+#               them as "(unknown)" rather than EXPORT_SYMBOL/_GPL, since the
+#               section is no longer ___ksymtab+<sym>; that only feeds its
+#               GPL check.
 #   __param     module_param()s keep working under the new module name; a
 #               wrapper that re-declares one gets a duplicate parameter.
 #
@@ -39,16 +52,24 @@ mod=$(basename "$IN" .ko)
 mod=${mod#xm_}; mod=${mod#hi_}; mod=${mod#gk_}
 
 READELF=${OBJCOPY%objcopy}readelf
-syms=$("$READELF" -rW "$IN" | awk -v want="'.rel__ksymtab'" '
+# Relocation sections print as 'Relocation section '.rel__ksymtab' at ...';
+# the section a symbol goes back into is the name without the quotes and .rel.
+syms=$("$READELF" -rW "$IN" | awk '
 	function hex(s,    i, n) {
 		n = 0
 		for (i = 1; i <= length(s); i++)
 			n = n * 16 + index("0123456789abcdef", substr(s, i, 1)) - 1
 		return n
 	}
-	/^Relocation section/ { f = ($3 == want); next }
+	/^Relocation section/ {
+		sec = $3
+		gsub(/\047/, "", sec)
+		sub(/^\.rel/, "", sec)
+		f = (sec == "__ksymtab" || sec == "__ksymtab_gpl")
+		next
+	}
 	f && $1 ~ /^[0-9a-f]+$/ && hex($1) % 12 == 0 {
-		printf " --add-symbol __ksymtab_%s=__ksymtab:%d,object,local", $5, hex($1)
+		printf " --add-symbol __ksymtab_%s=%s:%d,object,local", $5, sec, hex($1)
 	}')
 
 # shellcheck disable=SC2086 # $syms is a list of options

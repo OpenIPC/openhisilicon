@@ -265,12 +265,21 @@ xmedia_slong msensor_mng_ioctl(xmedia_u32 cmd, xmedia_ulong arg, xmedia_void *pr
     xmedia_s32 ret;
     xmedia_s32 dev;
 
+    /* The bound ID indexes g_msensor_mng_user_ref[] and the per-device state, and
+     * the ioctl is reachable directly, not only through libxmedia_msensor's
+     * own range check. */
     if (cmd == MSENSOR_CMD_MNG_BIND_FLAG2FD) {
+        if (*(xmedia_u32 *)arg >= XMEDIA_MSENSOR_MAX_DEV_NUM) {
+            return XMEDIA_ERRCODE_INVALID_PARAM;
+        }
         *(xmedia_u32 *)private_data = *(xmedia_u32 *)arg;
         return XMEDIA_SUCCESS;
     }
 
     dev = *(xmedia_u32 *)private_data;
+    if ((xmedia_u32)dev >= XMEDIA_MSENSOR_MAX_DEV_NUM) {
+        return XMEDIA_ERRCODE_INVALID_PARAM;
+    }
 
     osal_atomic_inc_return(&g_msensor_mng_user_ref[dev]);
 

@@ -293,6 +293,11 @@ xmedia_s32 xmedia_msensor_send_data(xmedia_s32 dev, const xmedia_msensor_data_in
     MSENSOR_CHECK_CHIP_OPEN_RETURN(dev);
     MSENSOR_CHECK_MNG_OPEN_RETURN(dev);
 
-    return ioctl(g_msensor_mng_fd[dev], MSENSOR_CMD_SEND_DATA, data);
+    /* MSENSOR_CMD_SEND_DATA is encoded for an xmedia_msensor_data, not the
+     * smaller xmedia_msensor_data_info this takes, so issuing it would have
+     * the ioctl layer copy past the caller's object. The kernel handler is
+     * compiled out anyway (USER_SEND_DATA), so answer as it would. The
+     * prototype stays for the SDK's ABI. */
+    return XMEDIA_ERRCODE_NOT_SUPPORT;
 }
 

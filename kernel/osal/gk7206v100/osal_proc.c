@@ -163,14 +163,14 @@ void osal_remove_proc(const char *name, osal_proc_entry_t *parent)
     } else {
         remove_proc_entry(name, NULL);
     }
+    /* The cursor ends on the list head itself when nothing matches, so free
+     * only an entry that did. */
     osal_list_for_each_entry(sproc, &list, node) {
         if (osal_strncmp(sproc->name, name, sizeof(sproc->name)) == 0) {
             osal_list_del(&(sproc->node));
+            kfree(sproc);
             break;
         }
-    }
-    if (sproc != NULL) {
-        kfree(sproc);
     }
 }
 
@@ -270,14 +270,14 @@ void osal_remove_proc_root(const char *name, osal_proc_entry_t *parent)
     } else {
         remove_proc_entry(name, NULL);
     }
+    /* The cursor ends on the list head itself when nothing matches, so free
+     * only an entry that did. */
     osal_list_for_each_entry(sproc, &list, node) {
         if (osal_strncmp(sproc->name, name, sizeof(sproc->name)) == 0) {
             osal_list_del(&(sproc->node));
+            kfree(sproc);
             break;
         }
-    }
-    if (sproc != NULL) {
-        kfree(sproc);
     }
 }
 

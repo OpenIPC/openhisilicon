@@ -335,6 +335,47 @@ static xmedia_void spi_disable(xmedia_u32 ssp_no)
     return;
 }
 
+/*
+ * Wait for a frame to go out and its reply to come back, then drain the RX
+ * FIFO into *last. The SDK spun on each FIFO state with no bound, under the
+ * SSP spinlock with interrupts off, so a controller or sensor that stopped
+ * responding hung the CPU. Each wait is now bounded; a frame at the IMU's
+ * SPI rates takes microseconds, so 10 ms is far past any real transfer.
+ */
+#define SSP_XFER_TIMEOUT_US 10000
+
+static xmedia_s32 xmedia_ssp_wait_xfer(xmedia_u32 ssp_no, xmedia_u32 *last)
+{
+    xmedia_u32 us;
+
+    for (us = 0; xmedia_ssp_is_fifo_busy(ssp_no) != 0; us++) {
+        if (us >= SSP_XFER_TIMEOUT_US) {
+            goto timeout;
+        }
+        udelay(1);
+    }
+    for (us = 0; xmedia_ssp_is_fifo_empty(ssp_no, 1) != 0; us++) {
+        if (us >= SSP_XFER_TIMEOUT_US) {
+            goto timeout;
+        }
+        udelay(1);
+    }
+    for (us = 0; xmedia_ssp_is_fifo_empty(ssp_no, 0) != 0; us++) {
+        if (us >= SSP_XFER_TIMEOUT_US) {
+            goto timeout;
+        }
+        udelay(1);
+    }
+    while (xmedia_ssp_is_fifo_empty(ssp_no, 0) == 0) {
+        ssp_readw(ssp_dr(ssp_no), *last);
+    }
+    return 0;
+
+timeout:
+    printk(KERN_ERR "msensor: ssp%u transfer timed out\n", ssp_no);
+    return XMEDIA_FAILURE;
+}
+
 xmedia_u16 xmedia_msensor_ssp_read_alt(xmedia_s32 dev, xmedia_u8 reg_addr,
     xmedia_u8 *reg_data, xmedia_u32 cnt, xmedia_bool fifo_mode)
 {
@@ -378,14 +419,10 @@ xmedia_u16 xmedia_msensor_ssp_read_alt(xmedia_s32 dev, xmedia_u8 reg_addr,
         ssp_writew(ssp_dr(ssp_no), buf_16);
 #endif
 
-        while (xmedia_ssp_is_fifo_busy(ssp_no) != 0) {
-        }
-        while (xmedia_ssp_is_fifo_empty(ssp_no, 1) != 0) {
-        }
-        while (xmedia_ssp_is_fifo_empty(ssp_no, 0) != 0) {
-        }
-        while (xmedia_ssp_is_fifo_empty(ssp_no, 0) == 0) {
-            ssp_readw(ssp_dr(ssp_no), ret);
+        if (xmedia_ssp_wait_xfer(ssp_no, &ret) != 0) {
+            spi_disable(ssp_no);
+            ssp_spin_unlock(ssp_no, flags);
+            return (xmedia_u16)XMEDIA_FAILURE;
         }
         reg_data[i] = ret & 0xff;
     }
@@ -425,14 +462,10 @@ xmedia_s32 xmedia_msensor_ssp_write_alt(xmedia_s32 dev, xmedia_u8 reg_addr, cons
     ssp_writew(ssp_dr(ssp_no), buf_16);
 #endif
 
-    while (xmedia_ssp_is_fifo_busy(ssp_no) != 0) {
-    }
-    while (xmedia_ssp_is_fifo_empty(ssp_no, 1) != 0) {
-    }
-    while (xmedia_ssp_is_fifo_empty(ssp_no, 0) != 0) {
-    }
-    while (xmedia_ssp_is_fifo_empty(ssp_no, 0) == 0) {
-        ssp_readw(ssp_dr(ssp_no), ret);
+    if (xmedia_ssp_wait_xfer(ssp_no, &ret) != 0) {
+        spi_disable(ssp_no);
+        ssp_spin_unlock(ssp_no, flags);
+        return XMEDIA_FAILURE;
     }
     xmedia_unused(ret);
 

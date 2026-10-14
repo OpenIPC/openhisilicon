@@ -319,6 +319,16 @@ xmedia_s32 misc_ctl_osd_time_create(xmedia_ulong arg)
     memset(osd_time_ext_hdl, 0, sizeof(osd_time_ext_t));
     memcpy(&osd_time_ext_hdl->osd_time_attr, (xmedia_void *)arg, sizeof(misc_osd_time_attr_t));
 
+    /* rgn_attach_num comes from the ioctl; attach_obj[] has four slots. */
+    if (osd_time_ext_hdl->osd_time_attr.rgn_attach_num >
+        ARRAY_SIZE(osd_time_ext_hdl->osd_time_attr.attach_obj)) {
+        MISC_TRACE(MODULE_DBG_ERR, "rgn_attach_num %u exceeds %zu\n",
+                   osd_time_ext_hdl->osd_time_attr.rgn_attach_num,
+                   ARRAY_SIZE(osd_time_ext_hdl->osd_time_attr.attach_obj));
+        osal_vfree(osd_time_ext_hdl);
+        return XMEDIA_ERRCODE_INVALID_PARAM;
+    }
+
     if(g_osd_time_ext_hdl == XMEDIA_NULL) {
         s32Ret = export_rgn_init();
         if (s32Ret != XMEDIA_SUCCESS) {
@@ -455,8 +465,10 @@ xmedia_s32 misc_ctl_osd_time_destroy(xmedia_ulong arg)
     }
 
 
-    for(i = 0; i < osd_time_attr->rgn_attach_num; i++) {
-        s32Ret = export_rgn_detach_from_chn(osd_time_attr->rgn_hdl, &osd_time_attr->attach_obj[i].mpp_chn);
+    /* Detach what was attached, as recorded (and bounds-checked) at create --
+     * not whatever list and count this ioctl's caller passes. */
+    for(i = 0; i < p->osd_time_attr.rgn_attach_num; i++) {
+        s32Ret = export_rgn_detach_from_chn(p->osd_time_attr.rgn_hdl, &p->osd_time_attr.attach_obj[i].mpp_chn);
         if(s32Ret !=XMEDIA_SUCCESS) {
             MISC_TRACE(MODULE_DBG_ERR, "export_rgn_detach_from_chn failed!\n");
         }

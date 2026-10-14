@@ -230,6 +230,23 @@ xmedia_s32 misc_ctl_aov_init(xmedia_ulong arg)
         return XMEDIA_FAILURE;
     }
 
+    /* Both come from the ioctl: the count bounds every walk of isp_pipe[],
+     * and each entry then indexes per-pipe arrays of VI_MAX_DEV_NUM. Check
+     * them before they are stored for standby/resume. */
+    {
+        xmedia_s32 n;
+
+        /* isp_pipe_num is signed; 0 was refused above. */
+        if (isp_info->isp_pipe_num < 0 || isp_info->isp_pipe_num > VI_MAX_DEV_NUM) {
+            return XMEDIA_FAILURE;
+        }
+        for (n = 0; n < isp_info->isp_pipe_num; n++) {
+            if (isp_info->isp_pipe[n] >= VI_MAX_DEV_NUM) {
+                return XMEDIA_FAILURE;
+            }
+        }
+    }
+
     memcpy(&g_isp_info, isp_info, sizeof(misc_aov_isp_info));
 
     export_vi_register_misc_aov_callback(misc_sensor_standby);
