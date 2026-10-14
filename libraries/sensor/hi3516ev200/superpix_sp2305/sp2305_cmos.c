@@ -75,22 +75,24 @@ static GK_U16 g_au16SampleBgain[ISP_MAX_PIPE_NUM] = {0};
 #define EXP_ADDR_HIGH_INDEX     1
 #define EXP_ADDR_LOW_INDEX      2
 #define GAIN_ADDR_INDEX         3
+#define GAIN_H_ADDR_INDEX       4
 
-#define VTS_ENABLE_INDEX        4
-#define VTS_ADDR_HIGH_INDEX     5
-#define VTS_ADDR_LOW_INDEX      6
-#define MIRROR_FLIP_INDEX       7
-#define TRIGGER_INDEX           8
-#define PAGE_ADDR_2_INDEX       9
-#define BR_FIRST_INDEX          10
-#define PAGE_ADDR_1_BACK_INDEX  11
-#define SP2305_SYNC_REG_NUM     12
+#define VTS_ENABLE_INDEX        5
+#define VTS_ADDR_HIGH_INDEX     6
+#define VTS_ADDR_LOW_INDEX      7
+#define MIRROR_FLIP_INDEX       8
+#define TRIGGER_INDEX           9
+#define PAGE_ADDR_2_INDEX       10
+#define BR_FIRST_INDEX          11
+#define PAGE_ADDR_1_BACK_INDEX  12
+#define SP2305_SYNC_REG_NUM     13
 
 /* Register define */
 #define PAGE_SELECT_ADDR        0xfd
 #define EXP_ADDR_H              0x03
 #define EXP_ADDR_L              0x04
 #define AGAIN_ADDR              0x24
+#define AGAIN_H_ADDR            0x38 /* page 1, bit 0: bit 8 of the analog gain code */
 #define VTS_ENABLE_ADDR         0x0d
 #define VTS_ADDR_H              0x0e
 #define VTS_ADDR_L              0x0f
@@ -145,7 +147,7 @@ static GK_VOID cmos_get_ae_comm_default(VI_PIPE ViPipe, AE_SENSOR_DEFAULT_S *pst
     pstAeSnsDft->stAgainAccu.f32Accuracy = 6; /* accuracy: 6 */
     pstAeSnsDft->stDgainAccu.enAccuType = AE_ACCURACY_LINEAR;
     pstAeSnsDft->stDgainAccu.f32Accuracy = 0.00390625; /* accuracy: 0.00390625 */
-    pstAeSnsDft->u32MaxAgain = 15872; /* max again 15872 */
+    pstAeSnsDft->u32MaxAgain = 32704; /* 511 / 16 = 31.94x, the 9-bit code's top */
     pstAeSnsDft->u32MinAgain = 1024;  /* min again 1024 */
     pstAeSnsDft->u32MaxAgainTarget = pstAeSnsDft->u32MaxAgain;
     pstAeSnsDft->u32MinAgainTarget = pstAeSnsDft->u32MinAgain;
@@ -278,12 +280,23 @@ static GK_VOID cmos_slow_framerate_set(VI_PIPE ViPipe, GK_U32 u32FullLines, AE_S
     return;
 }
 
-#define AGAIN_NODE_NUM 64
+/*
+ * The analog gain is a 9-bit code in sixteenths, 0x10 = 1x: the low byte in
+ * P1:0x24 and bit 8 in bit 0 of P1:0x38, so the sensor goes to 511/16 = 31.94x,
+ * not the 15.5x that 0x24 alone reaches.  Measured on an hi3516ev300 module in
+ * RAW at a fixed exposure: 0x24 0x10 -> 0x20 -> 0x40 -> 0x80 doubled the signal
+ * each time (2.05, 2.00, 1.95), and setting 0x38 bit 0 under 0x24 = 0x10 gave
+ * 17.1x (code 0x110), with the black pedestal where it was.  Above 16x the
+ * steps are a whole 1x, finer than the 0.5x steps below it in proportion.
+ */
+#define AGAIN_NODE_NUM 81
 static GK_U32 g_au32Again_table[AGAIN_NODE_NUM] = {
     1024, 1088, 1152, 1216, 1280, 1344, 1408, 1472, 1536, 1600, 1664, 1728, 1792, 1856, 1920, 1984,
     2048, 2176, 2304, 2432, 2560, 2688, 2816, 2944, 3072, 3200, 3328, 3456, 3584, 3712, 3840, 3968,
     4096, 4352, 4608, 4864, 5120, 5376, 5632, 5888, 6144, 6400, 6656, 6912, 7168, 7424, 7680, 7936,
-    8192, 8704, 9216, 9728, 10240, 10752, 11264, 11776, 12288, 12800, 13312, 13824, 14336, 14848, 15360, 15872
+    8192, 8704, 9216, 9728, 10240, 10752, 11264, 11776, 12288, 12800, 13312, 13824, 14336, 14848, 15360, 15872,
+    16384, 17408, 18432, 19456, 20480, 21504, 22528, 23552, 24576, 25600, 26624, 27648, 28672, 29696, 30720, 31744,
+    32704
 };
 
 /* while isp notify ae to update sensor regs, ae call these funcs. */
@@ -332,11 +345,15 @@ static GK_VOID cmos_gains_update(VI_PIPE ViPipe, GK_U32 u32Again, GK_U32 u32Dgai
     ISP_SNS_STATE_S *pstSnsState = GK_NULL;
     SP2305_SENSOR_GET_CTX(ViPipe, pstSnsState);
     CMOS_CHECK_POINTER_VOID(pstSnsState);
-    GK_U32 temp_gain;
+    GK_U32 u32Code;
 
-    temp_gain = (GK_U32)(g_au32Again_table[u32Again] / 1024.0 * 16.0); /* 1024.0, 16.0 */
+    if (u32Again >= AGAIN_NODE_NUM) {
+        u32Again = AGAIN_NODE_NUM - 1;
+    }
+    u32Code = g_au32Again_table[u32Again] >> 6; /* 1024 = 1x to sixteenths: 16..511 */
 
-    pstSnsState->astRegsInfo[0].astI2cData[GAIN_ADDR_INDEX].u32Data = temp_gain;
+    pstSnsState->astRegsInfo[0].astI2cData[GAIN_ADDR_INDEX].u32Data = LOW_8BITS(u32Code);
+    pstSnsState->astRegsInfo[0].astI2cData[GAIN_H_ADDR_INDEX].u32Data = (u32Code >> 8) & 0x01;
 
     return;
 }
@@ -382,28 +399,29 @@ static GK_S32 cmos_get_awb_default(VI_PIPE ViPipe, AWB_SENSOR_DEFAULT_S *pstAwbS
     (gk_void)memset_s(pstAwbSnsDft, sizeof(AWB_SENSOR_DEFAULT_S), 0, sizeof(AWB_SENSOR_DEFAULT_S));
 
     /*
-     * White-balance calibration measured on an hi3516ev300 + SP2305 module
-     * against a 24-patch chart in RAW, lit by two tunable LED bulbs at 3000-6000 K
-     * (ambient subtracted), and fitted through lib_hiawb's own curve
-     * (HI_MPI_ISP_CalGainByTemp): every point within 2%.  The vendor curve has
-     * nearly the same locus but its colour-temperature scale runs 5-9% off along
-     * it, so AWB reported 2695/3676/5263 K under 3000/4000/6000 K light (now
-     * 2976/4032/5988 K), and that estimate picks the colour matrix.
+     * The module maker's own white-balance calibration for this sensor, as its
+     * library for the same hi3516ev300 + SP2305 board carries it.  It replaces a
+     * curve fitted here against a 24-patch chart (#248).  On one camera, with
+     * one IQ profile, the maker's camera beside it as the control, the chart's
+     * greys came out about twice as close to neutral under a 3000 K lamp
+     * (0.16 -> 0.08 max-min/mean) and under a 3000 K + 6000 K mix (0.56 ->
+     * 0.32), and the same under 6000 K (0.41 -> 0.45).  The IQ profile's colour
+     * matrices are placed on this curve's colour-temperature scale.
      * as32WbPara[4] has to stay 128.
      */
-    pstAwbSnsDft->u16WbRefTemp = 5000; /* Color Temp 5000 */
+    pstAwbSnsDft->u16WbRefTemp = 5120; /* Color Temp 5120 */
 
-    pstAwbSnsDft->au16GainOffset[0] = 379;
+    pstAwbSnsDft->au16GainOffset[0] = 603;
     pstAwbSnsDft->au16GainOffset[1] = 0x100;
     pstAwbSnsDft->au16GainOffset[2] = 0x100; /* 2 */
-    pstAwbSnsDft->au16GainOffset[3] = 434; /* 3 */
+    pstAwbSnsDft->au16GainOffset[3] = 410; /* 3 */
 
-    pstAwbSnsDft->as32WbPara[0] = -22;
-    pstAwbSnsDft->as32WbPara[1] = 310;
-    pstAwbSnsDft->as32WbPara[2] = 56;      /* 2 */
-    pstAwbSnsDft->as32WbPara[3] = 204915;  /* 3 */
+    pstAwbSnsDft->as32WbPara[0] = -28;
+    pstAwbSnsDft->as32WbPara[1] = 284;
+    pstAwbSnsDft->as32WbPara[2] = 0;       /* 2 */
+    pstAwbSnsDft->as32WbPara[3] = 163812;  /* 3 */
     pstAwbSnsDft->as32WbPara[4] = 128;     /* 4 */
-    pstAwbSnsDft->as32WbPara[5] = -149266; /* 5 */
+    pstAwbSnsDft->as32WbPara[5] = -113080; /* 5 */
 
     pstAwbSnsDft->u16GoldenRgain = GOLDEN_RGAIN;
     pstAwbSnsDft->u16GoldenBgain = GOLDEN_BGAIN;
@@ -627,6 +645,8 @@ static GK_VOID cmos_comm_sns_reg_info_init(VI_PIPE ViPipe, ISP_SNS_STATE_S *pstS
     pstSnsState->astRegsInfo[0].astI2cData[EXP_ADDR_LOW_INDEX].u32RegAddr       = 0x04;
     pstSnsState->astRegsInfo[0].astI2cData[GAIN_ADDR_INDEX].u8DelayFrmNum       = 0;          /* analog gain */
     pstSnsState->astRegsInfo[0].astI2cData[GAIN_ADDR_INDEX].u32RegAddr          = 0x24;
+    pstSnsState->astRegsInfo[0].astI2cData[GAIN_H_ADDR_INDEX].u8DelayFrmNum     = 0;          /* analog gain bit 8 */
+    pstSnsState->astRegsInfo[0].astI2cData[GAIN_H_ADDR_INDEX].u32RegAddr        = AGAIN_H_ADDR;
 
     pstSnsState->astRegsInfo[0].astI2cData[VTS_ENABLE_INDEX].u8DelayFrmNum      = 0;          /* Digital gain */
     pstSnsState->astRegsInfo[0].astI2cData[VTS_ENABLE_INDEX].u32RegAddr         = 0x0D;
