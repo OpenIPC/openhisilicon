@@ -13,6 +13,7 @@
 #   rtc/hi3516cv100/     - real-time clock
 #   pwm/hi3516cv100/     - PWM controller
 #   sensor_i2c/hi3516cv100/ - I2C sensor bus
+#   adc/hi3516cv100/     - SAR ADC (/dev/ADC_CH0, /dev/ADC_CH1)
 #   cipher/hi3516cv100/  - cipher (not wired, needs porting)
 #
 # Blob modules (pre-built .o from vendor .ko + init wrappers):
@@ -126,6 +127,10 @@ obj-m += $(PREFIX)hidmac.o
 obj-m += $(PREFIX)rtc.o
 obj-m += $(PREFIX)pwm.o
 obj-m += $(PREFIX)sensor_i2c.o
+
+# --- SAR ADC (source, GPL — the photocell input; no vendor driver exists) ---
+$(PREFIX)adc-objs := adc/hi3516cv100/adc.o
+obj-m += $(PREFIX)adc.o
 
 # --- SSP sensor bus drivers (source, GPL — Sony/Panasonic/Aptina SPI protocols) ---
 CV100_SSP_CFLAGS = -DHI_ARCH=3518
