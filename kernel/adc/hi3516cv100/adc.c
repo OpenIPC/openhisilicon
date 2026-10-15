@@ -151,8 +151,14 @@ static int __init adc_init(void)
 	adc_power(true);
 	/* The first conversion out of reset reads 0 whatever is on the pin
 	 * (measured on a hi3516cv100); spend it here rather than hand it to the
-	 * first reader as a reading of total darkness. */
-	adc_convert(0, &discard);
+	 * first reader as a reading of total darkness. It is also the proof the
+	 * block converts at all: a module that cannot convert does not load,
+	 * rather than leaving nodes whose every read times out. */
+	ret = adc_convert(0, &discard);
+	if (ret) {
+		pr_err("adc: the SAR ADC did not complete a conversion\n");
+		goto off;
+	}
 
 	ret = misc_register(&adc_dev[0]);
 	if (ret)
