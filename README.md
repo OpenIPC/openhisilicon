@@ -309,7 +309,7 @@ All modules are prefixed `open_` to distinguish from vendor SDK modules. The set
 | `open_pwm` | PWM controller | x | x | x | x | x | x | x | x |
 | `open_piris` | Programmable IRIS | | | | | | | | x |
 | `open_wdt` | Watchdog timer | x | x | x | x | x | x | x | x |
-| `open_adc` | ADC controller | | | | | | | | x |
+| `open_adc` | ADC controller | x | | | | | | | x |
 | `open_spi_dma_transfer` | SPI DMA transfer | | | | | | | | x |
 | `open_user` | User chrdev | | | | | | | | x |
 | `open_user_proc` | User /proc interface | | | | | | | | x |
