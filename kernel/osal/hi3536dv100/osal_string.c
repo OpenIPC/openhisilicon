@@ -55,10 +55,13 @@ EXPORT_SYMBOL(osal_strncmp);
 
 int osal_strnicmp(const char *s1, const char *s2, int len)
 {
+	/* strnicmp() became strncasecmp() in 4.0; the vendor guard compiled the
+	 * comparison out there and reported every pair of strings as equal. */
 #if LINUX_VERSION_CODE < KERNEL_VERSION(4,0,0)
 	return strnicmp(s1, s2, len);
+#else
+	return strncasecmp(s1, s2, len);
 #endif
-	return 0;
 }
 EXPORT_SYMBOL(osal_strnicmp);
 

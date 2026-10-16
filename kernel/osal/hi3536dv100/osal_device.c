@@ -111,8 +111,15 @@ static int osal_open(struct inode *inode, struct file *file){
 
     file->private_data = pdata;
     pdata->dev = &(coat_dev->osal_dev);
-    if(coat_dev->osal_dev.fops->open != NULL)
-        return coat_dev->osal_dev.fops->open((void *)&(pdata->data));
+    if(coat_dev->osal_dev.fops->open != NULL){
+        int ret = coat_dev->osal_dev.fops->open((void *)&(pdata->data));
+        /* release() never runs for a failed open, so pdata would have no owner */
+        if(ret != 0){
+            file->private_data = himedia;
+            kfree(pdata);
+            return ret;
+        }
+    }
     return 0;
 }
 
