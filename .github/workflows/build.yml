@@ -35,6 +35,12 @@ jobs:
             board: hi3519v101_lite
           - platform: hi3519dv500
             board: hi3519dv500_ultimate
+          # Kernel modules only: firmware's hisilicon-opensdk does not build
+          # this family yet, so the kernel comes from firmware and kernel/ is
+          # built against it directly.
+          - platform: hi3536dv100
+            board: hi3536dv100_lite
+            kmod_only: true
           - platform: hi3516ev300
             board: hi3516ev300_neo
             kernel: "7.0"
@@ -255,12 +261,62 @@ jobs:
           sed -i 's|cat $(CONFIG) $(PWD)/general/openipc.fragment|cat $(PWD)/general/openipc.fragment $(CONFIG)|' Makefile
 
       - name: Build OpenHisilicon
+        if: matrix.kmod_only != true
         run: |
           cd ../firmware
           FILE=general/package/hisilicon-opensdk/hisilicon-opensdk.mk
           sed -i "s|^HISILICON_OPENSDK_SITE =.*|HISILICON_OPENSDK_SITE_METHOD = local\nHISILICON_OPENSDK_SITE = $GITHUB_WORKSPACE|" ${FILE}
           sed -i "s|^HISILICON_OPENSDK_VERSION =.*||" ${FILE}
           CMAKE_POLICY_VERSION_MINIMUM=3.5 make BOARD=${{matrix.board}} br-hisilicon-opensdk
+
+      # A family whose firmware package does not exist yet still gets its
+      # modules built against the real board kernel. modpost reports an import
+      # nothing exports as "undefined!" but only warns for external modules
+      # (make still exits 0), so that is turned into a failure here.
+      - name: Build kernel modules (kernel-only family)
+        if: matrix.kmod_only == true
+        run: |
+          cd ../firmware
+          make BOARD=${{ matrix.board }} br-linux
+          KDIR=$(ls -d output/build/linux-custom)
+          CROSS=$(ls output/host/bin/*-linux-*-gcc | head -1 | sed 's/gcc$//')
+          make ARCH=arm CROSS_COMPILE="$PWD/$CROSS" -C "$KDIR" \
+            M="$GITHUB_WORKSPACE/kernel" CHIPARCH=${{ matrix.platform }} modules 2>&1 | tee kmod.log
+          if grep -q 'undefined!' kmod.log; then
+            echo "FAIL: unresolved symbols in ${{ matrix.platform }} modules" >&2
+            grep 'undefined!' kmod.log >&2
+            exit 1
+          fi
+
+      - name: Verify hi3536dv100 modules
+        if: matrix.platform == 'hi3536dv100'
+        run: |
+          VERMAGIC=$(sed -n 's/.*UTS_RELEASE "\(.*\)"/\1/p' \
+            ../firmware/output/build/linux-custom/include/generated/utsrelease.h)
+          for m in osal sys_config wdt hi_ir hi_cipher tlv_320aic31; do
+            KO="$GITHUB_WORKSPACE/kernel/open_$m.ko"
+            if [ ! -f "$KO" ]; then
+              echo "FAIL: open_$m.ko not built" >&2
+              exit 1
+            fi
+            if ! modinfo -F vermagic "$KO" | grep -q "^$VERMAGIC "; then
+              echo "FAIL: open_$m.ko vermagic '$(modinfo -F vermagic "$KO")' is not for $VERMAGIC" >&2
+              exit 1
+            fi
+            echo "ok: open_$m.ko ($(stat -c%s "$KO") bytes)"
+          done
+
+          # Nothing in this tree imports OSAL; the prebuilt MPP modules in
+          # firmware do, and a symbol dropped here only shows up when one of
+          # them fails to load on a camera. The SDK's own hi_osal.ko exports
+          # these 213.
+          NM="$(ls ../firmware/output/host/bin/*-linux-*-gcc | head -1 | sed 's/gcc$//')nm"
+          EXPORTS=$("$NM" "$GITHUB_WORKSPACE/kernel/open_osal.ko" | grep -c ' __ksymtab_')
+          if [ "$EXPORTS" -ne 213 ]; then
+            echo "FAIL: open_osal.ko exports $EXPORTS symbols, the SDK's hi_osal.ko exports 213" >&2
+            exit 1
+          fi
+          echo "ok: open_osal.ko exports $EXPORTS symbols"
 
       # ive_neo ships on platforms whose IVE block is reachable from this
       # driver — currently V4 (hi3516ev200/gk7205v200, fused IVE+NEO) and
