@@ -52,8 +52,14 @@ mod=$(basename "$IN" .ko)
 mod=${mod#xm_}; mod=${mod#hi_}; mod=${mod#gk_}
 
 READELF=${OBJCOPY%objcopy}readelf
+NM=${OBJCOPY%objcopy}nm
 # Relocation sections print as 'Relocation section '.rel__ksymtab' at ...';
 # the section a symbol goes back into is the name without the quotes and .rel.
+# An unstripped .ko (Hi3536DV100's SDK ships those) still names every entry,
+# so there is nothing to restore -- and on 4.x a struct kernel_symbol is 8
+# bytes, not the 12 assumed below, so guessing would add wrong names.
+syms=
+if ! "$NM" "$IN" | grep -q ' __ksymtab_'; then
 syms=$("$READELF" -rW "$IN" | awk '
 	function hex(s,    i, n) {
 		n = 0
@@ -68,9 +74,12 @@ syms=$("$READELF" -rW "$IN" | awk '
 		f = (sec == "__ksymtab" || sec == "__ksymtab_gpl")
 		next
 	}
-	f && $1 ~ /^[0-9a-f]+$/ && hex($1) % 12 == 0 {
+	# a section symbol (a name field pointing into __ksymtab_strings, say) is
+	# never what an entry exports
+	f && $1 ~ /^[0-9a-f]+$/ && hex($1) % 12 == 0 && $5 !~ /^(\.|__ksymtab_strings$)/ {
 		printf " --add-symbol __ksymtab_%s=%s:%d,object,local", $5, sec, hex($1)
 	}')
+fi
 
 # shellcheck disable=SC2086 # $syms is a list of options
 "$OBJCOPY" $syms \
