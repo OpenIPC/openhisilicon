@@ -18,13 +18,32 @@ extern void osal_device_init(void);
 
 int osal_init(void)
 {
+    int ret;
+
     osal_device_init();
     osal_proc_init();
-    hi_user_init();
-    himedia_init();
-    media_mem_init();
+    /* The vendor code ignored these and printed success regardless, so a
+     * failed chrdev or MMZ setup surfaced later as unrelated MPP errors. */
+    ret = hi_user_init();
+    if (ret)
+        goto err_proc;
+    ret = himedia_init();
+    if (ret)
+        goto err_user;
+    ret = media_mem_init();
+    if (ret)
+        goto err_himedia;
     osal_printk("hi_osal %s init success!\n", HI_OSAL_VERSION);
     return 0;
+
+err_himedia:
+    himedia_exit();
+err_user:
+    hi_user_exit();
+err_proc:
+    osal_proc_exit();
+    osal_printk("hi_osal %s init failed: %d\n", HI_OSAL_VERSION, ret);
+    return ret;
 }
 
 void osal_exit(void)

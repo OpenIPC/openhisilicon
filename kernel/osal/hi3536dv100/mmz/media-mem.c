@@ -1079,7 +1079,11 @@ static int media_mem_parse_cmdline(char *s)
 		mmz_info_phys_start = zone->phys_start + zone->nbytes - 0x2000;
 		if (hil_mmz_register(zone)) {
 			printk(KERN_WARNING "Add MMZ failed: " HIL_MMZ_FMT_S "\n", hil_mmz_fmt_arg(zone));
+			/* the destructor kfree()s the zone; the vendor code went on to
+			 * read and adjust it below */
 			hil_mmz_destroy(zone);
+			zone = NULL;
+			continue;
 		}
 		// if phys_end is 0xFFFFFFFF (32bit)
         phys_end = (zone->phys_start + zone->nbytes);
