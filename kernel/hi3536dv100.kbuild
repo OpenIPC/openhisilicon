@@ -1,22 +1,36 @@
 # hi3536dv100 SoC family build configuration
 #
 # Cortex-A7 NVR/DVR SoC (decode + VO/HDMI, no ISP, JPEG-only encoder),
-# kernel 4.9.37. Sources mirrored verbatim from the vendor SDK:
+# kernel 4.9.37. Everything the vendor SDK supplies as kernel source is
+# mirrored verbatim from Hi3536D_V100R001C02SPC020 -> Hi3536DV100_SDK_V2.0.2.0,
+# laid out as for hi3520dv200:
 #
-#   Hi3536D_V100R001C02SPC020 -> Hi3536DV100_SDK_V2.0.2.0 -> package/osal.tgz
-#     osal/source/kernel/   -> kernel/osal/hi3536dv100/
-#     osal/include/         -> kernel/osal/hi3536dv100/include/
+#   package/osal.tgz  osal/source/kernel   -> osal/hi3536dv100/          open_osal.ko
+#                     osal/include         -> osal/hi3536dv100/include/
+#   package/drv       sys_config           -> sys_config/hi3536dv100/    open_sys_config.ko
+#                     wtdg                 -> wdt/hi3536dv100/           open_wdt.ko
+#                     hisi-irda            -> ir/hi3536dv100/            open_hi_ir.ko
+#                     cipher/{src,include} -> cipher/hi3536dv100/        open_hi_cipher.ko
+#   package/mpp       extdrv/tlv320aic31   -> tlv320aic31/hi3536dv100/   open_tlv_320aic31.ko
+#                     include (+ mkp/)     -> include/hi3536dv100/       (headers only)
 #
-# Only OSAL is built from source. The SDK ships a prebuilt hi_osal.ko too, but
-# it was compiled against HiSilicon's own kernel config: on OpenIPC's kernel
-# its himedia devices register with no dev_t (struct device is laid out
-# differently), so /dev/sys, /dev/rgn, /dev/vpss and the rest never appear and
-# every MPI call fails to open its device. The MPP modules themselves
-# (base, sys, vdec, vpss, vou, hifb, ...) stay as prebuilt blobs in
-# hisilicon-osdrv-hi3536dv100; they reach the kernel only through OSAL.
+# Not here, by design:
+#   - the MPP modules (base, sys, vdec, vpss, vou, hifb, venc, region, tde,
+#     hdmi, audio, ...) and libmpi: no source in the SDK, so they stay
+#     prebuilt in firmware's hisilicon-osdrv-hi3536dv100. They reach the
+#     kernel only through OSAL.
+#   - mpp/sample, mpp/tools, component/hdmi/sample: userspace demos and debug
+#     tools, out of scope as for hi3520dv200.
+#   - the kernel patch, U-Boot, busybox and host tools under osdrv/: those
+#     belong to OpenIPC/linux and the bootloader repos.
+#
+# The SDK's prebuilt hi_osal.ko is unusable on OpenIPC's kernel: built for
+# HiSilicon's kernel config, its himedia devices register with no dev_t
+# (struct device is laid out differently), so /dev/sys, /dev/rgn and the rest
+# never appear. That is why OSAL has to come from source.
 #
 # The vendor Makefile builds cache-l1.S and hi_user.c into the same hi_osal.ko
-# (CPU_TYPE != slave), so they are part of this module too.
+# (CPU_TYPE != slave), so they are part of open_osal too.
 
 DV100_OSAL_DIR = osal/hi3536dv100
 
@@ -56,3 +70,39 @@ $(PREFIX)osal-objs := \
 	$(DV100_OSAL_DIR)/hiuser/cache-l1.o \
 	$(DV100_OSAL_DIR)/hiuser/hi_user.o
 obj-m += $(PREFIX)osal.o
+
+# --- sys_config: pinctrl state (mode=demo|sck) and audio codec clock ---
+$(PREFIX)sys_config-objs := sys_config/hi3536dv100/sys_config.o
+obj-m += $(PREFIX)sys_config.o
+
+# --- Watchdog (vendor module name: wdt.ko) ---
+$(PREFIX)wdt-objs := wdt/hi3536dv100/hi_wdt.o
+obj-m += $(PREFIX)wdt.o
+
+# --- IR receiver (vendor module name: hi_ir.ko) ---
+$(PREFIX)hi_ir-objs := ir/hi3536dv100/hiir.o
+obj-m += $(PREFIX)hi_ir.o
+
+# --- Cipher engine (vendor module name: hi_cipher.ko) ---
+# Its include/ carries its own hi_type.h, which differs from the MPP one, so
+# the paths are given per object rather than added to ccflags-y. HI_XXXX is
+# what the SDK's Makefile.param passes for silicon (HI_FPGA is FPGA only).
+# hi_unf_cipher.c (userspace library) and test_cipher.c are mirrored but not
+# part of the module, as in the vendor Makefile.
+DV100_CIPHER_DIR = cipher/hi3536dv100
+DV100_CIPHER_CFLAGS := -I$(src)/$(DV100_CIPHER_DIR) -I$(src)/$(DV100_CIPHER_DIR)/include -DHI_XXXX
+CFLAGS_drv_cipher.o  := $(DV100_CIPHER_CFLAGS)
+CFLAGS_hal_cipher.o  := $(DV100_CIPHER_CFLAGS)
+CFLAGS_cipher_intf.o := $(DV100_CIPHER_CFLAGS)
+$(PREFIX)hi_cipher-objs := \
+	$(DV100_CIPHER_DIR)/drv_cipher.o \
+	$(DV100_CIPHER_DIR)/hal_cipher.o \
+	$(DV100_CIPHER_DIR)/cipher_intf.o
+obj-m += $(PREFIX)hi_cipher.o
+
+# --- TLV320AIC31 audio codec (vendor module name: tlv_320aic31.ko) ---
+# The SDK builds it against the kernel I2C driver (HI_I2C) unless
+# CONFIG_GPIO_I2C is set; the hi3536dv100 kernel has CONFIG_I2C_HIBVT.
+CFLAGS_tlv320aic31.o := -DHI_I2C
+$(PREFIX)tlv_320aic31-objs := tlv320aic31/hi3536dv100/tlv320aic31.o
+obj-m += $(PREFIX)tlv_320aic31.o

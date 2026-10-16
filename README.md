@@ -18,7 +18,7 @@ Replaces the proprietary SDK that HiSilicon ships to camera manufacturers. Used 
 | V4/Goke | gk7205v200 | gk7205v200, gk7205v300, gk7202v300, gk7605v100 | Cortex-A7 | `gk7205v200` |
 | V4/XMedia | gk7205v500 | gk7205v500, gk7205v510, gk7205v530, gk7202v330, gk7201v200 | Cortex-A7 | `gk7205v500` (`XM_SET=V200` for gk7201v200) |
 | Goke/XMedia Lotus | gk7206v100 | gk7206v10, gk7206v10b, gk7206v11, gk7206v11a, gk7206v11at, gk7206v12a | 2× Cortex-A7 + RISC-V MCU | `gk7206v100` |
-| NVR | hi3536dv100 | hi3536dv100 | Cortex-A7 | `hi3536dv100` (OSAL only) |
+| NVR | hi3536dv100 | hi3536dv100 | Cortex-A7 | `hi3536dv100` (SDK kernel source; MPP prebuilt) |
 | V5 | hi3516cv610 | hi3516cv610, hi3516cv608 | Cortex-A7 | `hi3516cv6xx` |
 | V5 | hi3519dv500 | hi3519dv500, hi3516dv500 | Cortex-A55 (aarch64) | `hi3519dv500` |
 
@@ -115,7 +115,7 @@ No `#ifdef` soup in driver code — the compat header handles everything. This i
 │   ├── hi3519dv500.kbuild       V5 aarch64 build config (64-bit, OSAL + MMZ split)
 │   ├── gk7205v500.kbuild        XMedia build config (V200/V500 blob sets, XM_SET)
 │   ├── gk7206v100.kbuild        GK7206V1 (XMedia Lotus) build config (vendor .ko relinked)
-│   ├── hi3536dv100.kbuild       NVR build config (OSAL from SDK source; MPP stays prebuilt)
+│   ├── hi3536dv100.kbuild       NVR build config (OSAL, drivers, codec from SDK source; MPP prebuilt)
 │   ├── Kbuild                   Main entry — dispatches by CHIPARCH
 │   ├── compat/                  Kernel version compatibility (3.0 – 7.0)
 │   ├── obj/<chiparch>/          Pre-built vendor .o blobs
