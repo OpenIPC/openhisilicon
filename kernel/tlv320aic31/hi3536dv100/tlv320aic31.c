@@ -873,12 +873,24 @@ static int i2c_client_init(void)
 
     i2c_put_adapter(i2c_adap);
 
+    /* The vendor code returned success here regardless; every register
+     * access then memcpy()s from tlv_client, so a NULL one oopses. */
+    if (tlv_client == NULL)
+    {
+        printk("register i2c client fail. \n");
+        return -1;
+    }
+
     return 0;
 }
 
 static void i2c_client_exit(void)
 {
-    i2c_unregister_device(tlv_client);
+    if (tlv_client != NULL)
+    {
+        i2c_unregister_device(tlv_client);
+        tlv_client = NULL;
+    }
 }
 
 static int __init tlv320aic31_init(void)
@@ -908,7 +920,10 @@ static int __init tlv320aic31_init(void)
     }
 #endif
 
-    i2c_client_init();
+    if (i2c_client_init() < 0)
+    {
+        goto init_fail;
+    }
     for (i = 0; i < chip_count; i++)
     {
         if (tlv320aic31_device_init(i) < 0)
@@ -920,6 +935,9 @@ static int __init tlv320aic31_init(void)
     printk("load tlv320aic31.ko  ok!\n");
     return ret;
 init_fail:
+    /* Without this the client at 0x30 outlives the failed load, and the next
+     * load's i2c_new_device() fails with -EBUSY (on a board with no codec). */
+    i2c_client_exit();
 #ifdef CONFIG_HISI_SNAPSHOT_BOOT
     himedia_unregister(&s_stTlv320aic31Device);
 #else
