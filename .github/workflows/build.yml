@@ -280,7 +280,10 @@ jobs:
           cd ../firmware
           make BOARD=${{ matrix.board }} br-linux
           KDIR=$(ls -d output/build/linux-custom)
-          CROSS=$(ls output/host/bin/*-linux-*-gcc | head -1 | sed 's/gcc$//')
+          # Per-package directories: after br-linux alone, the toolchain is
+          # in linux's own host dir; output/host/ is only assembled at the end
+          # of a full build.
+          CROSS=$(ls output/per-package/linux/host/bin/*-linux-*-gcc | head -1 | sed 's/gcc$//')
           make ARCH=arm CROSS_COMPILE="$PWD/$CROSS" -C "$KDIR" \
             M="$GITHUB_WORKSPACE/kernel" CHIPARCH=${{ matrix.platform }} modules 2>&1 | tee kmod.log
           if grep -q 'undefined!' kmod.log; then
@@ -294,7 +297,11 @@ jobs:
         run: |
           VERMAGIC=$(sed -n 's/.*UTS_RELEASE "\(.*\)"/\1/p' \
             ../firmware/output/build/linux-custom/include/generated/utsrelease.h)
-          for m in osal sys_config wdt hi_ir hi_cipher tlv_320aic31; do
+          # Six built from SDK source, then the 21 closed MPP modules relinked
+          # from the SDK's .ko files.
+          for m in osal sys_config wdt hi_ir hi_cipher tlv_320aic31 \
+                   base sys vdec vfmw jpegd tde region vgs vpss vou hifb hdmi \
+                   venc chnl jpege aio ai ao aenc adec acodec; do
             KO="$GITHUB_WORKSPACE/kernel/open_$m.ko"
             if [ ! -f "$KO" ]; then
               echo "FAIL: open_$m.ko not built" >&2
@@ -307,11 +314,13 @@ jobs:
             echo "ok: open_$m.ko ($(stat -c%s "$KO") bytes)"
           done
 
-          # Nothing in this tree imports OSAL; the closed MPP modules do, and a
-          # symbol dropped here only shows up when one of them fails to load
-          # on a camera. .github/expected/hi3536dv100-osal-exports.txt is what
-          # the SDK's own hi_osal.ko exports, name for name.
-          NM="$(ls ../firmware/output/host/bin/*-linux-*-gcc | head -1 | sed 's/gcc$//')nm"
+          # Every closed MPP module imports from OSAL, so the build step's
+          # "undefined!" gate already catches a symbol they use going missing.
+          # This also holds the exports nothing in this tree uses, which a
+          # blob built elsewhere may still need:
+          # .github/expected/hi3536dv100-osal-exports.txt is what the SDK's
+          # own hi_osal.ko exports, name for name.
+          NM="$(ls ../firmware/output/per-package/linux/host/bin/*-linux-*-gcc | head -1 | sed 's/gcc$//')nm"
           "$NM" "$GITHUB_WORKSPACE/kernel/open_osal.ko" |
             awk '$3 ~ /^__ksymtab_/ && $3 != "__ksymtab_strings" {sub("__ksymtab_", "", $3); print $3}' |
             sort -u > osal-exports.txt
