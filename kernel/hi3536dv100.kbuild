@@ -1,0 +1,58 @@
+# hi3536dv100 SoC family build configuration
+#
+# Cortex-A7 NVR/DVR SoC (decode + VO/HDMI, no ISP, JPEG-only encoder),
+# kernel 4.9.37. Sources mirrored verbatim from the vendor SDK:
+#
+#   Hi3536D_V100R001C02SPC020 -> Hi3536DV100_SDK_V2.0.2.0 -> package/osal.tgz
+#     osal/source/kernel/   -> kernel/osal/hi3536dv100/
+#     osal/include/         -> kernel/osal/hi3536dv100/include/
+#
+# Only OSAL is built from source. The SDK ships a prebuilt hi_osal.ko too, but
+# it was compiled against HiSilicon's own kernel config: on OpenIPC's kernel
+# its himedia devices register with no dev_t (struct device is laid out
+# differently), so /dev/sys, /dev/rgn, /dev/vpss and the rest never appear and
+# every MPI call fails to open its device. The MPP modules themselves
+# (base, sys, vdec, vpss, vou, hifb, ...) stay as prebuilt blobs in
+# hisilicon-osdrv-hi3536dv100; they reach the kernel only through OSAL.
+#
+# The vendor Makefile builds cache-l1.S and hi_user.c into the same hi_osal.ko
+# (CPU_TYPE != slave), so they are part of this module too.
+
+DV100_OSAL_DIR = osal/hi3536dv100
+
+ccflags-y += -I$(src)/$(DV100_OSAL_DIR)
+ccflags-y += -I$(src)/$(DV100_OSAL_DIR)/include
+ccflags-y += -I$(src)/$(DV100_OSAL_DIR)/himedia
+ccflags-y += -DHICHIP=0x3536d100
+
+$(PREFIX)osal-objs := \
+	$(DV100_OSAL_DIR)/osal_vmalloc.o \
+	$(DV100_OSAL_DIR)/osal_addr.o \
+	$(DV100_OSAL_DIR)/osal.o \
+	$(DV100_OSAL_DIR)/osal_atomic.o \
+	$(DV100_OSAL_DIR)/osal_barrier.o \
+	$(DV100_OSAL_DIR)/osal_cache.o \
+	$(DV100_OSAL_DIR)/osal_debug.o \
+	$(DV100_OSAL_DIR)/osal_device.o \
+	$(DV100_OSAL_DIR)/osal_interrupt.o \
+	$(DV100_OSAL_DIR)/osal_math.o \
+	$(DV100_OSAL_DIR)/osal_mutex.o \
+	$(DV100_OSAL_DIR)/osal_proc.o \
+	$(DV100_OSAL_DIR)/osal_schedule.o \
+	$(DV100_OSAL_DIR)/osal_semaphore.o \
+	$(DV100_OSAL_DIR)/osal_spinlock.o \
+	$(DV100_OSAL_DIR)/osal_string.o \
+	$(DV100_OSAL_DIR)/osal_task.o \
+	$(DV100_OSAL_DIR)/osal_timer.o \
+	$(DV100_OSAL_DIR)/osal_wait.o \
+	$(DV100_OSAL_DIR)/osal_workqueue.o \
+	$(DV100_OSAL_DIR)/osal_notifier.o \
+	$(DV100_OSAL_DIR)/osal_platform.o \
+	$(DV100_OSAL_DIR)/osal_fileops.o \
+	$(DV100_OSAL_DIR)/himedia/base.o \
+	$(DV100_OSAL_DIR)/himedia/himedia.o \
+	$(DV100_OSAL_DIR)/mmz/media-mem.o \
+	$(DV100_OSAL_DIR)/mmz/mmz-userdev.o \
+	$(DV100_OSAL_DIR)/hiuser/cache-l1.o \
+	$(DV100_OSAL_DIR)/hiuser/hi_user.o
+obj-m += $(PREFIX)osal.o
