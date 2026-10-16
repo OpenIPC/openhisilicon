@@ -143,7 +143,10 @@ int himedia_register(struct himedia_device *himedia)
     /*device register*/
     err = himedia_device_register(himedia);
     if (err < 0) {
-        himedia_minors[himedia->minor >> 3] &= ~(1 << (himedia->minor & 7));
+        /* Only minors below DYNAMIC_MINORS have a bit in the bitmap; an explicit
+         * larger minor was never marked, and clearing it would write past it. */
+        if (himedia->minor < DYNAMIC_MINORS)
+            himedia_minors[himedia->minor >> 3] &= ~(1 << (himedia->minor & 7));
 		goto out;
     }
 
@@ -155,7 +158,8 @@ int himedia_register(struct himedia_device *himedia)
 
         himedia_device_unregister(himedia);
 
-		himedia_minors[himedia->minor >> 3] &= ~(1 << (himedia->minor & 7));
+		if (himedia->minor < DYNAMIC_MINORS)
+			himedia_minors[himedia->minor >> 3] &= ~(1 << (himedia->minor & 7));
 
 		err = PTR_ERR(pdrv);
 		goto out;
@@ -207,7 +211,8 @@ int himedia_unregister(struct himedia_device * himedia)
 
             himedia_device_unregister(himedia);
 
-        	himedia_minors[himedia->minor>>3] &= ~(1 << (himedia->minor & 7));
+        	if (himedia->minor < DYNAMIC_MINORS)
+        		himedia_minors[himedia->minor>>3] &= ~(1 << (himedia->minor & 7));
 
         	break;
 		}

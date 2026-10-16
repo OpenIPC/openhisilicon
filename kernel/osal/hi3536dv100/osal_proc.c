@@ -224,14 +224,15 @@ void osal_remove_proc_private(const char *name, osal_proc_entry_t *parent)
 		remove_proc_entry(name, parent->proc_dir_entry);
 	else
 		remove_proc_entry(name, NULL);
+	/* An exhausted iterator is not NULL -- it points into the static list
+	 * head -- so free only an entry that was actually found and unlinked. */
 	osal_list_for_each_entry(sproc, &list, node){
 		if(osal_strcmp(sproc->name, name) == 0){
 			osal_list_del(&(sproc->node));
-			break;
+			kfree(sproc);
+			return;
 		}
 	}
-	if(sproc != NULL)
-		kfree(sproc);
 }
 EXPORT_SYMBOL(osal_remove_proc_private);
 

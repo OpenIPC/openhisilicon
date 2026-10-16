@@ -733,7 +733,11 @@ static long mmz_userdev_ioctl(struct file* file, unsigned int cmd, unsigned long
             goto __error_exit;
         }
 
-        if (area.dirty_phys_start + area.dirty_size > mmb->phys_addr + mmb->length)
+        /* dirty_size comes from userspace: compare against the room left in
+         * the MMB rather than adding, so a huge size cannot wrap past the check
+         * and hand an oversized range to the cache maintenance below. */
+        if (area.dirty_size > mmb->length ||
+            area.dirty_phys_start - mmb->phys_addr > mmb->length - area.dirty_size)
         {
             printk(KERN_WARNING "\ndirty area overflow!\n");
             ret = -EFAULT;
