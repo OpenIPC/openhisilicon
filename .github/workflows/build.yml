@@ -319,11 +319,12 @@ jobs:
           # This also holds the exports nothing in this tree uses, which a
           # blob built elsewhere may still need:
           # .github/expected/hi3536dv100-osal-exports.txt is what the SDK's
-          # own hi_osal.ko exports, name for name.
+          # own hi_osal.ko exports, name for name, in C collation (the runner's
+          # locale orders '_' differently from the one the list was made in).
           NM="$(ls ../firmware/output/per-package/linux/host/bin/*-linux-*-gcc | head -1 | sed 's/gcc$//')nm"
           "$NM" "$GITHUB_WORKSPACE/kernel/open_osal.ko" |
             awk '$3 ~ /^__ksymtab_/ && $3 != "__ksymtab_strings" {sub("__ksymtab_", "", $3); print $3}' |
-            sort -u > osal-exports.txt
+            LC_ALL=C sort -u > osal-exports.txt
           if ! diff -u "$GITHUB_WORKSPACE/.github/expected/hi3536dv100-osal-exports.txt" osal-exports.txt; then
             echo "FAIL: open_osal.ko exports differ from the SDK's hi_osal.ko" >&2
             exit 1
