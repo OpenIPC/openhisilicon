@@ -276,6 +276,7 @@ jobs:
       - name: Build kernel modules (kernel-only family)
         if: matrix.kmod_only == true
         run: |
+          set -o pipefail
           cd ../firmware
           make BOARD=${{ matrix.board }} br-linux
           KDIR=$(ls -d output/build/linux-custom)
@@ -306,17 +307,19 @@ jobs:
             echo "ok: open_$m.ko ($(stat -c%s "$KO") bytes)"
           done
 
-          # Nothing in this tree imports OSAL; the prebuilt MPP modules in
-          # firmware do, and a symbol dropped here only shows up when one of
-          # them fails to load on a camera. The SDK's own hi_osal.ko exports
-          # these 213.
+          # Nothing in this tree imports OSAL; the closed MPP modules do, and a
+          # symbol dropped here only shows up when one of them fails to load
+          # on a camera. .github/expected/hi3536dv100-osal-exports.txt is what
+          # the SDK's own hi_osal.ko exports, name for name.
           NM="$(ls ../firmware/output/host/bin/*-linux-*-gcc | head -1 | sed 's/gcc$//')nm"
-          EXPORTS=$("$NM" "$GITHUB_WORKSPACE/kernel/open_osal.ko" | grep -c ' __ksymtab_')
-          if [ "$EXPORTS" -ne 213 ]; then
-            echo "FAIL: open_osal.ko exports $EXPORTS symbols, the SDK's hi_osal.ko exports 213" >&2
+          "$NM" "$GITHUB_WORKSPACE/kernel/open_osal.ko" |
+            awk '$3 ~ /^__ksymtab_/ && $3 != "__ksymtab_strings" {sub("__ksymtab_", "", $3); print $3}' |
+            sort -u > osal-exports.txt
+          if ! diff -u "$GITHUB_WORKSPACE/.github/expected/hi3536dv100-osal-exports.txt" osal-exports.txt; then
+            echo "FAIL: open_osal.ko exports differ from the SDK's hi_osal.ko" >&2
             exit 1
           fi
-          echo "ok: open_osal.ko exports $EXPORTS symbols"
+          echo "ok: open_osal.ko exports the SDK's $(wc -l < osal-exports.txt) symbols"
 
       # ive_neo ships on platforms whose IVE block is reachable from this
       # driver — currently V4 (hi3516ev200/gk7205v200, fused IVE+NEO) and
