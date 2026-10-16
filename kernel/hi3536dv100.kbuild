@@ -14,11 +14,22 @@
 #   package/mpp       extdrv/tlv320aic31   -> tlv320aic31/hi3536dv100/   open_tlv_320aic31.ko
 #                     include (+ mkp/)     -> include/hi3536dv100/       (headers only)
 #
+#   package/mpp       ko/*.ko (closed)     -> obj/hi3536dv100/<mod>.o     open_<mod>.ko
+#                                             + init/hi3536dv100/<mod>_init.c
+#
+# The MPP modules have no source, only finished .ko files: base, sys, vdec,
+# vfmw, jpegd, tde, region, vgs, vpss, vou, hifb, hdmi, venc, chnl, jpege, the
+# audio set (aio, ai, ao, aenc, adec) and hi_acodec. scripts/ko2obj.sh turns
+# each into a relinkable object (init_module renamed, the SDK kernel's
+# struct module and .modinfo set aside), and the wrapper in init/ gives it
+# entry points, as for gk7206v100. They keep their EXPORT_SYMBOLs and
+# module_params. They reach the kernel only through OSAL, which is why the
+# relinked set loads on OpenIPC's kernel once OSAL is built from source.
+# The SDK's hi_osal.ko and sys_config.ko are not relinked: both have source.
+#
 # Not here, by design:
-#   - the MPP modules (base, sys, vdec, vpss, vou, hifb, venc, region, tde,
-#     hdmi, audio, ...) and libmpi: no source in the SDK, so they stay
-#     prebuilt in firmware's hisilicon-osdrv-hi3536dv100. They reach the
-#     kernel only through OSAL.
+#   - libmpi and the other userspace libraries: closed, and they stay in
+#     firmware's hisilicon-osdrv-hi3536dv100.
 #   - mpp/sample, mpp/tools, component/hdmi/sample: userspace demos and debug
 #     tools, out of scope as for hi3520dv200.
 #   - the kernel patch, U-Boot, busybox and host tools under osdrv/: those
@@ -106,3 +117,10 @@ obj-m += $(PREFIX)hi_cipher.o
 CFLAGS_tlv320aic31.o := -DHI_I2C
 $(PREFIX)tlv_320aic31-objs := tlv320aic31/hi3536dv100/tlv320aic31.o
 obj-m += $(PREFIX)tlv_320aic31.o
+
+# --- MPP modules (closed, relinked from the SDK's .ko) ---
+DV100_BLOBS := base sys vdec vfmw jpegd tde region vgs vpss vou hifb hdmi \
+	venc chnl jpege aio ai ao aenc adec acodec
+$(foreach b,$(DV100_BLOBS),$(eval $(PREFIX)$(b)-objs := \
+	obj/hi3536dv100/$(b).o init/hi3536dv100/$(b)_init.o))
+obj-m += $(addprefix $(PREFIX),$(addsuffix .o,$(DV100_BLOBS)))
