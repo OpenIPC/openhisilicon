@@ -26,6 +26,13 @@
 # module_params. They reach the kernel only through OSAL, which is why the
 # relinked set loads on OpenIPC's kernel once OSAL is built from source.
 # The SDK's hi_osal.ko and sys_config.ko are not relinked: both have source.
+# To regenerate the objects, from the SDK's mpp/ko:
+#
+#   for f in hi3536dv100_*.ko hifb.ko hi_acodec.ko; do
+#     m=${f%.ko}; m=${m#hi3536dv100_}; m=${m#hi_}
+#     scripts/ko2obj.sh arm-openipc-linux-gnueabi-objcopy hi3536dv100 \
+#       mpp/ko/$f kernel/obj/hi3536dv100/$m.o
+#   done
 #
 # Not here, by design:
 #   - libmpi and the other userspace libraries: closed, and they stay in

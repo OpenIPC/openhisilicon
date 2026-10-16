@@ -23,7 +23,8 @@
 #
 # init_module/cleanup_module become _<prefix>_<mod>_init/_exit, which the
 # wrapper in kernel/init/<chiparch>/ calls from its own module_init/
-# module_exit. <mod> is the .ko basename without its xm_/hi_/gk_ prefix.
+# module_exit. <mod> is the .ko basename without its xm_/hi_/gk_ prefix, or
+# without "<prefix>_".
 #
 # Left intact on purpose:
 #   __ksymtab*  the blob's EXPORT_SYMBOLs survive, so the wrapper must not
@@ -50,16 +51,20 @@ OBJCOPY=$1 PREFIX=$2 IN=$3 OUT=$4
 
 mod=$(basename "$IN" .ko)
 mod=${mod#xm_}; mod=${mod#hi_}; mod=${mod#gk_}
+# Hi3536DV100's SDK names most modules hi3536dv100_<mod>.ko; with that chip as
+# <prefix> the entry points stay _<prefix>_<mod>_init, not _<prefix>_<prefix>_...
+mod=${mod#"${PREFIX}"_}
 
 READELF=${OBJCOPY%objcopy}readelf
 NM=${OBJCOPY%objcopy}nm
 # Relocation sections print as 'Relocation section '.rel__ksymtab' at ...';
 # the section a symbol goes back into is the name without the quotes and .rel.
-# An unstripped .ko (Hi3536DV100's SDK ships those) still names every entry,
-# so there is nothing to restore -- and on 4.x a struct kernel_symbol is 8
+# An unstripped .ko (Hi3536DV100's SDK ships those) still names every entry
+# -- section symbols such as __ksymtab_strings do not count -- so there is
+# nothing to restore -- and on 4.x a struct kernel_symbol is 8
 # bytes, not the 12 assumed below, so guessing would add wrong names.
 syms=
-if ! "$NM" "$IN" | grep -q ' __ksymtab_'; then
+if ! "$NM" "$IN" | awk '$3 ~ /^__ksymtab_/ && $3 != "__ksymtab_strings" && $3 != "__ksymtab_gpl" { f = 1 } END { exit !f }'; then
 syms=$("$READELF" -rW "$IN" | awk '
 	function hex(s,    i, n) {
 		n = 0
