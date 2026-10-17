@@ -300,12 +300,53 @@ static td_void cmos_config_vmax(ot_isp_sns_state *sns_state, td_u32 vmax)
     return;
 }
 
+/* Crop modes (window crop / flex) must keep VMAX at the window's own frame
+ * length: the T6 VI drops frames once it is scaled away from it. The rate is
+ * carried by HMAX instead, so it is these modes that program HMAX at runtime. */
+static td_bool imx335_is_crop_mode(td_u8 img_mode)
+{
+    return ((img_mode == IMX335_60FPS_CROPPED_1080P_MODE) ||
+            (img_mode == IMX335_1520P_10BIT_MODE) ||
+            (img_mode == IMX335_CROP_FLEX_LINEAR_MODE)) ? TD_TRUE : TD_FALSE;
+}
+
+/* Table HMAX of a fixed crop mode at its max_fps; 0 for the flex mode, whose
+ * HMAX follows from the crop's VMAX. */
+static td_u32 imx335_crop_hmax_base(td_u8 img_mode)
+{
+    switch (img_mode) {
+        case IMX335_60FPS_CROPPED_1080P_MODE:
+            return IMX335_HMAX_1080P_CROP;
+        case IMX335_1520P_10BIT_MODE:
+            return IMX335_HMAX_1520P;
+        default:
+            return 0;
+    }
+}
+
+/* Sensor line rate (lines/s) implied by a crop mode's fixed VMAX: the table
+ * HMAX times max_fps for fixed crops, FLEX_CLK / VMAX for flex. */
+static td_float imx335_crop_line_rate(const cis_info *cis, td_u8 img_mode, td_u32 vmax)
+{
+    if (img_mode == IMX335_CROP_FLEX_LINEAR_MODE) {
+        return (td_float)IMX335_FLEX_CLK / (td_float)vmax;
+    }
+    return (td_float)imx335_crop_hmax_base(img_mode) * cis->mode_tbl[img_mode].max_fps;
+}
+
+static td_void imx335_config_hmax(cis_info *cis, td_u32 hmax)
+{
+    (td_void)cis_write_reg(&cis->i2c, IMX335_HMAX_ADDR_L, imx335_low_8bits(hmax));
+    (td_void)cis_write_reg(&cis->i2c, IMX335_HMAX_ADDR_H, (hmax >> 8) & 0x1F);
+}
+
 /* the function of sensor set fps */
 static td_void cmos_fps_set(ot_vi_pipe vi_pipe, td_float fps, ot_isp_ae_sensor_default *ae_sns_dft)
 {
     td_u32 lines;
     td_u32 lines_max;
     td_u32 vmax;
+    td_u32 hmax;
     td_u32 crop_h;
     td_float max_fps;
     td_float min_fps;
@@ -326,46 +367,53 @@ static td_void cmos_fps_set(ot_vi_pipe vi_pipe, td_float fps, ot_isp_ae_sensor_d
     max_fps = cis->mode_tbl[sns_state->img_mode].max_fps;
     min_fps = cis->mode_tbl[sns_state->img_mode].min_fps;
 
-    /* Flex crop: VMAX stays at the crop's own frame length (the T6 VI stalls
-     * once it is scaled), and the rate is carried by HMAX, which
-     * imx335_flex_reg_init() derived from the requested fps. */
-    if (sns_state->img_mode == IMX335_CROP_FLEX_LINEAR_MODE) {
-        if ((fps > max_fps) || (fps < min_fps)) {
-            isp_err_trace("ISP sensor imx335 Not support Fps: %f\n", fps);
-            return;
-        }
-        imx335_get_crop(vi_pipe, TD_NULL, &crop_h);
-        vmax = (crop_h + 20) * 2 + 96;
-        if (vmax < IMX335_FLEX_VMAX_BASE) {
-            vmax = IMX335_FLEX_VMAX_BASE;
-        }
-        vmax = (vmax > lines_max) ? lines_max : vmax;
-
-        cmos_config_vmax(sns_state, vmax);
-        sns_state->fl_std = vmax;
-        ae_sns_dft->lines_per500ms = (td_u32)((td_float)vmax * fps / 2); /* div 2 */
-        cis->lines_per500ms = ae_sns_dft->lines_per500ms;
-
-        ae_sns_dft->fps = fps;
-        ae_sns_dft->full_lines_std = sns_state->fl_std;
-        ae_sns_dft->max_int_time = sns_state->fl_std - FL_OFFSET_LINEAR;
-        sns_state->fl[0] = sns_state->fl_std;
-        ae_sns_dft->full_lines = sns_state->fl[0];
-        ae_sns_dft->hmax_times = (td_u32)(1000000000.0 / ((td_float)vmax * fps));
-        return;
-    }
-
     if ((fps > max_fps) || (fps < min_fps)) {
         isp_err_trace("ISP sensor imx335 Not support Fps: %f\n", fps);
         return;
     }
 
-    vmax = (td_u32)(lines * max_fps / div_0_to_1_float(fps));
-    vmax = (vmax > lines_max) ? lines_max : vmax;
+    if (imx335_is_crop_mode(sns_state->img_mode)) {
+        /* VMAX stays at the crop's frame length; HMAX = line_rate / fps. */
+        if (sns_state->img_mode == IMX335_CROP_FLEX_LINEAR_MODE) {
+            imx335_get_crop(vi_pipe, TD_NULL, &crop_h);
+            vmax = IMX335_FLEX_VMAX(crop_h);
+            min_fps = IMX335_FLEX_MIN_FPS(vmax);
+            if (fps < min_fps) {
+                isp_err_trace("imx335 flex: fps %f below achievable min %f for crop_h %u\n",
+                    fps, min_fps, crop_h);
+                return;
+            }
+        } else {
+            vmax = lines;
+        }
+        vmax = (vmax > lines_max) ? lines_max : vmax;
 
-    cmos_config_vmax(sns_state, vmax);
-    sns_state->fl_std = vmax;
-    ae_sns_dft->lines_per500ms = (td_u32)(lines * max_fps / 2); /* div 2 */
+        hmax = (td_u32)(imx335_crop_line_rate(cis, sns_state->img_mode, vmax) / fps + 0.5f);
+        if (hmax > IMX335_FLEX_HMAX_MAX) {
+            isp_err_trace("imx335 crop: fps %f needs HMAX %u > %u\n",
+                fps, hmax, IMX335_FLEX_HMAX_MAX);
+            return;
+        }
+        if (hmax < IMX335_FLEX_HMAX_MIN) {
+            hmax = IMX335_FLEX_HMAX_MIN;
+        }
+        if (cis->i2c.fd >= 0) {
+            imx335_config_hmax(cis, hmax);
+        }
+        printf("IMX335 CROP: mode=%u VMAX=%u HMAX=%u fps=%.2f\n",
+            sns_state->img_mode, vmax, hmax, fps);
+
+        cmos_config_vmax(sns_state, vmax);
+        sns_state->fl_std = vmax;
+        ae_sns_dft->lines_per500ms = (td_u32)((td_float)vmax * fps / 2); /* div 2 */
+    } else {
+        vmax = (td_u32)(lines * max_fps / div_0_to_1_float(fps));
+        vmax = (vmax > lines_max) ? lines_max : vmax;
+
+        cmos_config_vmax(sns_state, vmax);
+        sns_state->fl_std = vmax;
+        ae_sns_dft->lines_per500ms = (td_u32)(lines * max_fps / 2); /* div 2 */
+    }
     cis->lines_per500ms = ae_sns_dft->lines_per500ms;
 
     ae_sns_dft->fps = fps;
@@ -377,7 +425,7 @@ static td_void cmos_fps_set(ot_vi_pipe vi_pipe, td_float fps, ot_isp_ae_sensor_d
     sns_state->fl[0] = sns_state->fl_std;
     ae_sns_dft->full_lines = sns_state->fl[0];
     ae_sns_dft->hmax_times =
-        (td_u32)((1000000000) / (sns_state->fl_std * div_0_to_1_float(fps))); /* 1000000000ns */
+        (td_u32)((1000000000) / ((td_float)sns_state->fl_std * fps)); /* 1000000000ns */
 
     return;
 }
@@ -386,8 +434,6 @@ static td_void cmos_slow_framerate_set(ot_vi_pipe vi_pipe, td_u32 full_lines, ot
 {
     td_u32 vmax;
     td_u32 lines, lines_max;
-    td_u32 crop_h;
-    td_u32 vmax_min;
     cis_info *cis = TD_NULL;
     ot_isp_sns_state *sns_state = TD_NULL;
 
@@ -403,13 +449,24 @@ static td_void cmos_slow_framerate_set(ot_vi_pipe vi_pipe, td_u32 full_lines, ot
     lines = cis->mode_tbl[sns_state->img_mode].ver_lines;
     lines_max = cis->mode_tbl[sns_state->img_mode].max_ver_lines;
 
+    if (imx335_is_crop_mode(sns_state->img_mode)) {
+        /* A crop-mode VMAX cannot be lengthened without the T6 VI dropping
+         * frames, so the requested slow-shutter frame is not programmable:
+         * keep the window's frame length and report the limits from it, so
+         * AE does not compute exposure against a length the sensor is not
+         * using. */
+        vmax = (lines > lines_max) ? lines_max : lines;
+        sns_state->fl[0] = vmax;
+        cmos_config_vmax(sns_state, vmax);
+        if (sns_state->wdr_mode == OT_WDR_MODE_NONE) {
+            ae_sns_dft->max_int_time = sns_state->fl[0] - FL_OFFSET_LINEAR;
+        }
+        ae_sns_dft->full_lines = sns_state->fl[0];
+        return;
+    }
+
     vmax = full_lines + FL_OFFSET_LINEAR;
     vmax = clip3(vmax, lines, lines_max);
-    if (sns_state->img_mode == IMX335_CROP_FLEX_LINEAR_MODE) {
-        imx335_get_crop(vi_pipe, TD_NULL, &crop_h);
-        vmax_min = (crop_h + 20) * 2 + 96;
-        vmax = (vmax < vmax_min) ? vmax_min : vmax;
-    }
     sns_state->fl[0] = vmax;
 
     cmos_config_vmax(sns_state, vmax);
@@ -1022,17 +1079,49 @@ static td_s32 cmos_isp_set_image_mode(ot_vi_pipe vi_pipe, const ot_isp_cmos_sns_
      * the explicit Isp_SnsMode hint (Isp_SnsMode==5); record the requested
      * W×H for imx335_flex_reg_init(). */
     if (sns_image_mode->sns_mode == IMX335_CROP_FLEX_LINEAR_MODE &&
-        sns_state->wdr_mode == OT_WDR_MODE_NONE &&
-        sns_image_mode->fps >= cis->mode_tbl[IMX335_CROP_FLEX_LINEAR_MODE].min_fps &&
-        sns_image_mode->fps <= cis->mode_tbl[IMX335_CROP_FLEX_LINEAR_MODE].max_fps) {
-        imx335_set_crop(vi_pipe, sns_image_mode->width, sns_image_mode->height);
+        sns_state->wdr_mode == OT_WDR_MODE_NONE) {
+        td_u32 crop_w = sns_image_mode->width;
+        td_u32 crop_h = sns_image_mode->height;
+
+        /* imx335_flex_reg_init() snaps W to a multiple of 24 and H to a
+         * multiple of 4. Refuse a window that would be changed, rather than
+         * program a crop the capture pipeline does not know about. */
+        if (crop_w == 0 || crop_h == 0 || (crop_w % 24) != 0 || (crop_h % 4) != 0 ||
+            crop_w < 312 || crop_w > 2592 || crop_h < 372 || crop_h > 1944) {
+            isp_err_trace("imx335 flex: unsupported crop %ux%u "
+                "(W%%24==0, H%%4==0, 312..2592 x 372..1944)\n", crop_w, crop_h);
+            return TD_FAILURE;
+        }
+        if (sns_image_mode->fps < cis->mode_tbl[IMX335_CROP_FLEX_LINEAR_MODE].min_fps ||
+            sns_image_mode->fps > cis->mode_tbl[IMX335_CROP_FLEX_LINEAR_MODE].max_fps) {
+            isp_err_trace("imx335 flex: fps %f outside [%f, %f]\n",
+                sns_image_mode->fps,
+                cis->mode_tbl[IMX335_CROP_FLEX_LINEAR_MODE].min_fps,
+                cis->mode_tbl[IMX335_CROP_FLEX_LINEAR_MODE].max_fps);
+            return TD_FAILURE;
+        }
+        {
+            td_u32 vmax = IMX335_FLEX_VMAX(crop_h);
+            td_float min_fps = IMX335_FLEX_MIN_FPS(vmax);
+
+            /* A too-slow rate cannot be expressed by the 13-bit HMAX at this
+             * crop's VMAX; refuse instead of silently running faster. */
+            if (sns_image_mode->fps < min_fps) {
+                isp_err_trace("imx335 flex: fps %f below achievable min %f for %ux%u\n",
+                    sns_image_mode->fps, min_fps, crop_w, crop_h);
+                return TD_FAILURE;
+            }
+        }
+        imx335_set_crop(vi_pipe, crop_w, crop_h);
         imx335_set_flex_fps(vi_pipe, sns_image_mode->fps);
         image_mode = IMX335_CROP_FLEX_LINEAR_MODE;
     }
 
-    /* 1) Explicit Isp_SnsMode hint from the sensor INI (0 = auto). */
+    /* 1) Explicit Isp_SnsMode hint from the sensor INI (0 = auto). Flex is
+     * validated above and must not be re-selected here. */
     if (image_mode == IMX335_MODE_MAX &&
-        sns_image_mode->sns_mode > 0 && sns_image_mode->sns_mode < IMX335_MODE_MAX) {
+        sns_image_mode->sns_mode > 0 && sns_image_mode->sns_mode < IMX335_MODE_MAX &&
+        sns_image_mode->sns_mode != IMX335_CROP_FLEX_LINEAR_MODE) {
         td_u8 hint = sns_image_mode->sns_mode;
         if (sns_state->wdr_mode == cis->mode_tbl[hint].wdr_mode &&
             sns_image_mode->fps <= cis->mode_tbl[hint].max_fps) {
@@ -1130,7 +1219,11 @@ static void cmos_isp_init(ot_vi_pipe vi_pipe)
         return;
     }
 
-    imx335_init(cis);
+    ret = imx335_init(cis);
+    if (ret != TD_SUCCESS) {
+        isp_err_trace("imx335_init failed! ret:0x%x\n", ret);
+        return;
+    }
 
     sensor_state->init = TD_TRUE;
     return;

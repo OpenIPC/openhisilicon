@@ -127,10 +127,7 @@ static td_s32 imx335_flex_reg_init(cis_info *cis)
     area3_width = y_out_size * 2;
     area3_st = 176 + (1944 - crop_h);
 
-    vmax = IMX335_FLEX_VMAX_BASE;
-    if (vmax < area3_width + 96) {
-        vmax = area3_width + 96;
-    }
+    vmax = IMX335_FLEX_VMAX(crop_h);
 
     /* T6: keep VMAX at the crop length and carry the frame rate with HMAX. */
     fps = imx335_get_flex_fps(cis->pipe);
@@ -148,21 +145,32 @@ static td_s32 imx335_flex_reg_init(cis_info *cis)
         }
     }
 
-    cis_write_reg(&cis->i2c, 0x302C, hstart & 0xFF);
-    cis_write_reg(&cis->i2c, 0x302D, (hstart >> 8) & 0x3F);
-    cis_write_reg(&cis->i2c, 0x302E, hnum & 0xFF);
-    cis_write_reg(&cis->i2c, 0x302F, (hnum >> 8) & 0x1F);
-    cis_write_reg(&cis->i2c, 0x3030, vmax & 0xFF);
-    cis_write_reg(&cis->i2c, 0x3031, (vmax >> 8) & 0xFF);
-    cis_write_reg(&cis->i2c, 0x3032, (vmax >> 16) & 0x0F);
-    cis_write_reg(&cis->i2c, 0x3034, hmax & 0xFF);
-    cis_write_reg(&cis->i2c, 0x3035, (hmax >> 8) & 0x1F);
-    cis_write_reg(&cis->i2c, 0x3056, y_out_size & 0xFF);
-    cis_write_reg(&cis->i2c, 0x3057, (y_out_size >> 8) & 0x1F);
-    cis_write_reg(&cis->i2c, 0x3074, area3_st & 0xFF);
-    cis_write_reg(&cis->i2c, 0x3075, (area3_st >> 8) & 0x1F);
-    cis_write_reg(&cis->i2c, 0x3076, area3_width & 0xFF);
-    cis_write_reg(&cis->i2c, 0x3077, (area3_width >> 8) & 0x1F);
+    {
+        cis_reg_cfg crop_regs[] = {
+            {0x302C, hstart & 0xFF},
+            {0x302D, (hstart >> 8) & 0x3F},
+            {0x302E, hnum & 0xFF},
+            {0x302F, (hnum >> 8) & 0x1F},
+            {IMX335_VMAX_ADDR_L, vmax & 0xFF},
+            {IMX335_VMAX_ADDR_M, (vmax >> 8) & 0xFF},
+            {IMX335_VMAX_ADDR_H, (vmax >> 16) & 0x0F},
+            {IMX335_HMAX_ADDR_L, hmax & 0xFF},
+            {IMX335_HMAX_ADDR_H, (hmax >> 8) & 0x1F},
+            {0x3056, y_out_size & 0xFF},
+            {0x3057, (y_out_size >> 8) & 0x1F},
+            {0x3074, area3_st & 0xFF},
+            {0x3075, (area3_st >> 8) & 0x1F},
+            {0x3076, area3_width & 0xFF},
+            {0x3077, (area3_width >> 8) & 0x1F},
+        };
+
+        for (i = 0; i < (td_u32)(sizeof(crop_regs) / sizeof(crop_regs[0])); i++) {
+            if (cis_write_reg(&cis->i2c, crop_regs[i].addr, crop_regs[i].data) != TD_SUCCESS) {
+                isp_err_trace("imx335 flex: crop write 0x%04x failed\n", crop_regs[i].addr);
+                return TD_FAILURE;
+            }
+        }
+    }
 
     printf("IMX335 CROP_FLEX: crop=%ux%u (HNUM=%u HSTART=%u Y_OUT=%u AREA3_ST=%u AREA3_W=%u VMAX=%u HMAX=%u fps=%.2f)\n",
         crop_w, crop_h, hnum, hstart, y_out_size, area3_st, area3_width, vmax, hmax, fps);

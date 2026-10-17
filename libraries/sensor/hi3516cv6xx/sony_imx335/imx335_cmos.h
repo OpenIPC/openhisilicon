@@ -26,6 +26,9 @@ extern "C" {
 #define IMX335_VMAX_ADDR_L     0x3030
 #define IMX335_VMAX_ADDR_M     0x3031
 #define IMX335_VMAX_ADDR_H     0x3032
+/* HMAX (13-bit: low 8 + high 5) carries the frame rate in crop modes. */
+#define IMX335_HMAX_ADDR_L     0x3034
+#define IMX335_HMAX_ADDR_H     0x3035
 #define IMX335_SHR0_LOW        0x3058
 #define IMX335_SHR0_MIDDLE     0x3059
 #define IMX335_SHR0_HIGH       0x305A
@@ -61,11 +64,16 @@ extern "C" {
 #define IMX335_WIDTH_LINEAR     2592
 #define IMX335_HEIGHT_LINEAR    1944
 
-/* 1920x1080 crop, 10-bit, 4-lane, up to 90 fps. */
+/* 1920x1080 crop, 10-bit, 4-lane, up to 90 fps.
+ * The crop's VMAX is fixed at 0x08F8 and the rate is carried by HMAX, whose
+ * 13-bit field caps the slowest expressible rate at 0x16E * 90 / 8191 = 4.02
+ * fps; the floor is rounded up so a request always maps to a valid HMAX. */
 #define IMX335_FPS_MAX_CROP     90
-#define IMX335_FPS_MIN_CROP     2.0
+#define IMX335_FPS_MIN_CROP     4.03
 #define IMX335_WIDTH_CROP       1920
 #define IMX335_HEIGHT_CROP      1080
+/* Table HMAX for the 1080p crop at IMX335_FPS_MAX_CROP. */
+#define IMX335_HMAX_1080P_CROP  (0x016E)
 
 /* 1296x972 2x2 binning 10-bit (ev200 binning_60pfs_init). */
 #define IMX335_FPS_MAX_BINNING  76
@@ -113,6 +121,16 @@ extern "C" {
 #define IMX335_CROP_H_DEFAULT      1080
 #define IMX335_FPS_MAX_FLEX        240
 #define IMX335_FPS_MIN_FLEX        2.0
+/* Flex VMAX for a crop height: the window's own frame length, which the T6 VI
+ * requires to stay put. */
+#define IMX335_FLEX_VMAX(crop_h) \
+    (((((crop_h) + 20) * 2 + 96) > IMX335_FLEX_VMAX_BASE) ? \
+     (((crop_h) + 20) * 2 + 96) : IMX335_FLEX_VMAX_BASE)
+/* Slowest rate the 13-bit HMAX can express at a given fixed VMAX. */
+#define IMX335_FLEX_MIN_FPS(vmax) \
+    ((td_float)IMX335_FLEX_CLK / ((td_float)IMX335_FLEX_HMAX_MAX * (td_float)(vmax)))
+/* Table HMAX for the 1520p crop at IMX335_FPS_MAX_1520P (min == max == 30). */
+#define IMX335_HMAX_1520P           (0x030F)
 
 /****************************************************************************
  * sensor ae configs                                                        *
