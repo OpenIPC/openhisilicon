@@ -158,8 +158,11 @@ extern "C" {
 #define INIT_EXP_DEFAULT_LINEAR   130000
 #define MAX_INT_TIME_TARGET        IMX335_FULL_LINES_MAX
 #define AE_COMENSATION_DEFAULT    0x38
-/* Black level, 12-bit raw: 0xC8 */
-#define BLACK_LEVEL_DEFAULT       200
+/* T6 ISP black level is 14-bit (ot_isp_black_level_manual_attr, Format:14.0).
+ * The sensor BLKLEVEL 0x32 is 50 in 10-bit output and 200 in 12-bit output,
+ * i.e. the same 14-bit pedestal 50<<4 = 200<<2 = 800. The ev200 driver's 200
+ * is the raw 12-bit pedestal, not the 14-bit value T6 expects. */
+#define BLACK_LEVEL_DEFAULT       0x320
 /* DNG */
 #define DNG_RAW_FORMAT_BIT_LINEAR         12
 #define DNG_RAW_FORMAT_WHITE_LEVEL_LINEAR 4095
