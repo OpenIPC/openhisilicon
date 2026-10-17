@@ -44,7 +44,9 @@ extern "C" {
         } \
     } while (0)
 
-#define SENSOR_MODE_MAX 2
+/* Up to six image modes per sensor; the imx335 driver uses all six (four
+ * pre-existing linear modes plus 2592x1520 and flexible window-crop). */
+#define SENSOR_MODE_MAX 6
 
 /* common I2C bus config */
 #define I2C_DEV_FILE_NUM     16
