@@ -101,6 +101,17 @@ static td_u32 ad_gain_table[IMX335_AD_GAIN_TBL_RANGE] = {
 
 static td_bool g_standby_cfg_init[OT_ISP_MAX_PIPE_NUM] = {0};
 
+/* Runtime AE timing, kept separately from cis->lines_per500ms (which holds the
+ * user's init_attr value and must not be overwritten by fps changes). Reset on
+ * every image-mode switch. g_imx335_crop_hmax caches the HMAX that cmos_fps_set
+ * programmed for a fixed crop mode so imx335_init() can replay it if the write
+ * happened before the I2C bus was open. */
+static td_u32 g_imx335_lines_per500ms[OT_ISP_MAX_PIPE_NUM] = {0};
+static td_u32 g_imx335_crop_hmax[OT_ISP_MAX_PIPE_NUM] = {0};
+
+static td_bool imx335_is_crop_mode(td_u8 img_mode);
+static td_u32 imx335_crop_vmax(cis_info *cis, td_u8 img_mode);
+
 /* Per-pipe crop window for IMX335_CROP_FLEX_LINEAR_MODE. Written by
  * cmos_isp_set_image_mode() from Isp_W/Isp_H and read by
  * imx335_flex_reg_init() through imx335_get_crop(). */
@@ -159,6 +170,31 @@ td_float imx335_get_flex_fps(ot_vi_pipe vi_pipe)
     return g_imx335_flex_fps[vi_pipe];
 }
 
+static td_void imx335_set_crop_hmax(ot_vi_pipe vi_pipe, td_u32 hmax)
+{
+    if (vi_pipe < 0 || vi_pipe >= OT_ISP_MAX_PIPE_NUM) {
+        return;
+    }
+    g_imx335_crop_hmax[vi_pipe] = hmax;
+}
+
+static td_u32 imx335_get_crop_hmax(ot_vi_pipe vi_pipe)
+{
+    if (vi_pipe < 0 || vi_pipe >= OT_ISP_MAX_PIPE_NUM) {
+        return 0;
+    }
+    return g_imx335_crop_hmax[vi_pipe];
+}
+
+static td_void imx335_reset_runtime_timing(ot_vi_pipe vi_pipe)
+{
+    if (vi_pipe < 0 || vi_pipe >= OT_ISP_MAX_PIPE_NUM) {
+        return;
+    }
+    g_imx335_crop_hmax[vi_pipe] = 0;
+    g_imx335_lines_per500ms[vi_pipe] = 0;
+}
+
 
 /****************************************************************************
  * common functions                                                         *
@@ -192,6 +228,10 @@ static td_void cmos_get_ae_comm_default(cis_info *cis, ot_isp_ae_sensor_default 
     td_float max_fps;
 
     lines = cis->mode_tbl[sns_state->img_mode].ver_lines;
+    if (imx335_is_crop_mode(sns_state->img_mode)) {
+        /* Flex's table entry is the 5M frame length, not the crop's. */
+        lines = imx335_crop_vmax(cis, sns_state->img_mode);
+    }
     max_fps = cis->mode_tbl[sns_state->img_mode].max_fps;
 
     ae_sns_dft->int_time_accu.accu_type = OT_ISP_AE_ACCURACY_LINEAR;
@@ -213,12 +253,14 @@ static td_void cmos_get_ae_comm_default(cis_info *cis, ot_isp_ae_sensor_default 
     ae_sns_dft->min_isp_dgain_target = ISP_DGAIN_TARGET_MIN << ae_sns_dft->isp_dgain_shift;
     ae_sns_dft->max_isp_dgain_target = ISP_DGAIN_TARGET_MAX << ae_sns_dft->isp_dgain_shift;
     (td_void)memcpy_s(&ae_sns_dft->piris_attr, sizeof(ot_isp_piris_attr), &g_piris, sizeof(ot_isp_piris_attr));
-    if (cis->lines_per500ms == 0) {
-        ae_sns_dft->lines_per500ms = (td_u32)((td_float)lines * max_fps / 2); /* div 2 */
-    } else {
+    if (cis->lines_per500ms != 0) {
+        /* User override from init_attr; not touched by runtime fps changes. */
         ae_sns_dft->lines_per500ms = cis->lines_per500ms;
+    } else if (g_imx335_lines_per500ms[cis->pipe] != 0) {
+        ae_sns_dft->lines_per500ms = g_imx335_lines_per500ms[cis->pipe];
+    } else {
+        ae_sns_dft->lines_per500ms = (td_u32)((td_float)lines * max_fps / 2); /* div 2 */
     }
-
     ae_sns_dft->max_iris_fno = OT_ISP_IRIS_F_NO_1_4;
     ae_sns_dft->min_iris_fno = OT_ISP_IRIS_F_NO_5_6;
 
@@ -334,10 +376,38 @@ static td_float imx335_crop_line_rate(const cis_info *cis, td_u8 img_mode, td_u3
     return (td_float)imx335_crop_hmax_base(img_mode) * cis->mode_tbl[img_mode].max_fps;
 }
 
+/* Frame length of a crop mode. For flex it follows the crop height; for the
+ * fixed crops mode_tbl[].ver_lines already holds the window's frame length. */
+static td_u32 imx335_crop_vmax(cis_info *cis, td_u8 img_mode)
+{
+    if (img_mode == IMX335_CROP_FLEX_LINEAR_MODE) {
+        td_u32 crop_h;
+        imx335_get_crop(cis->pipe, TD_NULL, &crop_h);
+        return IMX335_FLEX_VMAX(crop_h);
+    }
+    return cis->mode_tbl[img_mode].ver_lines;
+}
+
 static td_void imx335_config_hmax(cis_info *cis, td_u32 hmax)
 {
     (td_void)cis_write_reg(&cis->i2c, IMX335_HMAX_ADDR_L, imx335_low_8bits(hmax));
     (td_void)cis_write_reg(&cis->i2c, IMX335_HMAX_ADDR_H, (hmax >> 8) & 0x1F);
+}
+
+/* Replay the HMAX cached by cmos_fps_set() after the mode table has been
+ * written, for the fixed crop modes whose rate is not fixed by the table. */
+td_void imx335_apply_crop_hmax(cis_info *cis)
+{
+    td_u32 hmax;
+
+    if (cis == TD_NULL) {
+        return;
+    }
+    hmax = imx335_get_crop_hmax(cis->pipe);
+    if (hmax == 0) {
+        return;
+    }
+    imx335_config_hmax(cis, hmax);
 }
 
 /* the function of sensor set fps */
@@ -384,7 +454,7 @@ static td_void cmos_fps_set(ot_vi_pipe vi_pipe, td_float fps, ot_isp_ae_sensor_d
                 return;
             }
         } else {
-            vmax = lines;
+            vmax = imx335_crop_vmax(cis, sns_state->img_mode);
         }
         vmax = (vmax > lines_max) ? lines_max : vmax;
 
@@ -397,6 +467,7 @@ static td_void cmos_fps_set(ot_vi_pipe vi_pipe, td_float fps, ot_isp_ae_sensor_d
         if (hmax < IMX335_FLEX_HMAX_MIN) {
             hmax = IMX335_FLEX_HMAX_MIN;
         }
+        imx335_set_crop_hmax(vi_pipe, hmax);
         if (cis->i2c.fd >= 0) {
             imx335_config_hmax(cis, hmax);
         }
@@ -414,7 +485,7 @@ static td_void cmos_fps_set(ot_vi_pipe vi_pipe, td_float fps, ot_isp_ae_sensor_d
         sns_state->fl_std = vmax;
         ae_sns_dft->lines_per500ms = (td_u32)(lines * max_fps / 2); /* div 2 */
     }
-    cis->lines_per500ms = ae_sns_dft->lines_per500ms;
+    g_imx335_lines_per500ms[vi_pipe] = ae_sns_dft->lines_per500ms;
 
     ae_sns_dft->fps = fps;
     ae_sns_dft->full_lines_std = sns_state->fl_std;
@@ -455,7 +526,8 @@ static td_void cmos_slow_framerate_set(ot_vi_pipe vi_pipe, td_u32 full_lines, ot
          * keep the window's frame length and report the limits from it, so
          * AE does not compute exposure against a length the sensor is not
          * using. */
-        vmax = (lines > lines_max) ? lines_max : lines;
+        vmax = imx335_crop_vmax(cis, sns_state->img_mode);
+        vmax = (vmax > lines_max) ? lines_max : vmax;
         sns_state->fl[0] = vmax;
         cmos_config_vmax(sns_state, vmax);
         if (sns_state->wdr_mode == OT_WDR_MODE_NONE) {
@@ -1033,7 +1105,6 @@ static td_s32 cmos_isp_get_standby_cfg(ot_vi_pipe vi_pipe, ot_isp_sns_regs_info 
 static td_void cmos_isp_config_image_mode_param(ot_vi_pipe vi_pipe, td_u8 sns_image_mode,
     ot_isp_sns_state *sns_state)
 {
-    ot_unused(vi_pipe);
     switch (sns_image_mode) {
         case IMX335_60FPS_BINNING_MODE:
             sns_state->fl_std = IMX335_VMAX_BINNING;
@@ -1044,9 +1115,13 @@ static td_void cmos_isp_config_image_mode_param(ot_vi_pipe vi_pipe, td_u8 sns_im
         case IMX335_1520P_10BIT_MODE:
             sns_state->fl_std = IMX335_VMAX_CROPPED_1520P;
             break;
-        case IMX335_CROP_FLEX_LINEAR_MODE:
-            sns_state->fl_std = IMX335_VMAX_5M_30FPS_12BIT_LINEAR;
+        case IMX335_CROP_FLEX_LINEAR_MODE: {
+            cis_info *cis = cmos_get_info(vi_pipe);
+            sns_state->fl_std = (cis != TD_NULL) ?
+                imx335_crop_vmax(cis, IMX335_CROP_FLEX_LINEAR_MODE) :
+                IMX335_VMAX_5M_30FPS_12BIT_LINEAR;
             break;
+        }
         case IMX335_60FPS_FULL_1944P_MODE:
         case IMX335_5M_30FPS_12BIT_LINEAR_MODE:
         default:
@@ -1061,6 +1136,7 @@ static td_s32 cmos_isp_set_image_mode(ot_vi_pipe vi_pipe, const ot_isp_cmos_sns_
 
     td_u32 i;
     td_u8 image_mode;
+    td_bool force_switch = TD_FALSE;
     cis_info *cis = TD_NULL;
     ot_isp_sns_state *sns_state = TD_NULL;
 
@@ -1082,6 +1158,9 @@ static td_s32 cmos_isp_set_image_mode(ot_vi_pipe vi_pipe, const ot_isp_cmos_sns_
         sns_state->wdr_mode == OT_WDR_MODE_NONE) {
         td_u32 crop_w = sns_image_mode->width;
         td_u32 crop_h = sns_image_mode->height;
+        td_u32 old_w = 0;
+        td_u32 old_h = 0;
+        td_float old_fps = 0.0f;
 
         /* imx335_flex_reg_init() snaps W to a multiple of 24 and H to a
          * multiple of 4. Refuse a window that would be changed, rather than
@@ -1112,8 +1191,15 @@ static td_s32 cmos_isp_set_image_mode(ot_vi_pipe vi_pipe, const ot_isp_cmos_sns_
                 return TD_FAILURE;
             }
         }
+        imx335_get_crop(vi_pipe, &old_w, &old_h);
+        old_fps = imx335_get_flex_fps(vi_pipe);
         imx335_set_crop(vi_pipe, crop_w, crop_h);
         imx335_set_flex_fps(vi_pipe, sns_image_mode->fps);
+        /* A different window or rate must re-run imx335_flex_reg_init(); the
+         * image-mode enum alone does not change, so flag a forced switch. */
+        if (old_w != crop_w || old_h != crop_h || old_fps != sns_image_mode->fps) {
+            force_switch = TD_TRUE;
+        }
         image_mode = IMX335_CROP_FLEX_LINEAR_MODE;
     }
 
@@ -1124,7 +1210,8 @@ static td_s32 cmos_isp_set_image_mode(ot_vi_pipe vi_pipe, const ot_isp_cmos_sns_
         sns_image_mode->sns_mode != IMX335_CROP_FLEX_LINEAR_MODE) {
         td_u8 hint = sns_image_mode->sns_mode;
         if (sns_state->wdr_mode == cis->mode_tbl[hint].wdr_mode &&
-            sns_image_mode->fps <= cis->mode_tbl[hint].max_fps) {
+            sns_image_mode->fps <= cis->mode_tbl[hint].max_fps &&
+            sns_image_mode->fps >= cis->mode_tbl[hint].min_fps) {
             image_mode = hint;
         }
     }
@@ -1136,6 +1223,7 @@ static td_s32 cmos_isp_set_image_mode(ot_vi_pipe vi_pipe, const ot_isp_cmos_sns_
         if (sns_image_mode->width == cis->mode_tbl[i].width &&
             sns_image_mode->height == cis->mode_tbl[i].height &&
             sns_image_mode->fps <= cis->mode_tbl[i].max_fps &&
+            sns_image_mode->fps >= cis->mode_tbl[i].min_fps &&
             sns_state->wdr_mode == cis->mode_tbl[i].wdr_mode) {
             image_mode = (td_u8)i;
         }
@@ -1148,6 +1236,7 @@ static td_s32 cmos_isp_set_image_mode(ot_vi_pipe vi_pipe, const ot_isp_cmos_sns_
         if (sns_image_mode->width <= cis->mode_tbl[i].width &&
             sns_image_mode->height <= cis->mode_tbl[i].height &&
             sns_image_mode->fps <= cis->mode_tbl[i].max_fps &&
+            sns_image_mode->fps >= cis->mode_tbl[i].min_fps &&
             sns_state->wdr_mode == cis->mode_tbl[i].wdr_mode) {
             image_mode = (td_u8)i;
         }
@@ -1160,10 +1249,14 @@ static td_s32 cmos_isp_set_image_mode(ot_vi_pipe vi_pipe, const ot_isp_cmos_sns_
 
     cmos_isp_config_image_mode_param(vi_pipe, image_mode, sns_state);
 
-    if ((sns_state->init == TD_TRUE) && (image_mode == sns_state->img_mode)) {
+    if ((sns_state->init == TD_TRUE) && (image_mode == sns_state->img_mode) &&
+        (force_switch != TD_TRUE)) {
         return OT_ISP_DO_NOT_NEED_SWITCH_IMAGEMODE;
     }
 
+    /* New mode (or new flex window): drop the previous mode's runtime timing
+     * so AE defaults are computed for the mode actually programmed. */
+    imx335_reset_runtime_timing(vi_pipe);
     sns_state->sync_init = TD_FALSE;
     sns_state->img_mode = image_mode;
     sns_state->fl[0] = sns_state->fl_std;
@@ -1293,7 +1386,10 @@ static td_void cmos_isp_set_pixel_detect(ot_vi_pipe vi_pipe, td_bool enable)
         return;
     } else if (sns_state->img_mode < IMX335_MODE_MAX &&
                cis->mode_tbl[sns_state->img_mode].wdr_mode == OT_WDR_MODE_NONE) {
-        full_lines_5fps = (td_u32)(cis->mode_tbl[sns_state->img_mode].ver_lines *
+        td_u32 lines = imx335_is_crop_mode(sns_state->img_mode) ?
+            imx335_crop_vmax(cis, sns_state->img_mode) :
+            cis->mode_tbl[sns_state->img_mode].ver_lines;
+        full_lines_5fps = (td_u32)(lines *
                                    cis->mode_tbl[sns_state->img_mode].max_fps / 5);
     } else {
         return;
@@ -1400,11 +1496,11 @@ static void cmos_standby(ot_vi_pipe vi_pipe)
     td_s32 ret = TD_SUCCESS;
     cis_info *cis = TD_NULL;
 
+    sns_check_pipe_void_return(vi_pipe);
+
     if (g_standby_cfg_init[vi_pipe] == TD_TRUE) {
         return;
     }
-
-    sns_check_pipe_void_return(vi_pipe);
 
     cis = cmos_get_info(vi_pipe);
     sns_check_pointer_void_return(cis);

@@ -226,6 +226,11 @@ td_s32 imx335_init(cis_info *cis)
     }
 
     ret = imx335_reg_init(cis, cfg, len);
+    if (ret == TD_SUCCESS &&
+        (sns_state->img_mode == IMX335_60FPS_CROPPED_1080P_MODE ||
+         sns_state->img_mode == IMX335_1520P_10BIT_MODE)) {
+        imx335_apply_crop_hmax(cis);
+    }
 
 init_done:
     if (ret != TD_SUCCESS) {

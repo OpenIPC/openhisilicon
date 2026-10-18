@@ -90,15 +90,13 @@ extern "C" {
 #define IMX335_VMAX_FULL_10BIT  (0x1194)
 
 /* 2592x1520 10-bit cropped, 16:9 (ev200 IMX335_cropped_41fps_2592_1520_init).
- * The T6 VI requires cropping-mode VMAX to stay at the table's own frame
- * length: the 1080p crop streams at VMAX 2296 but yields no frames once
- * cmos_fps_set scales VMAX up (2296 works at 90fps, 2583 fails at 80fps),
- * while the mode's frame rate can instead be set with HMAX. This table's HMAX
- * is 0x030F (74.25MHz/783 = 94828 lines/s), giving 30fps at VMAX 0x0C58.
- * ver_lines == VMAX == max_fps == min_fps == 30, so cmos_fps_set writes the
- * table VMAX back unchanged. */
+ * Like the other crop modes, VMAX stays at the window's frame length (0x0C58)
+ * and the frame rate is carried by HMAX = HMAX_30 * 30 / fps, so the table HMAX
+ * 0x030F (783) is scaled rather than VMAX. The reported minimum is the slowest
+ * rate the 13-bit HMAX can express at this VMAX: 74.25MHz/(8191*0x0C58) = 2.87
+ * fps, rounded up. */
 #define IMX335_FPS_MAX_1520P    30
-#define IMX335_FPS_MIN_1520P    30.0
+#define IMX335_FPS_MIN_1520P    2.87
 #define IMX335_WIDTH_1520P      2592
 #define IMX335_HEIGHT_1520P     1520
 #define IMX335_VMAX_CROPPED_1520P  (0x0C58)
@@ -234,6 +232,9 @@ td_void imx335_get_crop(ot_vi_pipe vi_pipe, td_u32 *width, td_u32 *height);
 /* Requested frame rate for the flex crop, used to derive HMAX at init. */
 td_void imx335_set_flex_fps(ot_vi_pipe vi_pipe, td_float fps);
 td_float imx335_get_flex_fps(ot_vi_pipe vi_pipe);
+/* Re-apply the HMAX cached by cmos_fps_set() for a fixed crop mode after the
+ * mode table has been written (in case the write happened before I2C was up). */
+td_void imx335_apply_crop_hmax(cis_info *cis);
 
 ot_isp_sns_obj *imx335_get_obj(td_void);
 
