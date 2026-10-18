@@ -331,6 +331,12 @@ jobs:
           fi
           echo "ok: open_osal.ko exports the SDK's $(wc -l < osal-exports.txt) symbols"
 
+          # The SDK's vdec refuses every frame on revision-2 chips unless its
+          # three chip-revision branches are made unconditional
+          # (scripts/hi3536dv100-vdec-revfix.sh); a vdec.o regenerated from
+          # the SDK without that step would load and silently never decode.
+          scripts/hi3536dv100-vdec-revfix.sh "${NM%nm}readelf" "$GITHUB_WORKSPACE/kernel/open_vdec.ko" --check
+
       # ive_neo ships on platforms whose IVE block is reachable from this
       # driver — currently V4 (hi3516ev200/gk7205v200, fused IVE+NEO) and
       # CV500 (classic IVE only, XNN gated off). Catch silent regressions

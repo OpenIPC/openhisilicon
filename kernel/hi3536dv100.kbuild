@@ -33,6 +33,14 @@
 #     scripts/ko2obj.sh arm-openipc-linux-gnueabi-objcopy hi3536dv100 \
 #       mpp/ko/$f kernel/obj/hi3536dv100/$m.o
 #   done
+#   scripts/hi3536dv100-vdec-revfix.sh arm-openipc-linux-gnueabi-readelf \
+#     kernel/obj/hi3536dv100/vdec.o
+#
+# The last step matters: the SDK's vdec refuses every frame on revision-2
+# chips (it reads 0x12060024 and takes its normal path only for 0 or 1), so
+# without it open_vdec loads, accepts streams and never decodes a picture on
+# those boards. The script makes those three branches unconditional; see its
+# header. CI checks that the committed vdec.o carries the change.
 #
 # Not here, by design:
 #   - libmpi and the other userspace libraries: closed, and they stay in
