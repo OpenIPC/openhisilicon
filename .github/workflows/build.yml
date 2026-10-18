@@ -1112,11 +1112,16 @@ jobs:
             mem: 128M
             known_late_init_failure: "open_rgn RGN_Init oops (#227)"
             append: "console=ttyAMA0,115200 earlyprintk mem=96M root=/dev/ram0 rootfstype=squashfs mmz_allocator=hisi mmz=anonymous,0,0x46000000,32M"
+          # gk7205v200 boots the layout real boards ship: 64 MB of DDR,
+          # mem=32M, the MMZ in the other 32M. The image has no U-Boot
+          # environment, so load_goke takes its totalmem default of 64M, and
+          # since OpenIPC/firmware#2623 it trusts the kernel's mem= over osmem;
+          # mem=96M on 128M then reads as more OS memory than the board has.
           - machine: gk7205v200
             firmware: gk7205v200
-            mem: 128M
+            mem: 64M
             known_late_init_failure: "open_rgn RGN_Init oops (#227)"
-            append: "console=ttyAMA0,115200 earlyprintk mem=96M root=/dev/ram0 rootfstype=squashfs mmz_allocator=hisi mmz=anonymous,0,0x46000000,32M"
+            append: "console=ttyAMA0,115200 earlyprintk mem=32M root=/dev/ram0 rootfstype=squashfs mmz_allocator=hisi mmz=anonymous,0,0x42000000,32M"
           # hi3516ev300_neo board (V4 + CMA). The bootargs match what the
           # production U-Boot passes: mem=<totalmem> with mmz_allocator=cma
           # and the MMZ chunk CMA-reserved within that range. The cmdline
