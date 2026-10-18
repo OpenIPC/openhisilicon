@@ -1304,6 +1304,15 @@ void i2s0_pin_mux_xm72050300(void)
     SYS_WRITEL(reg_iocfg_core_base + 0x0020, 0x1D35); /* I2S_SD_TX */
 }
 
+/*
+ * Not called from pinmux(): GPIO1_0, which this drives high, is one leg of the
+ * IR-cut filter on Xiongmai boards (GPIO1_0/GPIO1_1), and holding it high
+ * energises the coil from module load until the streamer sets the IR-cut pins
+ * -- about 12 s per boot on a gk7201v200 + mis2008, and for good on a camera
+ * whose IR-cut pins are not configured yet, which burns the filter. A speaker
+ * amplifier is the streamer's to drive (audio.speakerPin). The gk7205v200 tree
+ * dropped the same call for the same reason.
+ */
 void amp_unmute_mux_xm72050200_demo(void)
 {
     SYS_WRITEL(reg_iocfg_core_base + 0x0000, 0x1000); /* 0x0:GPIO1_0(now), 0x1:LSADC_CH0 */
@@ -1375,7 +1384,7 @@ int pinmux(const char *chip_name, const char *board, const int cmos_yuv_flag)
             }
 
             /*audio*/
-            amp_unmute_mux_xm72050200_demo();
+            // amp_unmute_mux_xm72050200_demo();
         }
         else if (0 == strncmp("sck", board, BOARD_NAME_LEN))
         {
@@ -1390,7 +1399,7 @@ int pinmux(const char *chip_name, const char *board, const int cmos_yuv_flag)
             //vo_8bit_lcd_for_sckb_mux_xm72050200();
 
             /*audio*/
-            amp_unmute_mux_xm72050200_demo();
+            // amp_unmute_mux_xm72050200_demo();
             //aic31_reset_xm72050200_sck();
             //i2c1_for_aic31_pin_mux_xm72050200();
             //i2s0_pin_mux_xm72050200();
@@ -1414,7 +1423,7 @@ int pinmux(const char *chip_name, const char *board, const int cmos_yuv_flag)
             }
 
             /*audio*/
-            amp_unmute_mux_xm72050200_demo();
+            // amp_unmute_mux_xm72050200_demo();
         }
         else if (0 == strncmp("sck", board, BOARD_NAME_LEN))
         {
@@ -1425,7 +1434,7 @@ int pinmux(const char *chip_name, const char *board, const int cmos_yuv_flag)
             i2c2_pin_mux();
 
             /*audio*/
-            amp_unmute_mux_xm72050200_demo();
+            // amp_unmute_mux_xm72050200_demo();
             //aic31_reset_xm72050200_sck();
             //i2c1_for_aic31_pin_mux_xm72050200();
             //i2s0_pin_mux_xm72050200();
@@ -1463,7 +1472,7 @@ int pinmux(const char *chip_name, const char *board, const int cmos_yuv_flag)
             }
 
             /*audio*/
-            amp_unmute_mux_xm72050200_demo();
+            // amp_unmute_mux_xm72050200_demo();
         }
         else if (0 == strncmp("sck", board, BOARD_NAME_LEN))
         {
