@@ -215,7 +215,7 @@ sensor driver found online came from — see
 | | IMX323 | | | | x | | | | |
 | | IMX326 | | | | | x | | | |
 | | IMX327 | | | | | x | x | x | |
-| | IMX335 | | | | | | x | x | |
+| | IMX335 | | | | | | x | x | x |
 | | IMX385 | | | | x | x | | | |
 | | IMX390 | | | | | | x | | |
 | | IMX415 | | | | | | x | | |
