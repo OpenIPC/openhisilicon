@@ -10,7 +10,7 @@
  * clash with this file's own definitions.
  */
 #ifdef CONFIG_CMA
-extern void bsp_cma_dma_remap(struct page *page, size_t size, pgprot_t prot);
+extern int bsp_cma_dma_remap(struct page *page, size_t size, pgprot_t prot);
 #endif
 #include "ot_common.h"
 #include "securec.h"
@@ -152,6 +152,7 @@ static void *allocator_mmb_map2kern(ot_mmb_t *mmb, int cached)
 {
     pgprot_t prot;
     struct page *phys_page = phys_to_page(mmb->phys_addr);
+    int ret;
 
     if (mmb->flags & OT_MMB_MAP2KERN) {
         if ((!!cached * OT_MMB_MAP2KERN_CACHED) != (mmb->flags & OT_MMB_MAP2KERN_CACHED)) {
@@ -181,7 +182,12 @@ static void *allocator_mmb_map2kern(ot_mmb_t *mmb, int cached)
         prot = pgprot_writecombine(pgprot_kernel);
     }
 #ifdef CONFIG_CMA
-    bsp_cma_dma_remap(phys_page, mmb->length, prot);
+    ret = bsp_cma_dma_remap(phys_page, mmb->length, prot);
+    if (ret != 0) {
+        mmz_err_trace("mmb[0x%lx, 0x%lx] remap to kernel failed: %d\n",
+            mmb->phys_addr, mmb->length, ret);
+        return NULL;
+    }
 #endif
 #endif
     /* Map into vmalloc space */
