@@ -35,6 +35,12 @@ jobs:
             board: hi3519v101_lite
           - platform: hi3519dv500
             board: hi3519dv500_ultimate
+          # The cv6xx kernel has CONFIG_CMA=y: open_mmz must link against
+          # what it exports (openhisilicon#275), so modpost's "undefined!"
+          # fails this row.
+          - platform: hi3516cv6xx
+            board: hi3516cv6xx_ultimate
+            strict_symbols: true
           # Kernel modules only: firmware's hisilicon-opensdk does not build
           # this family yet, so the kernel comes from firmware and kernel/ is
           # built against it directly.
@@ -263,11 +269,22 @@ jobs:
       - name: Build OpenHisilicon
         if: matrix.kmod_only != true
         run: |
+          set -o pipefail
           cd ../firmware
           FILE=general/package/hisilicon-opensdk/hisilicon-opensdk.mk
           sed -i "s|^HISILICON_OPENSDK_SITE =.*|HISILICON_OPENSDK_SITE_METHOD = local\nHISILICON_OPENSDK_SITE = $GITHUB_WORKSPACE|" ${FILE}
           sed -i "s|^HISILICON_OPENSDK_VERSION =.*||" ${FILE}
-          CMAKE_POLICY_VERSION_MINIMUM=3.5 make BOARD=${{matrix.board}} br-hisilicon-opensdk
+          CMAKE_POLICY_VERSION_MINIMUM=3.5 make BOARD=${{matrix.board}} br-hisilicon-opensdk 2>&1 | tee opensdk.log
+          # As for kmod_only below: modpost only warns about an import nothing
+          # exports, and the module then fails to load on the camera.
+          # open_uvc.ko is left out: load_hisilicon never loads it, and its
+          # uvc_recv_pack has no provider yet.
+          if [ "${{ matrix.strict_symbols }}" = true ] &&
+             grep 'undefined!' opensdk.log | grep -v '/open_uvc\.ko\]' > undefined.log; then
+            echo "FAIL: unresolved symbols in ${{ matrix.platform }} modules" >&2
+            cat undefined.log >&2
+            exit 1
+          fi
 
       # A family whose firmware package does not exist yet still gets its
       # modules built against the real board kernel. modpost reports an import

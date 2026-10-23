@@ -9,6 +9,17 @@
 #include "mmz_common.h"
 #include "allocator.h"
 
+/*
+ * openipc/linux's vendored CMA layer (drivers/vendor/cma) defines struct
+ * cma_zone and, since openhisilicon#275, cma_dma_remap(). The private copy
+ * below stands in for a kernel without that header; on cv6xx (arm32, no
+ * LPAE) it has the same layout.
+ */
+#if __has_include(<linux/bsp_cma.h>)
+#include <linux/bsp_cma.h>
+#endif
+
+#if !defined(__BSP_CMA_H__) || !defined(CONFIG_ARCH_BSP)
 struct cma_zone {
     struct device pdev;
     char name[NAME_LEN_MAX];
@@ -18,6 +29,7 @@ struct cma_zone {
     unsigned int alloc_type;
     unsigned long block_align;
 };
+#endif
 
 long long max_malloc_size = 0x40000000UL;
 
@@ -31,36 +43,23 @@ void dma_clear_buffer(struct page *page, size_t size)
 
 #ifdef CONFIG_CMA
 /*
- * pte_fn_t lost the `struct page *` argument upstream around 5.0 (commit
- * 8b1e0f81fb01) and the openipc/linux 5.10.221 branch we build against
- * has the slim 3-arg form. Vendor source ships the legacy 4-arg
- * signature; rewrite to derive the page from the PTE so we match
- * `pte_fn_t = int (*)(pte_t *, unsigned long, void *)`.
- *
- * The dma_remap block is gated on CONFIG_CMA because openipc/linux
- * 5.10.221 builds CV610 with CMA disabled (mmz_allocator=ot is the
- * boot-time default), so apply_to_page_range / init_mm /
- * flush_tlb_kernel_range stay unreferenced and the module loads
- * without GPL-only symbol gaps.
+ * Give the linear mapping of an MMB the attributes of the vmap alias made
+ * for it next, so its pages are not mapped cacheable and non-cached at
+ * once. That needs init_mm and flush_tlb_kernel_range(), which ARM does not
+ * export to modules, so the kernel does it in cma_dma_remap(). A kernel
+ * without the helper gets no remap, as on cv300, rather than a module that
+ * will not load (openhisilicon#275).
  */
-static int dma_update_pte(pte_t *pte, unsigned long addr, void *data)
-{
-    struct page *page = virt_to_page(addr);
-
-    pgprot_t prot = *(pgprot_t*)data;
-
-    set_pte_ext(pte, mk_pte(page, prot), 0);
-    return 0;
-}
-
 static void dma_remap(struct page *page, size_t size, pgprot_t prot)
 {
-    unsigned long start = (unsigned long)page_address(page);
-    unsigned end = start + size;
-
-    apply_to_page_range(&init_mm, start, size, dma_update_pte, &prot);
-    dsb();
-    flush_tlb_kernel_range(start, end);
+#ifdef BSP_CMA_HAS_DMA_REMAP
+    if (cma_dma_remap(page, size, prot) != 0)
+        mmz_err_trace("remap of 0x%lx bytes at page %p failed\n", (unsigned long)size, page);
+#else
+    ot_unused(page);
+    ot_unused(size);
+    ot_unused(prot);
+#endif
 }
 #endif /* CONFIG_CMA */
 #endif /* !CONFIG_64BIT */
@@ -310,7 +309,8 @@ static int allocator_init_parse_args(ot_mmz_t **zone, int argc, char **argv, str
     }
 
     mmz_printk(KERN_INFO "cmz zone gfp 0x%lx, phys 0x%lx, nbytes 0x%lx\n",
-        cma_area->gfp, cma_area->phys_start, cma_area->nbytes);
+        (unsigned long)cma_area->gfp, (unsigned long)cma_area->phys_start,
+        (unsigned long)cma_area->nbytes);
     mmz_zone->gfp        = cma_area->gfp;
     mmz_zone->phys_start = cma_area->phys_start;
     mmz_zone->nbytes     = cma_area->nbytes;
