@@ -50,15 +50,19 @@ void dma_clear_buffer(struct page *page, size_t size)
  * without the helper gets no remap, as on cv300, rather than a module that
  * will not load (openhisilicon#275).
  */
-static void dma_remap(struct page *page, size_t size, pgprot_t prot)
+static int dma_remap(struct page *page, size_t size, pgprot_t prot)
 {
 #ifdef BSP_CMA_HAS_DMA_REMAP
-    if (cma_dma_remap(page, size, prot) != 0)
-        mmz_err_trace("remap of 0x%lx bytes at page %p failed\n", (unsigned long)size, page);
+    int ret = cma_dma_remap(page, size, prot);
+
+    if (ret != 0)
+        mmz_err_trace("remap of 0x%lx bytes at page %p failed (%d)\n", (unsigned long)size, page, ret);
+    return ret;
 #else
     ot_unused(page);
     ot_unused(size);
     ot_unused(prot);
+    return 0;
 #endif
 }
 #endif /* CONFIG_CMA */
@@ -212,7 +216,9 @@ static void *allocator_mmb_map2kern(ot_mmb_t *mmb, int cached)
         prot = pgprot_writecombine(pgprot_kernel);
     }
 #ifdef CONFIG_CMA
-    dma_remap(phys_page, mmb->length, prot);
+    /* no alias whose attributes the linear mapping does not share */
+    if (dma_remap(phys_page, mmb->length, prot) != 0)
+        return NULL;
 #endif
 #endif
     /* Map into vmalloc space */
@@ -231,6 +237,7 @@ static void *allocator_mmb_map2kern(ot_mmb_t *mmb, int cached)
 static int allocator_mmb_unmap(ot_mmb_t *mmb)
 {
     int ref;
+    int noncached = !(mmb->flags & OT_MMB_MAP2KERN_CACHED);
 
     if (mmb->flags & OT_MMB_MAP2KERN_CACHED) {
         osal_dcache_region_wb((void *)mmb->kvirt, mmb->phys_addr, mmb->length);
@@ -247,6 +254,17 @@ static int allocator_mmb_unmap(ot_mmb_t *mmb)
     {
         vunmap(mmb->kvirt);
     }
+#if !defined(CONFIG_64BIT) && defined(CONFIG_CMA)
+    /*
+     * map2kern made the linear mapping non-cached. Give it back cacheable,
+     * as arch/arm's DMA code does on free: once released, CMA lends these
+     * pages to the kernel, which would otherwise run on uncached memory.
+     */
+    if (noncached)
+        (void)dma_remap(phys_to_page(mmb->phys_addr), mmb->length, pgprot_kernel);
+#else
+    ot_unused(noncached);
+#endif
     mmb->kvirt = NULL;
     mmb->flags &= ~OT_MMB_MAP2KERN;
     mmb->flags &= ~OT_MMB_MAP2KERN_CACHED;
