@@ -434,10 +434,11 @@ static td_void cmos_isp_get_dng_default(const ot_isp_sns_state *sns_state, ot_is
     isp_def->sns_mode.dng_raw_format.cfa_plane_color[0] = 0;
     isp_def->sns_mode.dng_raw_format.cfa_plane_color[1] = 1;
     isp_def->sns_mode.dng_raw_format.cfa_plane_color[2] = 2; /* index 2, cfa_plane_color 2 */
-    isp_def->sns_mode.dng_raw_format.cfa_pattern[0] = 0;
+    /* BGGR, as the init leaves the sensor (0x5e = 0x32, first pixel B) */
+    isp_def->sns_mode.dng_raw_format.cfa_pattern[0] = 2;
     isp_def->sns_mode.dng_raw_format.cfa_pattern[1] = 1;
     isp_def->sns_mode.dng_raw_format.cfa_pattern[2] = 1; /* index 2, cfa_pattern 1 */
-    isp_def->sns_mode.dng_raw_format.cfa_pattern[3] = 2; /* index 3, cfa_pattern 2 */
+    isp_def->sns_mode.dng_raw_format.cfa_pattern[3] = 0; /* index 3, cfa_pattern 0 */
     isp_def->sns_mode.valid_dng_raw_format = TD_TRUE;
 }
 
