@@ -291,6 +291,17 @@ jobs:
       # modules load. The kernel and modules this row built are booted under
       # qemu-hisilicon on the release rootfs, on both allocators, and open_mmz
       # must load (openhisilicon#275).
+      # Unconditional: a cached qemu-system-arm still needs the libraries
+      # (libfdt, pixman, slirp, glib) at run time.
+      - name: Install QEMU deps
+        if: matrix.qemu_machine
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential ninja-build meson pkg-config \
+            libglib2.0-dev libpixman-1-dev libfdt-dev zlib1g-dev libslirp-dev \
+            python3 python3-venv squashfs-tools
+
       - name: Clone qemu-hisilicon
         if: matrix.qemu_machine
         run: |
@@ -308,11 +319,6 @@ jobs:
       - name: Build QEMU (if cache miss)
         if: matrix.qemu_machine && steps.cache-qemu.outputs.cache-hit != 'true'
         run: |
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends \
-            build-essential ninja-build meson pkg-config \
-            libglib2.0-dev libpixman-1-dev libfdt-dev zlib1g-dev libslirp-dev \
-            python3 python3-venv
           cd /tmp/qemu-hisilicon
           bash qemu/setup.sh
 
@@ -320,7 +326,6 @@ jobs:
         if: matrix.qemu_machine
         timeout-minutes: 12
         run: |
-          sudo apt-get install -y --no-install-recommends squashfs-tools
           FW=$PWD/../firmware/output
           mkdir -p /tmp/openipc && cd /tmp/openipc
           sh "$GITHUB_WORKSPACE/.github/fetch-firmware.sh" ${{ matrix.platform }} ultimate

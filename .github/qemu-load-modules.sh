@@ -11,6 +11,7 @@
 set -euo pipefail
 
 qemu=$1 machine=$2 kernel=$3 rootfs=$4 moddir=$5 allocator=$6
+"$qemu" --version >/dev/null || { echo "FAIL: $qemu does not run" >&2; exit 1; }
 work=$(mktemp -d)
 trap 'sudo rm -rf "$work"' EXIT
 
