@@ -31,6 +31,9 @@ end = 64 + struct.unpack_from(">I", data, 12)[0]  # header + ih_size
 sq = (end + 0xFFFF) & ~0xFFFF
 assert data[sq:sq + 4] == b"hsqs", f"no squashfs at 0x{sq:x}"
 used, = struct.unpack_from("<Q", data, sq + 40)       # bytes_used
+# A short image must fail here, not as a truncated file at boot.
+assert sq + used <= len(data), \
+    f"squashfs needs 0x{sq + used:x} bytes, firmware.bin.{fw} has 0x{len(data):x}"
 open(f"uImage.{fw}", "wb").write(data[:end])
 open(f"rootfs.squashfs.{fw}", "wb").write(data[sq:sq + used])
 print(f"uImage.{fw}: {end} bytes, rootfs.squashfs.{fw}: {used} bytes at 0x{sq:x}")
