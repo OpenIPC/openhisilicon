@@ -4,6 +4,14 @@
 
 #include <asm/cacheflush.h>
 #include <linux/version.h>
+/*
+ * Provided by the kernel CMA support (openipc/linux, bsp_cma). Keeping the
+ * prototype local avoids pulling in bsp_cma.h, whose cma_zone/get_cma_zone
+ * clash with this file's own definitions.
+ */
+#ifdef CONFIG_CMA
+extern void bsp_cma_dma_remap(struct page *page, size_t size, pgprot_t prot);
+#endif
 #include "ot_common.h"
 #include "securec.h"
 #include "mmz_common.h"
@@ -29,40 +37,6 @@ void dma_clear_buffer(struct page *page, size_t size)
     return;
 }
 
-#ifdef CONFIG_CMA
-/*
- * pte_fn_t lost the `struct page *` argument upstream around 5.0 (commit
- * 8b1e0f81fb01) and the openipc/linux 5.10.221 branch we build against
- * has the slim 3-arg form. Vendor source ships the legacy 4-arg
- * signature; rewrite to derive the page from the PTE so we match
- * `pte_fn_t = int (*)(pte_t *, unsigned long, void *)`.
- *
- * The dma_remap block is gated on CONFIG_CMA because openipc/linux
- * 5.10.221 builds CV610 with CMA disabled (mmz_allocator=ot is the
- * boot-time default), so apply_to_page_range / init_mm /
- * flush_tlb_kernel_range stay unreferenced and the module loads
- * without GPL-only symbol gaps.
- */
-static int dma_update_pte(pte_t *pte, unsigned long addr, void *data)
-{
-    struct page *page = virt_to_page(addr);
-
-    pgprot_t prot = *(pgprot_t*)data;
-
-    set_pte_ext(pte, mk_pte(page, prot), 0);
-    return 0;
-}
-
-static void dma_remap(struct page *page, size_t size, pgprot_t prot)
-{
-    unsigned long start = (unsigned long)page_address(page);
-    unsigned end = start + size;
-
-    apply_to_page_range(&init_mm, start, size, dma_update_pte, &prot);
-    dsb();
-    flush_tlb_kernel_range(start, end);
-}
-#endif /* CONFIG_CMA */
 #endif /* !CONFIG_64BIT */
 
 static ot_mmb_t *allocator_mmb_alloc(const ot_mmz_alloc_para_in *para_in)
@@ -204,10 +178,10 @@ static void *allocator_mmb_map2kern(ot_mmb_t *mmb, int cached)
         prot = pgprot_kernel;
     } else {
         mmb->flags &= ~OT_MMB_MAP2KERN_CACHED;
-        prot = pgprot_noncached(pgprot_kernel);
+        prot = pgprot_writecombine(pgprot_kernel);
     }
 #ifdef CONFIG_CMA
-    dma_remap(phys_page, mmb->length, prot);
+    bsp_cma_dma_remap(phys_page, mmb->length, prot);
 #endif
 #endif
     /* Map into vmalloc space */
@@ -267,7 +241,7 @@ static void *allocator_mmf_map(phys_addr_t phys, int len, int cache)
     if (cache) {
         prot = pgprot_kernel;
     } else {
-        prot = pgprot_noncached(pgprot_kernel);
+        prot = pgprot_writecombine(pgprot_kernel);
     }
 #endif
 
