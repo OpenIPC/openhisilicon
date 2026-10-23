@@ -203,7 +203,13 @@ static void *allocator_mmb_map2kern(ot_mmb_t *mmb, int cached)
         prot = pgprot_kernel;
     } else {
         mmb->flags &= ~OT_MMB_MAP2KERN_CACHED;
-        prot = pgprot_noncached(pgprot_kernel);
+        /*
+         * Normal non-cacheable, as ot_allocator's ioremap_wc() and arm64's
+         * PROT_NORMAL_NC. pgprot_noncached() is strongly-ordered on ARM, and
+         * the closed VENC reads bind descriptors with unaligned ldr.w, which
+         * faults there whatever SCTLR.A says (#238 on gk7205v500).
+         */
+        prot = pgprot_writecombine(pgprot_kernel);
     }
 #ifdef CONFIG_CMA
     dma_remap(phys_page, mmb->length, prot);
@@ -266,7 +272,7 @@ static void *allocator_mmf_map(phys_addr_t phys, int len, int cache)
     if (cache) {
         prot = pgprot_kernel;
     } else {
-        prot = pgprot_noncached(pgprot_kernel);
+        prot = pgprot_writecombine(pgprot_kernel); /* as in map2kern above */
     }
 #endif
 
