@@ -875,10 +875,7 @@ jobs:
         run: |
           mkdir -p /tmp/openipc
           cd /tmp/openipc
-          curl -sSLf -o fw.tgz \
-            https://github.com/OpenIPC/firmware/releases/download/latest/openipc.${{ matrix.platform.firmware }}-nor-lite.tgz
-          tar xzf fw.tgz
-          ls uImage.${{ matrix.platform.firmware }}
+          sh "$GITHUB_WORKSPACE/.github/fetch-firmware.sh" ${{ matrix.platform.firmware }} lite
 
       - name: Run IVE register regression under QEMU
         timeout-minutes: 3
@@ -992,10 +989,7 @@ jobs:
         run: |
           mkdir -p /tmp/openipc
           cd /tmp/openipc
-          curl -sSLf -o fw.tgz \
-            https://github.com/OpenIPC/firmware/releases/download/latest/openipc.${{ matrix.platform.firmware }}-nor-lite.tgz
-          tar xzf fw.tgz
-          ls uImage.${{ matrix.platform.firmware }}
+          sh "$GITHUB_WORKSPACE/.github/fetch-firmware.sh" ${{ matrix.platform.firmware }} lite
 
       - name: Run NNIE Forward regression under QEMU
         timeout-minutes: 3
@@ -1202,10 +1196,7 @@ jobs:
         run: |
           mkdir -p /tmp/openipc
           cd /tmp/openipc
-          curl -sSLf -o fw.tgz \
-            https://github.com/OpenIPC/firmware/releases/download/latest/openipc.${{ matrix.firmware }}-nor-${{ matrix.variant || 'lite' }}.tgz
-          tar xzf fw.tgz
-          ls uImage.${{ matrix.firmware }}
+          sh "$GITHUB_WORKSPACE/.github/fetch-firmware.sh" ${{ matrix.firmware }} ${{ matrix.variant || 'lite' }}
 
       # Inject a tiny S99 init script that emits a serial-console marker
       # with the count of HiSilicon modules currently loaded. Repacks the
