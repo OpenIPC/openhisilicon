@@ -28,6 +28,9 @@
 #define SENSOR_NAME_SC500AI "sc500ai"
 #define SENSOR_NAME_SC431HAI "sc431hai"
 #define SENSOR_NAME_OS04D10 "os04d10"
+#define SENSOR_NAME_OS02M10 "os02m10"
+/* ipcinfo names chip ID 0x5302 SP2308, the same silicon as the OS02M10 */
+#define SENSOR_NAME_SP2308 "sp2308"
 #define MIPI_AD "mipi_ad"
 
 static void *g_reg_crg_base = NULL;
@@ -291,7 +294,9 @@ static unsigned int parse_sensor_clock(const char *name, unsigned int name_len)
         (strncmp(SENSOR_NAME_SC450AI, name, len) == 0) ||
         (strncmp(SENSOR_NAME_SC500AI, name, len) == 0)) {
         clock = 0xA001;   /* 27M */
-    } else if ((strncmp(SENSOR_NAME_OS04D10, name, len) == 0)) {
+    } else if ((strncmp(SENSOR_NAME_OS04D10, name, len) == 0) ||
+               (strncmp(SENSOR_NAME_OS02M10, name, len) == 0) ||
+               (strncmp(SENSOR_NAME_SP2308, name, len) == 0)) {
         clock = 0x4001;  /* 24M */
     } else if ((strncmp(SENSOR_NAME_IMX335, name, len) == 0) ||
                (strncmp(MIPI_AD, name, len) == 0)) {

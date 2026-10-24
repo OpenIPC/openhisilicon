@@ -261,6 +261,7 @@ sensor driver found online came from — see
 | **GalaxyCore** | GC2053 | | | | | | x | x | |
 | | GC2083 | | | | | | | | x |
 | | GC4023 | | | | | | | | x |
+| **SuperPix** | SP2308 | | | | | | | x | x |
 
 Each sensor has `.so` (shared) and `.a` (static) library builds. The goal is to eventually unify sensor drivers across platforms where the same sensor model is used.
 
