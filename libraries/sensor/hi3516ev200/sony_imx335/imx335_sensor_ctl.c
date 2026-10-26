@@ -384,14 +384,31 @@ static const struct {
 	{ 0x3A27, 0x00 }, { 0x3A28, 0x3F }, { 0x3A29, 0x00 },
 };
 
-static void imx335_linear_from_dol(VI_PIPE ViPipe)
+/* Each write is retried on its own: nothing else in the linear path writes
+ * WDMODE or VC back, so one lost transfer here leaves the sensor in DOL.
+ * A register that still fails is named, and the next linear init (every
+ * one runs this) tries again. */
+static GK_S32 imx335_linear_from_dol(VI_PIPE ViPipe)
 {
-	GK_U32 i;
+	GK_U32 i, u32Try, u32Failed = 0;
 
-	IMX335_write_register(ViPipe, 0x3000, 0x01); /* standby */
-	for (i = 0; i < sizeof(imx335_dol_por) / sizeof(*imx335_dol_por); i++)
-		IMX335_write_register(ViPipe, imx335_dol_por[i].addr,
-				      imx335_dol_por[i].val);
+	for (u32Try = 0; u32Try < IMX335_ORIENT_TRIES; u32Try++) {
+		if (IMX335_write_register(ViPipe, 0x3000, 0x01) == GK_SUCCESS) /* standby */
+			break;
+	}
+	for (i = 0; i < sizeof(imx335_dol_por) / sizeof(*imx335_dol_por); i++) {
+		for (u32Try = 0; u32Try < IMX335_ORIENT_TRIES; u32Try++) {
+			if (IMX335_write_register(ViPipe, imx335_dol_por[i].addr,
+						  imx335_dol_por[i].val) == GK_SUCCESS)
+				break;
+		}
+		if (u32Try == IMX335_ORIENT_TRIES) {
+			ISP_TRACE(MODULE_DBG_ERR, "IMX335: 0x%04X not put back to 0x%02X after WDR\n",
+				  imx335_dol_por[i].addr, imx335_dol_por[i].val);
+			u32Failed++;
+		}
+	}
+	return u32Failed ? GK_FAILURE : GK_SUCCESS;
 }
 
 void IMX335_init(VI_PIPE ViPipe)
@@ -426,7 +443,8 @@ void IMX335_init(VI_PIPE ViPipe)
 			return;
 		}
 	} else if (enWDRMode == WDR_MODE_NONE) {
-		imx335_linear_from_dol(ViPipe);
+		if (imx335_linear_from_dol(ViPipe) != GK_SUCCESS)
+			printf("IMX335_init: WDR registers not all cleared; linear may get no frames\n");
 	 	switch (u8ImgMode) {
       		// - 2x2 binning @ 60fps
       		case IMX335_60FPS_BINNING_MODE: {
