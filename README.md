@@ -220,6 +220,7 @@ sensor driver found online came from — see
 | | IMX390 | | | | | | x | | |
 | | IMX415 | | | | | | x | | |
 | | IMX458 | | | | | | x | | |
+| | IMX662 | | | | | | | | x |
 | | ICX692 | x | | | | | | | |
 | **Aptina** | AR0130 | x | x | | | | | | |
 | | AR0230 | | x | x | | | | | |

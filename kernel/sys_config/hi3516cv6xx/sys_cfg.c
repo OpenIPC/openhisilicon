@@ -24,6 +24,7 @@
 #define SENSOR_NAME_GC4023 "gc4023"
 #define SENSOR_NAME_GC2083 "gc2083"
 #define SENSOR_NAME_IMX335 "imx335"
+#define SENSOR_NAME_IMX662 "imx662"
 #define SENSOR_NAME_SC450AI "sc450ai"
 #define SENSOR_NAME_SC500AI "sc500ai"
 #define SENSOR_NAME_SC431HAI "sc431hai"
@@ -299,6 +300,7 @@ static unsigned int parse_sensor_clock(const char *name, unsigned int name_len)
                (strncmp(SENSOR_NAME_SP2308, name, len) == 0)) {
         clock = 0x4001;  /* 24M */
     } else if ((strncmp(SENSOR_NAME_IMX335, name, len) == 0) ||
+               (strncmp(SENSOR_NAME_IMX662, name, len) == 0) ||
                (strncmp(MIPI_AD, name, len) == 0)) {
         clock = 0x8010; /* 37.125M */
     } else if ((strncmp("bt656", name, len) == 0) ||
