@@ -26,7 +26,7 @@ all: $(LIB_NAME).so $(LIB_NAME).a
 	$(CC) $(CFLAGS) -c $< -o $@
 
 $(LIB_NAME).so: $(OBJS)
-	$(CC) -shared -o $@ $(OBJS)
+	$(CC) -shared -o $@ $(OBJS) -lm
 
 $(LIB_NAME).a: $(OBJS)
 	$(AR) -rcs $@ $(OBJS)

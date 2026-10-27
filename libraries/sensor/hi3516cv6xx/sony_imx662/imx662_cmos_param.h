@@ -24,18 +24,19 @@
 /* ---- Black level -----------------------------------------------------------
  * ot_isp_cmos_black_level is Format:14.0 (ot_common_isp.h) -- a FIXED 14-bit
  * ISP domain, NOT the sensor's output bit depth.  imx662_sensor_ctl.c writes
- * BLKLEVEL = 50, a 12-bit pedestal, so the ISP value is 50 << 2 = 200 and it
- * is the same number in every mode: every vendor plugin on this silicon uses
- * one constant across all of its modes (sc450ai/sc431hai/sc500ai/sc4336p
- * 0x410, os04d10/gc4023 0x400), sc450ai included, which runs both a 12-bit
- * linear and a 10-bit WDR mode off BLACK_LEVEL_DEFAULT.
+ * BLKLEVEL = 50, which Sony's STARVIS sensors count in 10-bit LSBs (the same
+ * 0x32 default the IMX335 plugin pairs with 0x320), so the ISP value is
+ * 50 << 4 = 800.  It was 200 (50 << 2, read as a 12-bit pedestal), which left
+ * ~600 codes of pedestal unsubtracted; the WB gains multiply that residue by
+ * 1.13x on R and 2.9x on B, lifting blue hardest.
  *
- * Do not rescale this by the mode's bit depth.  It used to be shifted down
- * for the RAW10 modes, which left ~150 codes of pedestal unsubtracted on the
- * 90 and 100 fps modes; the WB gains then multiply that common-mode residue
- * by 1.13x on R and 2.9x on B, lifting blue hardest.
+ * It is the same number in every mode: every vendor plugin on this silicon
+ * uses one constant across all of its modes (sc450ai/sc431hai/sc500ai/sc4336p
+ * 0x410, os04d10/gc4023 0x400), sc450ai included, which runs both a 12-bit
+ * linear and a 10-bit WDR mode off BLACK_LEVEL_DEFAULT.  Do not rescale it by
+ * the mode's bit depth.
  */
-#define IMX662_BLACK_LEVEL   200
+#define IMX662_BLACK_LEVEL   800
 
 /* ---- AWB static reference and Planckian curve -----------------------------
  * Recovered verbatim from the factory xipc. The scene routine leaves

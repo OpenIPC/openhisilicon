@@ -241,45 +241,55 @@ static td_s32 imx662_linear_1080p_init(ot_vi_pipe vi_pipe, td_u32 hmax,
 	return ret;
 }
 
-td_void imx662_default_reg_init(ot_vi_pipe vi_pipe)
+td_s32 imx662_default_reg_init(ot_vi_pipe vi_pipe)
 {
+	td_s32 ret;
 	ot_isp_sns_state *sns_state = imx662_get_ctx(vi_pipe);
 
 	switch (sns_state->img_mode) {
 		case IMX662_SENSOR_2M_100FPS_10BIT_LINEAR_MODE:
-			(td_void)imx662_linear_1080p_init(vi_pipe,
+			ret = imx662_linear_1080p_init(vi_pipe,
 											  IMX662_HMAX_1080P100_LINEAR,
 											  TD_TRUE, TD_TRUE);
 			break;
 		case IMX662_SENSOR_2M_90FPS_10BIT_LINEAR_MODE:
-			(td_void)imx662_linear_1080p_init(vi_pipe,
+			ret = imx662_linear_1080p_init(vi_pipe,
 											  IMX662_HMAX_1080P90_LINEAR,
 											  TD_TRUE, TD_FALSE);
 			break;
 		case IMX662_SENSOR_2M_60FPS_12BIT_LINEAR_MODE:
-			(td_void)imx662_linear_1080p_init(vi_pipe,
+			ret = imx662_linear_1080p_init(vi_pipe,
 											  IMX662_HMAX_1080P60_LINEAR,
 											  TD_FALSE, TD_FALSE);
 			break;
 		case IMX662_SENSOR_2M_30FPS_12BIT_LINEAR_MODE:
 		default:
-			(td_void)imx662_linear_1080p_init(vi_pipe,
+			ret = imx662_linear_1080p_init(vi_pipe,
 											  IMX662_HMAX_1080P30_LINEAR,
 											  TD_FALSE, TD_FALSE);
 			break;
 	}
 
-	/* Push any ISP-computed exposure/gain/vmax registers, then start. */
-	(td_void)imx662_write_register(vi_pipe, IMX662_REG_STANDBY, 0x00);
-	(td_void)imx662_write_register(vi_pipe, IMX662_REG_XMSTA,   0x00);
+	/* Start streaming; the ISP pushes exposure, gain and VMAX through
+	 * regs_info at the next frame sync, as with every plugin here. */
+	ret += imx662_write_register(vi_pipe, IMX662_REG_STANDBY, 0x00);
+	ret += imx662_write_register(vi_pipe, IMX662_REG_XMSTA,   0x00);
+	return ret;
 }
 
 td_void imx662_init(ot_vi_pipe vi_pipe)
 {
-	(td_void)imx662_i2c_init(vi_pipe);
-	imx662_default_reg_init(vi_pipe);
-	delay_ms(2);
 	ot_isp_sns_state *sns_state = imx662_get_ctx(vi_pipe);
+
+	if (imx662_i2c_init(vi_pipe) != TD_SUCCESS) {
+		isp_err_trace("IMX662: i2c init failed!\n");
+		return;
+	}
+	if (imx662_default_reg_init(vi_pipe) != TD_SUCCESS) {
+		isp_err_trace("IMX662: register init failed!\n");
+		return;
+	}
+	delay_ms(2);
 	sns_state->init = TD_TRUE;
 }
 

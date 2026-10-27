@@ -9,13 +9,17 @@ drivers; no SDK source or binary is involved.
 
 Modes verified there: 1920x1080 at 30 and 60 fps in RAW12, and 90 and 100
 fps in RAW10. 100 fps needs a 27 MHz sensor clock; `sys_config` feeds an
-`imx662` 37.125 MHz, which is right for the others.
+`imx662` 37.125 MHz, which is right for the others, so `cmos_set_image_mode()`
+refuses anything above 90 fps until that is switched.
 
 Linear mode only: `cmos_set_wdr_mode()` rejects every WDR mode.
 
 **Not tuned.** The ISP tables are seeds borrowed from `smart_sc450ai` (see
-below), there is no measured IMX662 calibration, and the default image comes
-out blue-tinted. A calibrated IQ profile is the main thing missing.
+below), there is no measured IMX662 calibration, and the default image came
+out blue-tinted. Part of that was a black level of 200 where the ISP wanted
+800 (see `imx662_cmos_param.h`); 800 is derived from the register units and
+has not yet been checked on a sensor. A calibrated IQ profile is the main
+thing missing.
 
 ## What the plugin programs
 
