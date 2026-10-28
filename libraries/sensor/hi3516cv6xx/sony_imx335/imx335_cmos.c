@@ -1488,6 +1488,10 @@ static td_s32 cmos_unregister_callback(ot_vi_pipe vi_pipe, ot_isp_3a_alg_lib *ae
         return ret;
     }
 
+    /* Sensor session ends here: a new session starts from the sensor's own
+     * upright readout unless its caller asks otherwise. */
+    imx335_clear_orientation(vi_pipe);
+
     return TD_SUCCESS;
 }
 
@@ -1592,62 +1596,44 @@ static td_s32 cmos_set_fast_ae(ot_vi_pipe vi_pipe, ot_isp_sns_fast_ae_attr *fast
 }
 
 /* Orientation: 0x304E bit 0 mirrors horizontally, 0x304F bit 0 reverses the
- * readout (vertical flip).  Both are ordinary 1-byte registers that survive a
- * VI restart, so they are written unconditionally, including the disable.
+ * readout (vertical flip).  The vertical half needs more than that bit: the
+ * readout window and the V-flip coefficient registers move with it, which is
+ * why writing 0x304F alone was measured to deliver a flat grey frame
+ * (1920x1080 JPEG, every pixel 232, std 0, VI reporting no error).
+ * imx335_apply_orientation() in imx335_sensor_ctrl.c writes the mainline
+ * proportional set (drivers/media/i2c/imx335.c, V4L2_CID_VFLIP) for the full
+ * and binning modes, and clears the bit for crop/flex windows, which keep the
+ * upright readout.
  *
- * The vertical half needs more than that bit: the readout window and the
- * V-flip coefficient registers move with it, which is why writing 0x304F alone
- * was measured to deliver a flat grey frame (1920x1080 JPEG, every pixel 232,
- * std 0, VI reporting no error).  imx335_apply_orientation() in
- * imx335_sensor_ctrl.c now writes the mainline proportional set
- * (drivers/media/i2c/imx335.c, V4L2_CID_VFLIP) for the full and binning modes
- * and clears the bit for crop/flex windows, which keep the upright readout.
- * The requested orientation is remembered per pipe so every later bring-up
- * programs it again. */
-#define IMX335_REG_MIRROR   0x304E
-#define IMX335_REG_FLIP     0x304F
-
+ * The request is stored as asked and re-applied at every bring-up, so a mode
+ * switch that cannot carry it (crop/flex) does not throw it away: switching
+ * back to a full or binning mode restores the orientation the operator chose.
+ * The warning for an unsupported mode is emitted by imx335_apply_orientation()
+ * on either path. */
 static td_void imx335_mirror_flip(ot_vi_pipe vi_pipe, ot_isp_sns_mirrorflip_type sns_mirror_flip)
 {
     cis_info *cis = TD_NULL;
-    td_u32 mirror = 0;
-    td_u32 flip = 0;
-    td_u8 img_mode;
+    td_bool mirror = TD_FALSE;
+    td_bool flip = TD_FALSE;
 
     sns_check_pipe_void_return(vi_pipe);
 
     switch (sns_mirror_flip) {
-        case ISP_SNS_MIRROR:      mirror = 1; flip = 0; break;
-        case ISP_SNS_FLIP:        mirror = 0; flip = 1; break;
-        case ISP_SNS_MIRROR_FLIP: mirror = 1; flip = 1; break;
+        case ISP_SNS_MIRROR:      mirror = TD_TRUE;  flip = TD_FALSE; break;
+        case ISP_SNS_FLIP:        mirror = TD_FALSE; flip = TD_TRUE;  break;
+        case ISP_SNS_MIRROR_FLIP: mirror = TD_TRUE;  flip = TD_TRUE;  break;
         case ISP_SNS_NORMAL:
-        default:                  mirror = 0; flip = 0; break;
+        default:                  mirror = TD_FALSE; flip = TD_FALSE; break;
     }
 
     cis = cmos_get_info(vi_pipe);
     if (cis == TD_NULL || cis->sns_state == TD_NULL) {
         return;
     }
-    img_mode = cis->sns_state->img_mode;
 
-    /* A crop/flex window cannot carry the reversed readout: report it and keep
-     * the horizontal half the caller asked for -- a mirrored image with the
-     * vertical request lost is closer to the request than no change at all. */
-    if (flip != 0 && imx335_flip_supported(img_mode) != TD_TRUE) {
-        isp_err_trace("IMX335: vertical flip is not implemented for sensor "
-            "image mode %u, applying horizontal mirror only\n", img_mode);
-        flip = 0;
-    }
-
-    imx335_set_flip(vi_pipe, (flip != 0) ? TD_TRUE : TD_FALSE);
-    if (imx335_apply_orientation(cis, img_mode, (flip != 0) ? TD_TRUE : TD_FALSE, 0) != TD_SUCCESS) {
+    imx335_set_orientation(vi_pipe, mirror, flip);
+    if (imx335_apply_orientation(cis, cis->sns_state->img_mode, mirror, flip, 0) != TD_SUCCESS) {
         isp_err_trace("IMX335: failed to program the readout orientation\n");
-    }
-
-    /* 0x304F is already written by imx335_apply_orientation(); only the
-     * horizontal bit is issued here. */
-    if (cis_write_reg(&cis->i2c, IMX335_REG_MIRROR, mirror) != TD_SUCCESS) {
-        isp_err_trace("IMX335: failed to write the horizontal mirror bit\n");
     }
 }
 

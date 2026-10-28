@@ -16,12 +16,16 @@ extern "C" {
 td_s32 imx335_init(cis_info *cis);
 td_s32 imx335_get_standby_cfg(ot_isp_sns_regs_info *standby_cfg);
 
-/* Vertical flip (readout reversal).  Supported for the full and binning modes
- * only; crop/flex windows keep the upright readout and report it upstream. */
-td_bool imx335_flip_supported(td_u8 img_mode);
-td_bool imx335_get_flip(ot_vi_pipe vi_pipe);
-td_void imx335_set_flip(ot_vi_pipe vi_pipe, td_bool flip);
-td_s32 imx335_apply_orientation(cis_info *cis, td_u8 img_mode, td_bool flip, td_u32 area3_st_normal);
+/* Orientation (0x304E horizontal mirror, 0x304F reverse readout).  The request is
+ * kept apart from what a given image mode can apply: vertical flip is only
+ * reachable on the full and binning modes, and crop/flex windows keep the
+ * upright readout while the request survives them.  The request is cleared when
+ * the caller unregisters (a new sensor session starts upright). */
+td_void imx335_get_orientation(ot_vi_pipe vi_pipe, td_bool *mirror, td_bool *flip);
+td_void imx335_set_orientation(ot_vi_pipe vi_pipe, td_bool mirror, td_bool flip);
+td_void imx335_clear_orientation(ot_vi_pipe vi_pipe);
+td_s32 imx335_apply_orientation(cis_info *cis, td_u8 img_mode, td_bool mirror,
+    td_bool flip, td_u32 area3_st_normal);
 
 #ifdef __cplusplus
 #if __cplusplus

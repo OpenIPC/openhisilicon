@@ -65,10 +65,10 @@ static td_s32 imx335_start(cis_info *cis)
 }
 
 /* -------------------------------------------------------------------------
- * Orientation: vertical flip (readout reversal)
+ * Orientation: horizontal mirror and vertical flip (readout reversal)
  * -------------------------------------------------------------------------
- * 0x304E bit 0 mirrors horizontally (that half is issued from imx335_cmos.c).
- * Vertical flip is not a single bit: the sensor reverses its readout by moving
+ * 0x304E bit 0 mirrors horizontally.  Vertical flip is not a single bit: the
+ * sensor reverses its readout by moving
  * the AREA3 start address (0x3074) and re-pointing the "undocumented V-Flip"
  * coefficient registers.  Deltas below are the normal -> inverted ones from
  * mainline drivers/media/i2c/imx335.c (V4L2_CID_VFLIP, same sensor):
@@ -124,10 +124,17 @@ static const cis_reg_cfg imx335_flip_binning_inverted[] = {
     {0x3116, 0x02}, {0x3117, 0x00},
 };
 
-/* Requested vertical flip per pipe, remembered across mode switches within one
- * boot and re-applied at every bring-up.  It is NOT persisted: after a reboot
- * the caller (waybeam/majestic) re-issues pfn_mirror_flip from its own config. */
+/* What the caller asked for, per pipe.  Kept apart from what a given image mode
+ * can actually apply: a crop window cannot carry the reversed readout, but the
+ * request must survive it, so returning to a full or binning mode restores the
+ * orientation the operator chose.  The request lives for the sensor session and
+ * is cleared when the caller unregisters (see imx335_clear_orientation); it is
+ * not persisted across a reboot -- the caller re-issues it from its own config. */
+static td_bool g_imx335_mirror[OT_ISP_MAX_PIPE_NUM] = {0};
 static td_bool g_imx335_flip[OT_ISP_MAX_PIPE_NUM] = {0};
+
+#define IMX335_REG_MIRROR   0x304E
+#define IMX335_REG_FLIP     0x304F
 
 static td_s32 imx335_write_reg_cfg(cis_info *cis, const cis_reg_cfg *cfg, td_u32 len)
 {
@@ -143,81 +150,126 @@ static td_s32 imx335_write_reg_cfg(cis_info *cis, const cis_reg_cfg *cfg, td_u32
     return TD_SUCCESS;
 }
 
-td_bool imx335_flip_supported(td_u8 img_mode)
+static td_bool imx335_flip_supported(td_u8 img_mode)
 {
     return (img_mode == IMX335_5M_30FPS_12BIT_LINEAR_MODE ||
             img_mode == IMX335_60FPS_FULL_1944P_MODE ||
             img_mode == IMX335_60FPS_BINNING_MODE) ? TD_TRUE : TD_FALSE;
 }
 
-td_bool imx335_get_flip(ot_vi_pipe vi_pipe)
+td_void imx335_get_orientation(ot_vi_pipe vi_pipe, td_bool *mirror, td_bool *flip)
 {
-    if (vi_pipe < 0 || vi_pipe >= OT_ISP_MAX_PIPE_NUM) {
-        return TD_FALSE;
+    td_bool do_mirror = TD_FALSE;
+    td_bool do_flip = TD_FALSE;
+
+    if (vi_pipe >= 0 && vi_pipe < OT_ISP_MAX_PIPE_NUM) {
+        do_mirror = g_imx335_mirror[vi_pipe];
+        do_flip = g_imx335_flip[vi_pipe];
     }
 
-    return g_imx335_flip[vi_pipe];
+    if (mirror != TD_NULL) {
+        *mirror = do_mirror;
+    }
+    if (flip != TD_NULL) {
+        *flip = do_flip;
+    }
 }
 
-td_void imx335_set_flip(ot_vi_pipe vi_pipe, td_bool flip)
+td_void imx335_set_orientation(ot_vi_pipe vi_pipe, td_bool mirror, td_bool flip)
 {
     if (vi_pipe < 0 || vi_pipe >= OT_ISP_MAX_PIPE_NUM) {
         return;
     }
 
+    g_imx335_mirror[vi_pipe] = (mirror == TD_TRUE) ? TD_TRUE : TD_FALSE;
     g_imx335_flip[vi_pipe] = (flip == TD_TRUE) ? TD_TRUE : TD_FALSE;
 }
 
-/* Program the readout for `flip`, using the mode's upright AREA3 start.  When
- * area3_st_normal is 0 the mode default is used.  Written without standby, the
- * way mainline's runtime VFLIP control does it; the caller re-inits the mode
- * right after a bring-up, so the streaming case only affects a running pipe. */
-td_s32 imx335_apply_orientation(cis_info *cis, td_u8 img_mode, td_bool flip, td_u32 area3_st_normal)
+td_void imx335_clear_orientation(ot_vi_pipe vi_pipe)
+{
+    if (vi_pipe < 0 || vi_pipe >= OT_ISP_MAX_PIPE_NUM) {
+        return;
+    }
+
+    g_imx335_mirror[vi_pipe] = TD_FALSE;
+    g_imx335_flip[vi_pipe] = TD_FALSE;
+}
+
+/* Program the readout for the requested orientation, using the mode's upright
+ * AREA3 start.  When area3_st_normal is 0 the mode default is used.  Written
+ * without standby, the way mainline's runtime VFLIP control does it; the caller
+ * re-inits the mode right after a bring-up, so the streaming case only affects
+ * an already running pipe.
+ *
+ * The caller passes the REQUEST, not the outcome: a mode that cannot carry the
+ * reversed readout drops the vertical half here, with the same warning the
+ * callback emits, so a mode switch is as visible in the log as a direct
+ * request.  Both orientation bits are always written -- including the clear --
+ * so nothing a previous mode left behind can blank this one.
+ *
+ * Returns TD_FAILURE on a register error: a crop window that inherits the
+ * reverse bit streams a flat grey frame, so silence here is the one outcome
+ * worth failing the bring-up over. */
+td_s32 imx335_apply_orientation(cis_info *cis, td_u8 img_mode, td_bool mirror,
+    td_bool flip, td_u32 area3_st_normal)
 {
     const cis_reg_cfg *cfg = TD_NULL;
+    td_bool supported = imx335_flip_supported(img_mode);
+    td_bool applied = (flip == TD_TRUE && supported == TD_TRUE) ? TD_TRUE : TD_FALSE;
     td_u32 len;
     td_u32 start;
 
     sns_check_pointer_return(cis);
 
-    if (imx335_flip_supported(img_mode) != TD_TRUE) {
-        /* Crop/flex window: no vertical flip, keep the upright readout.  Clear
-         * the reverse bit so a flip inherited from another mode cannot blank
-         * the stream. */
-        (td_void)cis_write_reg(&cis->i2c, 0x304F, 0x00);
-        return TD_SUCCESS;
+    if (flip == TD_TRUE && supported != TD_TRUE) {
+        isp_err_trace("IMX335: vertical flip is not implemented for sensor "
+            "image mode %u, keeping the upright readout\n", img_mode);
     }
 
-    if (area3_st_normal == 0) {
-        area3_st_normal = (img_mode == IMX335_60FPS_BINNING_MODE) ?
-            IMX335_AREA3_ST_BINNING : IMX335_AREA3_ST_FULL;
-    }
-    start = (flip == TD_TRUE) ? (IMX335_ORIENTATION_ST_SUM - area3_st_normal) : area3_st_normal;
+    if (supported == TD_TRUE) {
+        if (area3_st_normal == 0) {
+            area3_st_normal = (img_mode == IMX335_60FPS_BINNING_MODE) ?
+                IMX335_AREA3_ST_BINNING : IMX335_AREA3_ST_FULL;
+        }
+        start = (applied == TD_TRUE) ? (IMX335_ORIENTATION_ST_SUM - area3_st_normal) : area3_st_normal;
 
-    if (cis_write_reg(&cis->i2c, 0x3074, start & 0xFF) != TD_SUCCESS ||
-        cis_write_reg(&cis->i2c, 0x3075, (start >> 8) & 0x1F) != TD_SUCCESS) {
-        isp_err_trace("imx335 orientation: AREA3 start 0x%04x failed!\n", start);
-        return TD_FAILURE;
+        if (cis_write_reg(&cis->i2c, 0x3074, start & 0xFF) != TD_SUCCESS ||
+            cis_write_reg(&cis->i2c, 0x3075, (start >> 8) & 0x1F) != TD_SUCCESS) {
+            isp_err_trace("imx335 orientation: AREA3 start 0x%04x failed!\n", start);
+            return TD_FAILURE;
+        }
+
+        if (img_mode == IMX335_60FPS_BINNING_MODE) {
+            cfg = (applied == TD_TRUE) ? imx335_flip_binning_inverted : imx335_flip_binning_normal;
+            len = (td_u32)(sizeof(imx335_flip_binning_normal) / sizeof(imx335_flip_binning_normal[0]));
+        } else {
+            cfg = (applied == TD_TRUE) ? imx335_flip_full_inverted : imx335_flip_full_normal;
+            len = (td_u32)(sizeof(imx335_flip_full_normal) / sizeof(imx335_flip_full_normal[0]));
+        }
+
+        if (imx335_write_reg_cfg(cis, cfg, len) != TD_SUCCESS) {
+            return TD_FAILURE;
+        }
     }
 
-    if (img_mode == IMX335_60FPS_BINNING_MODE) {
-        cfg = (flip == TD_TRUE) ? imx335_flip_binning_inverted : imx335_flip_binning_normal;
-        len = (td_u32)(sizeof(imx335_flip_binning_normal) / sizeof(imx335_flip_binning_normal[0]));
-    } else {
-        cfg = (flip == TD_TRUE) ? imx335_flip_full_inverted : imx335_flip_full_normal;
-        len = (td_u32)(sizeof(imx335_flip_full_normal) / sizeof(imx335_flip_full_normal[0]));
-    }
-
-    if (imx335_write_reg_cfg(cis, cfg, len) != TD_SUCCESS) {
+    if (cis_write_reg(&cis->i2c, IMX335_REG_MIRROR, (mirror == TD_TRUE) ? 0x01 : 0x00) != TD_SUCCESS) {
+        isp_err_trace("imx335 orientation: horizontal mirror bit failed!\n");
         return TD_FAILURE;
     }
 
     /* VREVERSE: mainline writes it last, after the coefficient registers. */
-    return cis_write_reg(&cis->i2c, 0x304F, (flip == TD_TRUE) ? 0x01 : 0x00);
+    if (cis_write_reg(&cis->i2c, IMX335_REG_FLIP, (applied == TD_TRUE) ? 0x01 : 0x00) != TD_SUCCESS) {
+        isp_err_trace("imx335 orientation: reverse readout bit failed!\n");
+        return TD_FAILURE;
+    }
+
+    return TD_SUCCESS;
 }
 
 static td_s32 imx335_reg_init(cis_info *cis, cis_reg_cfg *cfg, td_u32 len, td_u32 area3_st_normal)
 {
+    td_bool mirror = TD_FALSE;
+    td_bool flip = TD_FALSE;
     td_u32 i;
 
     if (imx335_reset(cis) != TD_SUCCESS) {
@@ -234,8 +286,9 @@ static td_s32 imx335_reg_init(cis_info *cis, cis_reg_cfg *cfg, td_u32 len, td_u3
     if (cis->sns_state == TD_NULL || cis->pipe < 0 || cis->pipe >= OT_ISP_MAX_PIPE_NUM) {
         return TD_FAILURE;
     }
-    if (imx335_apply_orientation(cis, cis->sns_state->img_mode,
-                                 g_imx335_flip[cis->pipe], area3_st_normal) != TD_SUCCESS) {
+    imx335_get_orientation(cis->pipe, &mirror, &flip);
+    if (imx335_apply_orientation(cis, cis->sns_state->img_mode, mirror, flip,
+                                 area3_st_normal) != TD_SUCCESS) {
         return TD_FAILURE;
     }
 
@@ -271,6 +324,8 @@ static td_s32 imx335_flex_reg_init(cis_info *cis)
     td_u32 vmax;
     td_u32 hmax;
     td_float fps;
+    td_bool mirror = TD_FALSE;
+    td_bool flip = TD_FALSE;
 
     imx335_get_crop(cis->pipe, &crop_w, &crop_h);
 
@@ -335,9 +390,15 @@ static td_s32 imx335_flex_reg_init(cis_info *cis)
     printf("IMX335 CROP_FLEX: crop=%ux%u (HNUM=%u HSTART=%u Y_OUT=%u AREA3_ST=%u AREA3_W=%u VMAX=%u HMAX=%u fps=%.2f)\n",
         crop_w, crop_h, hnum, hstart, y_out_size, area3_st, area3_width, vmax, hmax, fps);
 
-    /* Flex cannot carry the reversed readout; this clears 0x304F if a previous
-     * mode left it set (the AREA3 start is ignored for unsupported modes). */
-    (td_void)imx335_apply_orientation(cis, IMX335_CROP_FLEX_LINEAR_MODE, TD_FALSE, 0);
+    /* Flex cannot carry the reversed readout: this reports the request and
+     * clears 0x304F, so the window streams upright instead of grey. */
+    if (cis->pipe < 0 || cis->pipe >= OT_ISP_MAX_PIPE_NUM) {
+        return TD_FAILURE;
+    }
+    imx335_get_orientation(cis->pipe, &mirror, &flip);
+    if (imx335_apply_orientation(cis, IMX335_CROP_FLEX_LINEAR_MODE, mirror, flip, 0) != TD_SUCCESS) {
+        return TD_FAILURE;
+    }
 
     return imx335_start(cis);
 }
