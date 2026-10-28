@@ -91,7 +91,17 @@ static td_s32 imx335_start(cis_info *cis)
  * past the crop VMAX that the T6 VI requires to stay at the window length, so
  * the offset recipe cannot be reused there without its own measurement.
  * Those modes keep streaming upright with a warning, which is strictly better
- * than the flat grey frame a lone 0x304F write was measured to produce. */
+ * than the flat grey frame a lone 0x304F write was measured to produce.  On that
+ * path the upright coefficient set is written back explicitly, so the invariant
+ * does not depend on what the sensor reset happens to leave behind.
+ *
+ * Measured on the board (mode 2 after a flipped mode 0 in the same session, the
+ * registers read back over i2c): 0x304F 0x01 -> 0x00 and 0x3081 0xFE -> 0x02,
+ * 0x3083 0xFE -> 0x02, 0x30B6 0x01FA -> 0x0000, 0x3116 0x02 -> 0x08 -- the
+ * reset and the crop table already restore the upright set there.  The explicit
+ * write keeps the same values and makes the invariant ours rather than the
+ * reset's: imx335_flip_full_normal is also the upright default of the crop
+ * readout. */
 #define IMX335_ORIENTATION_ST_SUM  4288
 #define IMX335_AREA3_ST_FULL       176
 #define IMX335_AREA3_ST_BINNING    168
@@ -135,6 +145,26 @@ static td_bool g_imx335_flip[OT_ISP_MAX_PIPE_NUM] = {0};
 
 #define IMX335_REG_MIRROR   0x304E
 #define IMX335_REG_FLIP     0x304F
+
+/* The readout is programmed from two threads: the ISP thread runs the bring-up
+ * (imx335_init), while pfn_mirror_flip can arrive on the caller's thread during
+ * a mode change.  One lock per sensor covers both: the bring-up holds it across
+ * reset + table + orientation, and the callback takes it around its own register
+ * sequence.  Same pattern as the common layer (cis_mutex_lock in
+ * sensor_common.c); the mutex lives in cis_info and nothing else holds it. */
+static td_void imx335_lock(cis_info *cis)
+{
+    if (pthread_mutex_lock(&cis->mutex) != 0) {
+        isp_err_trace("imx335 orientation: mutex lock failed!\n");
+    }
+}
+
+static td_void imx335_unlock(cis_info *cis)
+{
+    if (pthread_mutex_unlock(&cis->mutex) != 0) {
+        isp_err_trace("imx335 orientation: mutex unlock failed!\n");
+    }
+}
 
 static td_s32 imx335_write_reg_cfg(cis_info *cis, const cis_reg_cfg *cfg, td_u32 len)
 {
@@ -207,11 +237,19 @@ td_void imx335_clear_orientation(ot_vi_pipe vi_pipe)
  * request.  Both orientation bits are always written -- including the clear --
  * so nothing a previous mode left behind can blank this one.
  *
+ * A crop or flex window cannot carry the reversed readout, so it gets the
+ * upright coefficient set written back explicitly: a mode that ran flipped
+ * earlier must not leave its V-flip settings for this one.  The AREA3 start is
+ * not touched there -- the window owns it.
+ *
+ * Runs with cis->mutex held: the init path takes it for the whole bring-up and
+ * calls this locked variant, the callback path goes through the public wrapper.
+ *
  * Returns TD_FAILURE on a register error: a crop window that inherits the
  * reverse bit streams a flat grey frame, so silence here is the one outcome
  * worth failing the bring-up over. */
-td_s32 imx335_apply_orientation(cis_info *cis, td_u8 img_mode, td_bool mirror,
-    td_bool flip, td_u32 area3_st_normal)
+static td_s32 imx335_apply_orientation_locked(cis_info *cis, td_u8 img_mode,
+    td_bool mirror, td_bool flip, td_u32 area3_st_normal)
 {
     const cis_reg_cfg *cfg = TD_NULL;
     td_bool supported = imx335_flip_supported(img_mode);
@@ -250,6 +288,11 @@ td_s32 imx335_apply_orientation(cis_info *cis, td_u8 img_mode, td_bool mirror,
         if (imx335_write_reg_cfg(cis, cfg, len) != TD_SUCCESS) {
             return TD_FAILURE;
         }
+    } else {
+        len = (td_u32)(sizeof(imx335_flip_full_normal) / sizeof(imx335_flip_full_normal[0]));
+        if (imx335_write_reg_cfg(cis, imx335_flip_full_normal, len) != TD_SUCCESS) {
+            return TD_FAILURE;
+        }
     }
 
     if (cis_write_reg(&cis->i2c, IMX335_REG_MIRROR, (mirror == TD_TRUE) ? 0x01 : 0x00) != TD_SUCCESS) {
@@ -264,6 +307,22 @@ td_s32 imx335_apply_orientation(cis_info *cis, td_u8 img_mode, td_bool mirror,
     }
 
     return TD_SUCCESS;
+}
+
+/* Public entry for the callback path: takes the sensor lock, so the whole
+ * sequence is atomic against a bring-up running on the ISP thread. */
+td_s32 imx335_apply_orientation(cis_info *cis, td_u8 img_mode, td_bool mirror,
+    td_bool flip, td_u32 area3_st_normal)
+{
+    td_s32 ret;
+
+    sns_check_pointer_return(cis);
+
+    imx335_lock(cis);
+    ret = imx335_apply_orientation_locked(cis, img_mode, mirror, flip, area3_st_normal);
+    imx335_unlock(cis);
+
+    return ret;
 }
 
 static td_s32 imx335_reg_init(cis_info *cis, cis_reg_cfg *cfg, td_u32 len, td_u32 area3_st_normal)
@@ -287,8 +346,8 @@ static td_s32 imx335_reg_init(cis_info *cis, cis_reg_cfg *cfg, td_u32 len, td_u3
         return TD_FAILURE;
     }
     imx335_get_orientation(cis->pipe, &mirror, &flip);
-    if (imx335_apply_orientation(cis, cis->sns_state->img_mode, mirror, flip,
-                                 area3_st_normal) != TD_SUCCESS) {
+    if (imx335_apply_orientation_locked(cis, cis->sns_state->img_mode, mirror, flip,
+                                        area3_st_normal) != TD_SUCCESS) {
         return TD_FAILURE;
     }
 
@@ -396,7 +455,8 @@ static td_s32 imx335_flex_reg_init(cis_info *cis)
         return TD_FAILURE;
     }
     imx335_get_orientation(cis->pipe, &mirror, &flip);
-    if (imx335_apply_orientation(cis, IMX335_CROP_FLEX_LINEAR_MODE, mirror, flip, 0) != TD_SUCCESS) {
+    if (imx335_apply_orientation_locked(cis, IMX335_CROP_FLEX_LINEAR_MODE, mirror, flip,
+                                        0) != TD_SUCCESS) {
         return TD_FAILURE;
     }
 
@@ -414,6 +474,11 @@ td_s32 imx335_init(cis_info *cis)
     sns_check_pointer_return(cis);
     sns_state = cis->sns_state;
     sns_check_pointer_return(sns_state);
+
+    /* The whole bring-up runs under the sensor lock: a pfn_mirror_flip arriving
+     * on another thread must not land between the reset and the table writes,
+     * nor between the table and the orientation registers. */
+    imx335_lock(cis);
 
     if (sns_state->img_mode == IMX335_CROP_FLEX_LINEAR_MODE) {
         ret = imx335_flex_reg_init(cis);
@@ -464,6 +529,8 @@ td_s32 imx335_init(cis_info *cis)
     }
 
 init_done:
+    imx335_unlock(cis);
+
     if (ret != TD_SUCCESS) {
         isp_err_trace("imx335_reg_init failed!\n");
         return ret;

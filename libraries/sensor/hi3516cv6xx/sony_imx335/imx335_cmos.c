@@ -1609,7 +1609,8 @@ static td_s32 cmos_set_fast_ae(ot_vi_pipe vi_pipe, ot_isp_sns_fast_ae_attr *fast
  * switch that cannot carry it (crop/flex) does not throw it away: switching
  * back to a full or binning mode restores the orientation the operator chose.
  * The warning for an unsupported mode is emitted by imx335_apply_orientation()
- * on either path. */
+ * on either path, and that call takes the sensor mutex, so the sequence below
+ * cannot interleave with a bring-up running on the ISP thread. */
 static td_void imx335_mirror_flip(ot_vi_pipe vi_pipe, ot_isp_sns_mirrorflip_type sns_mirror_flip)
 {
     cis_info *cis = TD_NULL;
@@ -1631,7 +1632,15 @@ static td_void imx335_mirror_flip(ot_vi_pipe vi_pipe, ot_isp_sns_mirrorflip_type
         return;
     }
 
+    /* The request is stored first, unconditionally: it is what the next
+     * bring-up applies.  Before cmos_isp_init() opens the bus there is nothing
+     * to program yet, and writing anyway would only log "fd is invalid!" for an
+     * expected state, so skip the hardware half until the fd exists. */
     imx335_set_orientation(vi_pipe, mirror, flip);
+    if (cis->i2c.fd < 0) {
+        return;
+    }
+
     if (imx335_apply_orientation(cis, cis->sns_state->img_mode, mirror, flip, 0) != TD_SUCCESS) {
         isp_err_trace("IMX335: failed to program the readout orientation\n");
     }
