@@ -23,6 +23,8 @@
 #define SENSOR_NAME_SC4336P "sc4336p"
 #define SENSOR_NAME_GC4023 "gc4023"
 #define SENSOR_NAME_GC2083 "gc2083"
+/* GC4653, 27 MHz: "gc4653 27Mclk 4M30fps(MIPI)" in the vendor's CV610 firmware */
+#define SENSOR_NAME_GC4653 "gc4653"
 #define SENSOR_NAME_IMX335 "imx335"
 #define SENSOR_NAME_IMX662 "imx662"
 #define SENSOR_NAME_SC450AI "sc450ai"
@@ -293,6 +295,7 @@ static unsigned int parse_sensor_clock(const char *name, unsigned int name_len)
     if ((strncmp(SENSOR_NAME_SC4336P, name, len) == 0) ||
         (strncmp(SENSOR_NAME_GC4023, name, len) == 0) ||
         (strncmp(SENSOR_NAME_GC2083, name, len) == 0) ||
+        (strncmp(SENSOR_NAME_GC4653, name, len) == 0) ||
         (strncmp(SENSOR_NAME_SC431HAI, name, len) == 0) ||
         (strncmp(SENSOR_NAME_SC450AI, name, len) == 0) ||
         (strncmp(SENSOR_NAME_SC500AI, name, len) == 0)) {
