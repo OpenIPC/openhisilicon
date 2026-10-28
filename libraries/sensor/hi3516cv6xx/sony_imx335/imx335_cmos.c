@@ -1591,12 +1591,64 @@ static td_s32 cmos_set_fast_ae(ot_vi_pipe vi_pipe, ot_isp_sns_fast_ae_attr *fast
     return TD_SUCCESS;
 }
 
+/* Orientation: 0x304E bit 0 mirrors horizontally, 0x304F bit 0 flips
+ * vertically.  Both are ordinary 1-byte registers that survive a VI restart,
+ * so they are written unconditionally, including the disable.
+ *
+ * Only the horizontal half is implemented.  Vertical flip is deliberately NOT
+ * written: on a CV610 + IMX335 board, setting 0x304F bit 0 alone delivers a
+ * flat grey frame (measured -- 1920x1080 JPEG, every pixel 232, std 0, with
+ * VI reporting no error).  The SigmaStar IMX335 drivers pair that bit with
+ * readout-window writes (0x3081/0x3083, 0x30B6/0x30B7, 0x3016 in their
+ * mirr_flip_table), but their values belong to their own init lineage: this
+ * driver programs 0x3078..0x3087 as 16-bit pairs, so copying just the low
+ * byte of 0x3081 would corrupt a coefficient rather than move a window.
+ * Writing those registers the same way was measured too and still gave the
+ * grey frame.  Until the window recipe is derived from the IMX335 datasheet
+ * and measured on silicon, a vertical request is reported and dropped -- a
+ * frame the operator can see beats an orientation that blanks the stream. */
+#define IMX335_REG_MIRROR   0x304E
+#define IMX335_REG_FLIP     0x304F
+
+static td_void imx335_mirror_flip(ot_vi_pipe vi_pipe, ot_isp_sns_mirrorflip_type sns_mirror_flip)
+{
+    cis_info *cis = TD_NULL;
+    td_u32 mirror = 0;
+    td_u32 flip = 0;
+
+    switch (sns_mirror_flip) {
+        case ISP_SNS_MIRROR:      mirror = 1; flip = 0; break;
+        case ISP_SNS_FLIP:        mirror = 0; flip = 1; break;
+        case ISP_SNS_MIRROR_FLIP: mirror = 1; flip = 1; break;
+        case ISP_SNS_NORMAL:
+        default:                  mirror = 0; flip = 0; break;
+    }
+
+    /* Vertical half not implemented (see above).  Report it rather than
+     * blanking the stream, and keep the horizontal half the caller asked for:
+     * a mirrored image with the vertical request lost is closer to what was
+     * asked than no change at all. */
+    if (flip != 0) {
+        isp_err_trace("IMX335: vertical flip is not implemented, applying "
+            "horizontal mirror only\n");
+        flip = 0;
+    }
+
+    cis = cmos_get_info(vi_pipe);
+    if (cis == TD_NULL) {
+        return;
+    }
+
+    (td_void)cis_write_reg(&cis->i2c, IMX335_REG_MIRROR, mirror);
+    (td_void)cis_write_reg(&cis->i2c, IMX335_REG_FLIP, flip);
+}
+
 ot_isp_sns_obj g_sns_imx335_obj = {
     .pfn_register_callback     = cmos_register_callback,
     .pfn_un_register_callback  = cmos_unregister_callback,
     .pfn_standby               = cmos_standby,
     .pfn_restart               = cmos_restart,
-    .pfn_mirror_flip           = TD_NULL,
+    .pfn_mirror_flip           = imx335_mirror_flip,
     .pfn_set_blc_clamp         = TD_NULL,
     .pfn_write_reg             = cmos_write_register,
     .pfn_read_reg              = cmos_read_register,
