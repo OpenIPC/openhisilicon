@@ -293,6 +293,14 @@ static td_void cmos_again_calc_table(ot_vi_pipe pipe, td_u32 *lin, td_u32 *db)
  */
 static td_s32 cv2003_read_reg(const cis_i2c *i2c, td_u32 addr, td_u8 *value)
 {
+#ifdef OT_GPIO_I2C
+    /* The descriptor is /dev/gpioi2c_ex, which takes no I2C_RDWR. */
+    ot_unused(i2c);
+    ot_unused(addr);
+    ot_unused(value);
+    isp_err_trace("cv2003: register reads are not supported over GPIO-I2C\n");
+    return TD_FAILURE;
+#else
     td_u8 reg[CV2003_ADDR_BYTE] = { high_8bits(addr), low_8bits(addr) };
     struct i2c_msg msg[2] = {
         { .addr = i2c->addr >> 1, .flags = 0, .len = sizeof(reg), .buf = reg },
@@ -304,6 +312,7 @@ static td_s32 cv2003_read_reg(const cis_i2c *i2c, td_u32 addr, td_u8 *value)
         return TD_FAILURE;
     }
     return TD_SUCCESS;
+#endif
 }
 
 static td_void cmos_gains_update(ot_vi_pipe pipe, td_u32 again, td_u32 dgain)
@@ -659,6 +668,7 @@ static td_s32 cmos_isp_set_image_mode(ot_vi_pipe vi_pipe, const ot_isp_cmos_sns_
 
     for (i = 0; i < CV2003_MODE_MAX; i++) {
         if (sns_image_mode->fps <= cis->mode_tbl[i].max_fps &&
+            sns_image_mode->fps >= cis->mode_tbl[i].min_fps &&
             sns_image_mode->width <= cis->mode_tbl[i].width &&
             sns_image_mode->height <= cis->mode_tbl[i].height &&
             sns_state->wdr_mode == cis->mode_tbl[i].wdr_mode) {
@@ -711,7 +721,12 @@ static void cmos_isp_init(ot_vi_pipe vi_pipe)
     }
 
     ret = cv2003_linear_1080p30_10bit_init(cis);
-    if (ret != TD_SUCCESS) { isp_err_trace("CV2003 init failed\n"); return; }
+    if (ret != TD_SUCCESS) {
+        isp_err_trace("CV2003 init failed\n");
+        /* Let go of the bus, so a later attempt opens it afresh. */
+        (td_void)cis_i2c_exit(cis);
+        return;
+    }
     sensor_state->init = TD_TRUE;
 
     return;
