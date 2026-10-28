@@ -36,6 +36,13 @@
 #define SENSOR_NAME_SP2308 "sp2308"
 /* CV2003, 24 MHz: "CV2003_MIPI_24Minput_2lane" in the vendor's CV608 firmware */
 #define SENSOR_NAME_CV2003 "cv2003"
+/*
+ * VS4388, 24 MHz -- inferred, not read: the vendor's CV610 application sets
+ * the sensor clock itself, 24 MHz for one group of sensor types and 27 MHz
+ * for the other, and with every other sensor in it accounted for by its own
+ * "24Minput"/"27Mclk" banner, the VS4388 is the one left in the 24 MHz group.
+ */
+#define SENSOR_NAME_VS4388 "vs4388"
 #define MIPI_AD "mipi_ad"
 
 static void *g_reg_crg_base = NULL;
@@ -303,7 +310,8 @@ static unsigned int parse_sensor_clock(const char *name, unsigned int name_len)
     } else if ((strncmp(SENSOR_NAME_OS04D10, name, len) == 0) ||
                (strncmp(SENSOR_NAME_OS02M10, name, len) == 0) ||
                (strncmp(SENSOR_NAME_SP2308, name, len) == 0) ||
-               (strncmp(SENSOR_NAME_CV2003, name, len) == 0)) {
+               (strncmp(SENSOR_NAME_CV2003, name, len) == 0) ||
+               (strncmp(SENSOR_NAME_VS4388, name, len) == 0)) {
         clock = 0x4001;  /* 24M */
     } else if ((strncmp(SENSOR_NAME_IMX335, name, len) == 0) ||
                (strncmp(SENSOR_NAME_IMX662, name, len) == 0) ||
