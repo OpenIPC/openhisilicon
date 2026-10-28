@@ -43,7 +43,7 @@ static const ot_isp_cmos_black_level g_cmos_blc = {
         .ob_area = {
             .x = 0,
             .y = 0,
-            .width = 1920,
+            .width = 2560,
             .height = 20
         },
         .low_threshold = 0,
@@ -66,8 +66,8 @@ static const ot_isp_cmos_black_level g_cmos_blc = {
     },
     .sns_with_ob_attr = {
         .ob_sns_size = {
-            .width = 1920,
-            .height = 1100
+            .width = 2560,
+            .height = 1440
         }
     }
 };

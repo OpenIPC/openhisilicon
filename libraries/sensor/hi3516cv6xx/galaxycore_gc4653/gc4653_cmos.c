@@ -911,14 +911,22 @@ static td_s32 cmos_unregister_callback(ot_vi_pipe vi_pipe, ot_isp_3a_alg_lib *ae
 
 static void cmos_standby(ot_vi_pipe vi_pipe)
 {
-    ot_unused(vi_pipe);
-    return;
+    cis_info *cis = cmos_get_info(vi_pipe);
+
+    sns_check_pointer_void_return(cis);
+    if (cis_write_reg(&cis->i2c, GC4653_STREAM_ADDR, GC4653_STREAM_OFF) != TD_SUCCESS) {
+        isp_err_trace("gc4653 standby failed!\n");
+    }
 }
 
 static void cmos_restart(ot_vi_pipe vi_pipe)
 {
-    ot_unused(vi_pipe);
-    return;
+    cis_info *cis = cmos_get_info(vi_pipe);
+
+    sns_check_pointer_void_return(cis);
+    if (cis_write_reg(&cis->i2c, GC4653_STREAM_ADDR, GC4653_STREAM_ON) != TD_SUCCESS) {
+        isp_err_trace("gc4653 restart failed!\n");
+    }
 }
 
 static td_s32 cmos_write_register(ot_vi_pipe vi_pipe, td_u32 addr, td_u32 data)

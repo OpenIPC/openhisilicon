@@ -11,9 +11,6 @@
 #define GC4653_CFG_H
 #include "sensor_common.h"
 
-#define GC4653_STREAM_ADDR 0x0100
-#define GC4653_STREAM_ON   0x09
-
 static const cis_reg_cfg gc4653_linear_4m30_10bit[] = {
     {0x03fe, 0xf0},
     {0x03fe, 0x00},
