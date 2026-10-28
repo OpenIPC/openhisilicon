@@ -1591,22 +1591,19 @@ static td_s32 cmos_set_fast_ae(ot_vi_pipe vi_pipe, ot_isp_sns_fast_ae_attr *fast
     return TD_SUCCESS;
 }
 
-/* Orientation: 0x304E bit 0 mirrors horizontally, 0x304F bit 0 flips
- * vertically.  Both are ordinary 1-byte registers that survive a VI restart,
- * so they are written unconditionally, including the disable.
+/* Orientation: 0x304E bit 0 mirrors horizontally, 0x304F bit 0 reverses the
+ * readout (vertical flip).  Both are ordinary 1-byte registers that survive a
+ * VI restart, so they are written unconditionally, including the disable.
  *
- * Only the horizontal half is implemented.  Vertical flip is deliberately NOT
- * written: on a CV610 + IMX335 board, setting 0x304F bit 0 alone delivers a
- * flat grey frame (measured -- 1920x1080 JPEG, every pixel 232, std 0, with
- * VI reporting no error).  The SigmaStar IMX335 drivers pair that bit with
- * readout-window writes (0x3081/0x3083, 0x30B6/0x30B7, 0x3016 in their
- * mirr_flip_table), but their values belong to their own init lineage: this
- * driver programs 0x3078..0x3087 as 16-bit pairs, so copying just the low
- * byte of 0x3081 would corrupt a coefficient rather than move a window.
- * Writing those registers the same way was measured too and still gave the
- * grey frame.  Until the window recipe is derived from the IMX335 datasheet
- * and measured on silicon, a vertical request is reported and dropped -- a
- * frame the operator can see beats an orientation that blanks the stream. */
+ * The vertical half needs more than that bit: the readout window and the
+ * V-flip coefficient registers move with it, which is why writing 0x304F alone
+ * was measured to deliver a flat grey frame (1920x1080 JPEG, every pixel 232,
+ * std 0, VI reporting no error).  imx335_apply_orientation() in
+ * imx335_sensor_ctrl.c now writes the mainline proportional set
+ * (drivers/media/i2c/imx335.c, V4L2_CID_VFLIP) for the full and binning modes
+ * and clears the bit for crop/flex windows, which keep the upright readout.
+ * The requested orientation is remembered per pipe so every later bring-up
+ * programs it again. */
 #define IMX335_REG_MIRROR   0x304E
 #define IMX335_REG_FLIP     0x304F
 
@@ -1615,6 +1612,9 @@ static td_void imx335_mirror_flip(ot_vi_pipe vi_pipe, ot_isp_sns_mirrorflip_type
     cis_info *cis = TD_NULL;
     td_u32 mirror = 0;
     td_u32 flip = 0;
+    td_u8 img_mode;
+
+    sns_check_pipe_void_return(vi_pipe);
 
     switch (sns_mirror_flip) {
         case ISP_SNS_MIRROR:      mirror = 1; flip = 0; break;
@@ -1624,23 +1624,31 @@ static td_void imx335_mirror_flip(ot_vi_pipe vi_pipe, ot_isp_sns_mirrorflip_type
         default:                  mirror = 0; flip = 0; break;
     }
 
-    /* Vertical half not implemented (see above).  Report it rather than
-     * blanking the stream, and keep the horizontal half the caller asked for:
-     * a mirrored image with the vertical request lost is closer to what was
-     * asked than no change at all. */
-    if (flip != 0) {
-        isp_err_trace("IMX335: vertical flip is not implemented, applying "
-            "horizontal mirror only\n");
+    cis = cmos_get_info(vi_pipe);
+    if (cis == TD_NULL || cis->sns_state == TD_NULL) {
+        return;
+    }
+    img_mode = cis->sns_state->img_mode;
+
+    /* A crop/flex window cannot carry the reversed readout: report it and keep
+     * the horizontal half the caller asked for -- a mirrored image with the
+     * vertical request lost is closer to the request than no change at all. */
+    if (flip != 0 && imx335_flip_supported(img_mode) != TD_TRUE) {
+        isp_err_trace("IMX335: vertical flip is not implemented for sensor "
+            "image mode %u, applying horizontal mirror only\n", img_mode);
         flip = 0;
     }
 
-    cis = cmos_get_info(vi_pipe);
-    if (cis == TD_NULL) {
-        return;
+    imx335_set_flip(vi_pipe, (flip != 0) ? TD_TRUE : TD_FALSE);
+    if (imx335_apply_orientation(cis, img_mode, (flip != 0) ? TD_TRUE : TD_FALSE, 0) != TD_SUCCESS) {
+        isp_err_trace("IMX335: failed to program the readout orientation\n");
     }
 
-    (td_void)cis_write_reg(&cis->i2c, IMX335_REG_MIRROR, mirror);
-    (td_void)cis_write_reg(&cis->i2c, IMX335_REG_FLIP, flip);
+    /* 0x304F is already written by imx335_apply_orientation(); only the
+     * horizontal bit is issued here. */
+    if (cis_write_reg(&cis->i2c, IMX335_REG_MIRROR, mirror) != TD_SUCCESS) {
+        isp_err_trace("IMX335: failed to write the horizontal mirror bit\n");
+    }
 }
 
 ot_isp_sns_obj g_sns_imx335_obj = {

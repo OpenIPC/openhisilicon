@@ -64,7 +64,159 @@ static td_s32 imx335_start(cis_info *cis)
     return TD_SUCCESS;
 }
 
-static td_s32 imx335_reg_init(cis_info *cis, cis_reg_cfg *cfg, td_u32 len)
+/* -------------------------------------------------------------------------
+ * Orientation: vertical flip (readout reversal)
+ * -------------------------------------------------------------------------
+ * 0x304E bit 0 mirrors horizontally (that half is issued from imx335_cmos.c).
+ * Vertical flip is not a single bit: the sensor reverses its readout by moving
+ * the AREA3 start address (0x3074) and re-pointing the "undocumented V-Flip"
+ * coefficient registers.  Deltas below are the normal -> inverted ones from
+ * mainline drivers/media/i2c/imx335.c (V4L2_CID_VFLIP, same sensor):
+ *
+ *   full/linear (modes 0, 3): 0x3074 176 -> 4112, 0x3081 0x02 -> 0xFE,
+ *                             0x3083 0x02 -> 0xFE, 0x30B6 0x0000 -> 0x01FA,
+ *                             0x3116 0x0008 -> 0x0002
+ *   binning     (mode 1):     0x3074 168 -> 4120, 0x3080..0x3087,
+ *                             0x30AD 0x08 -> 0x78, 0x30B5 0x10 -> 0x70,
+ *                             0x30B6 0x0000 -> 0x01F2, 0x3116 0x0010 -> 0x0002
+ *
+ * Both mainline modes satisfy normal + inverted == 4288, which is why the same
+ * sum is used for our binning start (8 below mainline's).  Registers that our
+ * lineage sets differently from mainline but that are identical in mainline's
+ * normal and inverted sets (0x30B0, 0x30B1, 0x30A4, 0x30A8, 0x30A9, 0x30AC,
+ * 0x30B4, 0x3112) are not part of the delta and are intentionally left as the
+ * mode tables wrote them.
+ *
+ * Crop modes (2, 4) and flex are refused: their inverted AREA3 start would run
+ * past the crop VMAX that the T6 VI requires to stay at the window length, so
+ * the offset recipe cannot be reused there without its own measurement.
+ * Those modes keep streaming upright with a warning, which is strictly better
+ * than the flat grey frame a lone 0x304F write was measured to produce. */
+#define IMX335_ORIENTATION_ST_SUM  4288
+#define IMX335_AREA3_ST_FULL       176
+#define IMX335_AREA3_ST_BINNING    168
+
+static const cis_reg_cfg imx335_flip_full_normal[] = {
+    {0x3081, 0x02}, {0x3083, 0x02},
+    {0x30B6, 0x00}, {0x30B7, 0x00},
+    {0x3116, 0x08}, {0x3117, 0x00},
+};
+
+static const cis_reg_cfg imx335_flip_full_inverted[] = {
+    {0x3081, 0xFE}, {0x3083, 0xFE},
+    {0x30B6, 0xFA}, {0x30B7, 0x01},
+    {0x3116, 0x02}, {0x3117, 0x00},
+};
+
+static const cis_reg_cfg imx335_flip_binning_normal[] = {
+    {0x3080, 0x04}, {0x3081, 0xFD}, {0x3082, 0x04}, {0x3083, 0xFE},
+    {0x3084, 0x04}, {0x3085, 0xFB}, {0x3086, 0x04}, {0x3087, 0x02},
+    {0x30AD, 0x08}, {0x30B5, 0x10},
+    {0x30B6, 0x00}, {0x30B7, 0x00},
+    {0x3116, 0x10}, {0x3117, 0x00},
+};
+
+static const cis_reg_cfg imx335_flip_binning_inverted[] = {
+    {0x3080, 0xFC}, {0x3081, 0x05}, {0x3082, 0xFC}, {0x3083, 0x02},
+    {0x3084, 0xFC}, {0x3085, 0x03}, {0x3086, 0xFC}, {0x3087, 0xFE},
+    {0x30AD, 0x78}, {0x30B5, 0x70},
+    {0x30B6, 0xF2}, {0x30B7, 0x01},
+    {0x3116, 0x02}, {0x3117, 0x00},
+};
+
+/* Requested vertical flip per pipe, remembered across mode switches within one
+ * boot and re-applied at every bring-up.  It is NOT persisted: after a reboot
+ * the caller (waybeam/majestic) re-issues pfn_mirror_flip from its own config. */
+static td_bool g_imx335_flip[OT_ISP_MAX_PIPE_NUM] = {0};
+
+static td_s32 imx335_write_reg_cfg(cis_info *cis, const cis_reg_cfg *cfg, td_u32 len)
+{
+    td_u32 i;
+
+    for (i = 0; i < len; i++) {
+        if (cis_write_reg(&cis->i2c, cfg[i].addr, cfg[i].data) != TD_SUCCESS) {
+            isp_err_trace("imx335 orientation: write 0x%04x failed!\n", cfg[i].addr);
+            return TD_FAILURE;
+        }
+    }
+
+    return TD_SUCCESS;
+}
+
+td_bool imx335_flip_supported(td_u8 img_mode)
+{
+    return (img_mode == IMX335_5M_30FPS_12BIT_LINEAR_MODE ||
+            img_mode == IMX335_60FPS_FULL_1944P_MODE ||
+            img_mode == IMX335_60FPS_BINNING_MODE) ? TD_TRUE : TD_FALSE;
+}
+
+td_bool imx335_get_flip(ot_vi_pipe vi_pipe)
+{
+    if (vi_pipe < 0 || vi_pipe >= OT_ISP_MAX_PIPE_NUM) {
+        return TD_FALSE;
+    }
+
+    return g_imx335_flip[vi_pipe];
+}
+
+td_void imx335_set_flip(ot_vi_pipe vi_pipe, td_bool flip)
+{
+    if (vi_pipe < 0 || vi_pipe >= OT_ISP_MAX_PIPE_NUM) {
+        return;
+    }
+
+    g_imx335_flip[vi_pipe] = (flip == TD_TRUE) ? TD_TRUE : TD_FALSE;
+}
+
+/* Program the readout for `flip`, using the mode's upright AREA3 start.  When
+ * area3_st_normal is 0 the mode default is used.  Written without standby, the
+ * way mainline's runtime VFLIP control does it; the caller re-inits the mode
+ * right after a bring-up, so the streaming case only affects a running pipe. */
+td_s32 imx335_apply_orientation(cis_info *cis, td_u8 img_mode, td_bool flip, td_u32 area3_st_normal)
+{
+    const cis_reg_cfg *cfg = TD_NULL;
+    td_u32 len;
+    td_u32 start;
+
+    sns_check_pointer_return(cis);
+
+    if (imx335_flip_supported(img_mode) != TD_TRUE) {
+        /* Crop/flex window: no vertical flip, keep the upright readout.  Clear
+         * the reverse bit so a flip inherited from another mode cannot blank
+         * the stream. */
+        (td_void)cis_write_reg(&cis->i2c, 0x304F, 0x00);
+        return TD_SUCCESS;
+    }
+
+    if (area3_st_normal == 0) {
+        area3_st_normal = (img_mode == IMX335_60FPS_BINNING_MODE) ?
+            IMX335_AREA3_ST_BINNING : IMX335_AREA3_ST_FULL;
+    }
+    start = (flip == TD_TRUE) ? (IMX335_ORIENTATION_ST_SUM - area3_st_normal) : area3_st_normal;
+
+    if (cis_write_reg(&cis->i2c, 0x3074, start & 0xFF) != TD_SUCCESS ||
+        cis_write_reg(&cis->i2c, 0x3075, (start >> 8) & 0x1F) != TD_SUCCESS) {
+        isp_err_trace("imx335 orientation: AREA3 start 0x%04x failed!\n", start);
+        return TD_FAILURE;
+    }
+
+    if (img_mode == IMX335_60FPS_BINNING_MODE) {
+        cfg = (flip == TD_TRUE) ? imx335_flip_binning_inverted : imx335_flip_binning_normal;
+        len = (td_u32)(sizeof(imx335_flip_binning_normal) / sizeof(imx335_flip_binning_normal[0]));
+    } else {
+        cfg = (flip == TD_TRUE) ? imx335_flip_full_inverted : imx335_flip_full_normal;
+        len = (td_u32)(sizeof(imx335_flip_full_normal) / sizeof(imx335_flip_full_normal[0]));
+    }
+
+    if (imx335_write_reg_cfg(cis, cfg, len) != TD_SUCCESS) {
+        return TD_FAILURE;
+    }
+
+    /* VREVERSE: mainline writes it last, after the coefficient registers. */
+    return cis_write_reg(&cis->i2c, 0x304F, (flip == TD_TRUE) ? 0x01 : 0x00);
+}
+
+static td_s32 imx335_reg_init(cis_info *cis, cis_reg_cfg *cfg, td_u32 len, td_u32 area3_st_normal)
 {
     td_u32 i;
 
@@ -77,6 +229,14 @@ static td_s32 imx335_reg_init(cis_info *cis, cis_reg_cfg *cfg, td_u32 len)
             return TD_FAILURE;
         }
         cfg++;
+    }
+
+    if (cis->sns_state == TD_NULL || cis->pipe < 0 || cis->pipe >= OT_ISP_MAX_PIPE_NUM) {
+        return TD_FAILURE;
+    }
+    if (imx335_apply_orientation(cis, cis->sns_state->img_mode,
+                                 g_imx335_flip[cis->pipe], area3_st_normal) != TD_SUCCESS) {
+        return TD_FAILURE;
     }
 
     return imx335_start(cis);
@@ -175,6 +335,10 @@ static td_s32 imx335_flex_reg_init(cis_info *cis)
     printf("IMX335 CROP_FLEX: crop=%ux%u (HNUM=%u HSTART=%u Y_OUT=%u AREA3_ST=%u AREA3_W=%u VMAX=%u HMAX=%u fps=%.2f)\n",
         crop_w, crop_h, hnum, hstart, y_out_size, area3_st, area3_width, vmax, hmax, fps);
 
+    /* Flex cannot carry the reversed readout; this clears 0x304F if a previous
+     * mode left it set (the AREA3 start is ignored for unsupported modes). */
+    (td_void)imx335_apply_orientation(cis, IMX335_CROP_FLEX_LINEAR_MODE, TD_FALSE, 0);
+
     return imx335_start(cis);
 }
 
@@ -225,7 +389,13 @@ td_s32 imx335_init(cis_info *cis)
             break;
     }
 
-    ret = imx335_reg_init(cis, cfg, len);
+    /* A crop window cannot carry the reversed readout (see
+     * imx335_flip_supported()); imx335_apply_orientation() clears 0x304F for it
+     * while the per-pipe request is kept, so returning to a full/binning mode
+     * restores the orientation the caller asked for. */
+    ret = imx335_reg_init(cis, cfg, len,
+                          (sns_state->img_mode == IMX335_60FPS_BINNING_MODE) ?
+                          IMX335_AREA3_ST_BINNING : IMX335_AREA3_ST_FULL);
     if (ret == TD_SUCCESS &&
         (sns_state->img_mode == IMX335_60FPS_CROPPED_1080P_MODE ||
          sns_state->img_mode == IMX335_1520P_10BIT_MODE)) {
