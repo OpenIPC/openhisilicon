@@ -483,14 +483,15 @@ static td_void cmos_isp_get_dng_default(const ot_isp_sns_state *sns_state, ot_is
     isp_def->sns_mode.dng_raw_format.cfa_plane_color[1] = 1;
     isp_def->sns_mode.dng_raw_format.cfa_plane_color[2] = 2; /* index 2, cfa_plane_color 2 */
     /*
-     * GRBG, as the hi3516ev200 profile runs this sensor. The vendor's CV610
-     * table moves the window start by one pixel on one axis (0x0352/0x0354),
-     * which may turn that into RGGB or BGGR; unverified on hardware.
+     * RGGB: the CFA the vendor's CV610 driver reports for this sensor
+     * ({0, 1, 1, 2}). Its init table starts the window one column later
+     * than the hi3516ev200 driver's (0x0354 = 7, not 8), which is what turns
+     * that driver's GRBG into RGGB.
      */
-    isp_def->sns_mode.dng_raw_format.cfa_pattern[0] = 1;
-    isp_def->sns_mode.dng_raw_format.cfa_pattern[1] = 0;
-    isp_def->sns_mode.dng_raw_format.cfa_pattern[2] = 2; /* index 2, cfa_pattern 2 */
-    isp_def->sns_mode.dng_raw_format.cfa_pattern[3] = 1; /* index 3, cfa_pattern 1 */
+    isp_def->sns_mode.dng_raw_format.cfa_pattern[0] = 0;
+    isp_def->sns_mode.dng_raw_format.cfa_pattern[1] = 1;
+    isp_def->sns_mode.dng_raw_format.cfa_pattern[2] = 1; /* index 2, cfa_pattern 1 */
+    isp_def->sns_mode.dng_raw_format.cfa_pattern[3] = 2; /* index 3, cfa_pattern 2 */
     isp_def->sns_mode.valid_dng_raw_format = TD_TRUE;
 }
 
