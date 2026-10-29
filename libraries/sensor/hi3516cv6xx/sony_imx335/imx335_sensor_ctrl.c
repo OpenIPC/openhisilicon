@@ -309,17 +309,31 @@ static td_s32 imx335_apply_orientation_locked(cis_info *cis, td_u8 img_mode,
     return TD_SUCCESS;
 }
 
-/* Public entry for the callback path: takes the sensor lock, so the whole
- * sequence is atomic against a bring-up running on the ISP thread. */
-td_s32 imx335_apply_orientation(cis_info *cis, td_u8 img_mode, td_bool mirror,
-    td_bool flip, td_u32 area3_st_normal)
+/* Public entry for the callback path: stores the request and programs it for
+ * the current image mode, all under the sensor lock.  The mode is read inside
+ * the lock, not by the caller: a mode sampled before it would let a callback
+ * that raced a mode change write the old full/binning flip set onto the crop
+ * window the bring-up had just programmed, i.e. the grey frame again.  Reading
+ * it here means the callback either runs before the bring-up (which then
+ * re-applies the stored request) or after it, against the mode it started.
+ *
+ * Before cmos_isp_init() opens the bus there is nothing to program yet: the
+ * request is stored and the next bring-up applies it, so that is a success. */
+td_s32 imx335_apply_orientation(cis_info *cis, td_bool mirror, td_bool flip)
 {
-    td_s32 ret;
+    td_s32 ret = TD_SUCCESS;
 
     sns_check_pointer_return(cis);
 
     imx335_lock(cis);
-    ret = imx335_apply_orientation_locked(cis, img_mode, mirror, flip, area3_st_normal);
+    /* No sensor state means the pipe is not registered (cis->pipe is not set
+     * yet either); cis_destroy_state() frees it under this same lock. */
+    if (cis->sns_state != TD_NULL) {
+        imx335_set_orientation(cis->pipe, mirror, flip);
+        if (cis->i2c.fd >= 0) {
+            ret = imx335_apply_orientation_locked(cis, cis->sns_state->img_mode, mirror, flip, 0);
+        }
+    }
     imx335_unlock(cis);
 
     return ret;
