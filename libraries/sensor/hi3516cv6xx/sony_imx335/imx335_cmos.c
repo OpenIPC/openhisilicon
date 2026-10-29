@@ -1308,6 +1308,7 @@ static void cmos_isp_init(ot_vi_pipe vi_pipe)
 
     quick_start_flag = cmos_isp_get_quick_start_flag(vi_pipe);
     if (quick_start_flag == TD_TRUE) {
+        imx335_mark_programmed(cis);
         sensor_state->init = TD_TRUE;
         return;
     }
@@ -1609,9 +1610,9 @@ static td_s32 cmos_set_fast_ae(ot_vi_pipe vi_pipe, ot_isp_sns_fast_ae_attr *fast
  * switch that cannot carry it (crop/flex) does not throw it away: switching
  * back to a full or binning mode restores the orientation the operator chose.
  * The warning for an unsupported mode is emitted by imx335_apply_orientation()
- * on either path, and that call takes the sensor mutex -- reading the image
- * mode under it too -- so the sequence cannot interleave with, or act on a mode
- * superseded by, a bring-up running on the ISP thread. */
+ * on either path, and that call takes the sensor mutex and programs the mode
+ * the sensor is actually running, so the sequence cannot interleave with a
+ * bring-up on the ISP thread, nor act on a mode selected but not yet brought up. */
 static td_void imx335_mirror_flip(ot_vi_pipe vi_pipe, ot_isp_sns_mirrorflip_type sns_mirror_flip)
 {
     cis_info *cis = TD_NULL;
