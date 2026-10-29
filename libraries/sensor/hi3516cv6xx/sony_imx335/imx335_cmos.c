@@ -1488,6 +1488,10 @@ static td_s32 cmos_unregister_callback(ot_vi_pipe vi_pipe, ot_isp_3a_alg_lib *ae
         return ret;
     }
 
+    /* Sensor session ends here: a new session starts from the sensor's own
+     * upright readout unless its caller asks otherwise. */
+    imx335_clear_orientation(vi_pipe);
+
     return TD_SUCCESS;
 }
 
@@ -1591,12 +1595,63 @@ static td_s32 cmos_set_fast_ae(ot_vi_pipe vi_pipe, ot_isp_sns_fast_ae_attr *fast
     return TD_SUCCESS;
 }
 
+/* Orientation: 0x304E bit 0 mirrors horizontally, 0x304F bit 0 reverses the
+ * readout (vertical flip).  The vertical half needs more than that bit: the
+ * readout window and the V-flip coefficient registers move with it, which is
+ * why writing 0x304F alone was measured to deliver a flat grey frame
+ * (1920x1080 JPEG, every pixel 232, std 0, VI reporting no error).
+ * imx335_apply_orientation() in imx335_sensor_ctrl.c writes the mainline
+ * proportional set (drivers/media/i2c/imx335.c, V4L2_CID_VFLIP) for the full
+ * and binning modes, and clears the bit for crop/flex windows, which keep the
+ * upright readout.
+ *
+ * The request is stored as asked and re-applied at every bring-up, so a mode
+ * switch that cannot carry it (crop/flex) does not throw it away: switching
+ * back to a full or binning mode restores the orientation the operator chose.
+ * The warning for an unsupported mode is emitted by imx335_apply_orientation()
+ * on either path, and that call takes the sensor mutex, so the sequence below
+ * cannot interleave with a bring-up running on the ISP thread. */
+static td_void imx335_mirror_flip(ot_vi_pipe vi_pipe, ot_isp_sns_mirrorflip_type sns_mirror_flip)
+{
+    cis_info *cis = TD_NULL;
+    td_bool mirror = TD_FALSE;
+    td_bool flip = TD_FALSE;
+
+    sns_check_pipe_void_return(vi_pipe);
+
+    switch (sns_mirror_flip) {
+        case ISP_SNS_MIRROR:      mirror = TD_TRUE;  flip = TD_FALSE; break;
+        case ISP_SNS_FLIP:        mirror = TD_FALSE; flip = TD_TRUE;  break;
+        case ISP_SNS_MIRROR_FLIP: mirror = TD_TRUE;  flip = TD_TRUE;  break;
+        case ISP_SNS_NORMAL:
+        default:                  mirror = TD_FALSE; flip = TD_FALSE; break;
+    }
+
+    cis = cmos_get_info(vi_pipe);
+    if (cis == TD_NULL || cis->sns_state == TD_NULL) {
+        return;
+    }
+
+    /* The request is stored first, unconditionally: it is what the next
+     * bring-up applies.  Before cmos_isp_init() opens the bus there is nothing
+     * to program yet, and writing anyway would only log "fd is invalid!" for an
+     * expected state, so skip the hardware half until the fd exists. */
+    imx335_set_orientation(vi_pipe, mirror, flip);
+    if (cis->i2c.fd < 0) {
+        return;
+    }
+
+    if (imx335_apply_orientation(cis, cis->sns_state->img_mode, mirror, flip, 0) != TD_SUCCESS) {
+        isp_err_trace("IMX335: failed to program the readout orientation\n");
+    }
+}
+
 ot_isp_sns_obj g_sns_imx335_obj = {
     .pfn_register_callback     = cmos_register_callback,
     .pfn_un_register_callback  = cmos_unregister_callback,
     .pfn_standby               = cmos_standby,
     .pfn_restart               = cmos_restart,
-    .pfn_mirror_flip           = TD_NULL,
+    .pfn_mirror_flip           = imx335_mirror_flip,
     .pfn_set_blc_clamp         = TD_NULL,
     .pfn_write_reg             = cmos_write_register,
     .pfn_read_reg              = cmos_read_register,
