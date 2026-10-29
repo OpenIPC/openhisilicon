@@ -143,6 +143,21 @@ static const cis_reg_cfg imx335_flip_binning_inverted[] = {
 static td_bool g_imx335_mirror[OT_ISP_MAX_PIPE_NUM] = {0};
 static td_bool g_imx335_flip[OT_ISP_MAX_PIPE_NUM] = {0};
 
+/* The mode the sensor is actually running, per pipe.  Written under cis->mutex,
+ * except the reset in imx335_clear_orientation() at unregister, which runs once
+ * cis_destroy_state() has dropped sns_state and the callback no longer gets
+ * past its sns_state check to read it.
+ * sns_state->img_mode is not that: cmos_isp_set_image_mode() publishes the new
+ * mode, without the lock, before imx335_init() programs it, so a callback that
+ * trusted img_mode in between would write the next mode's readout (e.g. the
+ * full-mode flip set and 0x304F) onto a sensor still streaming the crop window.
+ * IMX335_MODE_MAX means unknown -- before the first bring-up, from the reset of
+ * a bring-up until it succeeds, and after a failed one -- and the callback then
+ * only stores the request for the next bring-up to apply. */
+static td_u8 g_imx335_hw_mode[OT_ISP_MAX_PIPE_NUM] = {
+    [0 ...(OT_ISP_MAX_PIPE_NUM - 1)] = IMX335_MODE_MAX
+};
+
 #define IMX335_REG_MIRROR   0x304E
 #define IMX335_REG_FLIP     0x304F
 
@@ -223,6 +238,7 @@ td_void imx335_clear_orientation(ot_vi_pipe vi_pipe)
 
     g_imx335_mirror[vi_pipe] = TD_FALSE;
     g_imx335_flip[vi_pipe] = TD_FALSE;
+    g_imx335_hw_mode[vi_pipe] = IMX335_MODE_MAX;
 }
 
 /* Program the readout for the requested orientation, using the mode's upright
@@ -309,17 +325,63 @@ static td_s32 imx335_apply_orientation_locked(cis_info *cis, td_u8 img_mode,
     return TD_SUCCESS;
 }
 
-/* Public entry for the callback path: takes the sensor lock, so the whole
- * sequence is atomic against a bring-up running on the ISP thread. */
-td_s32 imx335_apply_orientation(cis_info *cis, td_u8 img_mode, td_bool mirror,
-    td_bool flip, td_u32 area3_st_normal)
+static td_u8 imx335_hw_mode(ot_vi_pipe vi_pipe)
 {
-    td_s32 ret;
+    if (vi_pipe < 0 || vi_pipe >= OT_ISP_MAX_PIPE_NUM) {
+        return IMX335_MODE_MAX;
+    }
+    return g_imx335_hw_mode[vi_pipe];
+}
+
+static td_void imx335_set_hw_mode(ot_vi_pipe vi_pipe, td_u8 mode)
+{
+    if (vi_pipe < 0 || vi_pipe >= OT_ISP_MAX_PIPE_NUM) {
+        return;
+    }
+    g_imx335_hw_mode[vi_pipe] = mode;
+}
+
+/* Quick start: the sensor was brought up before this process and imx335_init()
+ * is skipped, so the selected mode is the one streaming. */
+td_void imx335_mark_programmed(cis_info *cis)
+{
+    sns_check_pointer_void_return(cis);
+    sns_check_pointer_void_return(cis->sns_state);
+
+    imx335_lock(cis);
+    imx335_set_hw_mode(cis->pipe, cis->sns_state->img_mode);
+    imx335_unlock(cis);
+}
+
+/* Public entry for the callback path: stores the request and programs it for
+ * the mode the sensor is running, all under the sensor lock.  Both halves of
+ * the mode-switch race are closed: the mode is not sampled by the caller before
+ * the lock (which let a callback write the old full/binning flip set onto a crop
+ * window brought up meanwhile), and it is the programmed mode, not img_mode
+ * (which set_image_mode updates before the bring-up programs it).  A callback
+ * therefore acts on the readout actually streaming, and the bring-up that
+ * follows re-applies the stored request for its own mode.
+ *
+ * With no programmed mode -- before cmos_isp_init() opens the bus, or between a
+ * bring-up's reset and its success -- the request is stored and the next
+ * bring-up applies it, so that is a success. */
+td_s32 imx335_apply_orientation(cis_info *cis, td_bool mirror, td_bool flip)
+{
+    td_s32 ret = TD_SUCCESS;
+    td_u8 hw_mode;
 
     sns_check_pointer_return(cis);
 
     imx335_lock(cis);
-    ret = imx335_apply_orientation_locked(cis, img_mode, mirror, flip, area3_st_normal);
+    /* No sensor state means the pipe is not registered (cis->pipe is not set
+     * yet either); cis_destroy_state() frees it under this same lock. */
+    if (cis->sns_state != TD_NULL) {
+        imx335_set_orientation(cis->pipe, mirror, flip);
+        hw_mode = imx335_hw_mode(cis->pipe);
+        if (cis->i2c.fd >= 0 && hw_mode < IMX335_MODE_MAX) {
+            ret = imx335_apply_orientation_locked(cis, hw_mode, mirror, flip, 0);
+        }
+    }
     imx335_unlock(cis);
 
     return ret;
@@ -479,6 +541,8 @@ td_s32 imx335_init(cis_info *cis)
      * on another thread must not land between the reset and the table writes,
      * nor between the table and the orientation registers. */
     imx335_lock(cis);
+    /* From the reset on, the sensor runs no known mode until this succeeds. */
+    imx335_set_hw_mode(cis->pipe, IMX335_MODE_MAX);
 
     if (sns_state->img_mode == IMX335_CROP_FLEX_LINEAR_MODE) {
         ret = imx335_flex_reg_init(cis);
@@ -529,6 +593,9 @@ td_s32 imx335_init(cis_info *cis)
     }
 
 init_done:
+    if (ret == TD_SUCCESS) {
+        imx335_set_hw_mode(cis->pipe, sns_state->img_mode);
+    }
     imx335_unlock(cis);
 
     if (ret != TD_SUCCESS) {

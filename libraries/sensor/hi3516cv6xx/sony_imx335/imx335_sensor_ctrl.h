@@ -25,14 +25,17 @@ td_s32 imx335_get_standby_cfg(ot_isp_sns_regs_info *standby_cfg);
  * imx335_apply_orientation() takes cis->mutex itself: the callback path and the
  * bring-up path must not program the readout at the same time.  Callers must not
  * hold that mutex (a non-recursive one) -- the init path uses the internal
- * locked variant for that reason.  The i2c fd is not required: before
- * cmos_isp_init() opens it the request is stored and applied at the next
- * bring-up. */
+ * locked variant for that reason.  It stores the request and programs the mode
+ * the sensor is running -- recorded by imx335_init() on success, or by
+ * imx335_mark_programmed() on quick start -- never the merely selected
+ * img_mode, so a callback racing a mode change cannot program the wrong
+ * readout.  The i2c fd is not required: before cmos_isp_init()
+ * opens it the request is stored and applied at the next bring-up. */
 td_void imx335_get_orientation(ot_vi_pipe vi_pipe, td_bool *mirror, td_bool *flip);
 td_void imx335_set_orientation(ot_vi_pipe vi_pipe, td_bool mirror, td_bool flip);
 td_void imx335_clear_orientation(ot_vi_pipe vi_pipe);
-td_s32 imx335_apply_orientation(cis_info *cis, td_u8 img_mode, td_bool mirror,
-    td_bool flip, td_u32 area3_st_normal);
+td_s32 imx335_apply_orientation(cis_info *cis, td_bool mirror, td_bool flip);
+td_void imx335_mark_programmed(cis_info *cis);
 
 #ifdef __cplusplus
 #if __cplusplus
