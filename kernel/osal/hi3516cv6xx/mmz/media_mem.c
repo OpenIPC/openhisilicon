@@ -9,6 +9,8 @@
 #include "ot_common.h"
 #include "mmz_common.h"
 #include "allocator.h"
+#include <linux/mutex.h>
+#include <linux/slab.h>
 
 #define MMZ_SETUP_CMDLINE_LEN     256
 #define MMZ_ALLOCATOR_NAME_LEN    32
@@ -19,6 +21,34 @@ OSAL_LIST_HEAD(g_map_mmz_list);
 static DEFINE_SEMAPHORE(g_mmz_lock);
 
 static struct mmz_allocator g_the_allocator;
+
+/*
+ * mmz_allocator=hybrid: a carve-out zone for what the media pipeline holds
+ * all the time, and a CMA zone it borrows from only when that is full. The
+ * kernel (hisi_mem) declares CMA areas for the zones named cma* and keeps the
+ * rest out of its memory, so get_cma_zone() tells the two apart here. Only
+ * a peak then needs the kernel to hand memory back, and a restart of the
+ * streamer finds its carve-out empty, where under plain CMA it would have to
+ * migrate the whole pipeline out of whatever the system had put there.
+ */
+static bool g_hybrid;
+static struct mmz_allocator g_ot_ops;
+static struct mmz_allocator g_cma_ops;
+#define HYBRID_CMA_ZONE "cma"
+
+struct cma_zone;
+extern struct cma_zone *get_cma_zone(const char *name);
+
+/* cma_dev shares a union with bitmap, which nothing on this chip sets */
+static inline bool mmz_is_cma(const ot_mmz_t *zone)
+{
+    return zone != NULL && zone->cma_dev != NULL;
+}
+
+static const struct mmz_allocator *ops_of_zone(const ot_mmz_t *zone)
+{
+    return mmz_is_cma(zone) ? &g_cma_ops : &g_ot_ops;
+}
 
 static int  anony = 0;
 static bool mem_process_isolation = true;
@@ -150,7 +180,7 @@ int ot_mmz_register(ot_mmz_t *zone)
     mmz_debug_info(OT_MMZ_FMT_S, ot_mmz_fmt_arg(zone));
 
     down(&g_mmz_lock);
-    if (strcmp(g_setup_allocator, "ot") == 0) {
+    if (strcmp(g_setup_allocator, "ot") == 0 || (g_hybrid && !mmz_is_cma(zone))) {
         ret = mmz_register_check(zone);
         if (ret) {
             up(&g_mmz_lock);
@@ -1125,6 +1155,158 @@ static void mmz_exit_check(void)
     }
 }
 
+/* fragments mapped from a CMA zone, which take vunmap, not iounmap */
+struct hybrid_mmf {
+    struct list_head list;
+    void *virt;
+};
+static LIST_HEAD(g_hybrid_mmf);
+static DEFINE_MUTEX(g_hybrid_mmf_lock);
+
+static ot_mmz_t *zone_of_phys(phys_addr_t phys)
+{
+    ot_mmz_t *p = NULL;
+
+    osal_list_for_each_entry(p, &g_mmz_list, list) {
+        if (phys >= p->phys_start && phys < p->phys_start + p->nbytes) {
+            return p;
+        }
+    }
+    return NULL;
+}
+
+static int hybrid_init(char *s)
+{
+    static char cma_zones[MMZ_SETUP_CMDLINE_LEN];
+    static char ot_zones[MMZ_SETUP_CMDLINE_LEN];
+    char copy[MMZ_SETUP_CMDLINE_LEN];
+    char *rest = copy, *entry = NULL;
+    int ret = 0;
+
+    if (strncpy_s(copy, sizeof(copy), s, sizeof(copy) - 1) != EOK) {
+        return -EINVAL;
+    }
+    cma_zones[0] = ot_zones[0] = '\0';
+    while ((entry = strsep(&rest, ":")) != NULL) {
+        char name[OT_MMZ_NAME_LEN] = {0};
+        char *to = NULL;
+        size_t n = strcspn(entry, ",");
+
+        if (*entry == '\0') {
+            continue;
+        }
+        (void)strncpy_s(name, sizeof(name), entry, min(n, sizeof(name) - 1));
+        to = get_cma_zone(name) != NULL ? cma_zones : ot_zones;
+        if (to[0] != '\0') {
+            (void)strcat_s(to, MMZ_SETUP_CMDLINE_LEN, ":");
+        }
+        (void)strcat_s(to, MMZ_SETUP_CMDLINE_LEN, entry);
+    }
+    mmz_printk(KERN_INFO "mmz hybrid: carve-out zones \"%s\", CMA zones \"%s\"\n", ot_zones, cma_zones);
+    if (ot_zones[0] != '\0') {
+        ret = g_ot_ops.init(ot_zones);
+    }
+    if (ret == 0 && cma_zones[0] != '\0') {
+        ret = g_cma_ops.init(cma_zones);
+    }
+    return ret;
+}
+
+static ot_mmb_t *hybrid_mmb_alloc(const ot_mmz_alloc_para_in *para_in)
+{
+    const char *name = para_in->mmz_name;
+    ot_mmb_t *mmb = g_ot_ops.mmb_alloc(para_in);
+    ot_mmz_alloc_para_in spill;
+
+    if (mmb != NULL) {
+        return mmb;
+    }
+    /* a named CMA zone, asked for by name */
+    if (name != NULL && *name != '\0' && strcmp(name, "anonymous") != 0) {
+        return g_cma_ops.mmb_alloc(para_in);
+    }
+    /* the carve-out is full: borrow from the CMA zone */
+    spill = *para_in;
+    spill.mmz_name = HYBRID_CMA_ZONE;
+    mmb = g_cma_ops.mmb_alloc(&spill);
+    if (mmb != NULL) {
+        mmz_debug_info("mmb<%s> %luKB from the CMA zone, the carve-out is full",
+            mmb->name, mmb->length / SZ_1K);
+    }
+    return mmb;
+}
+
+static void *hybrid_mmb_map2kern(ot_mmb_t *mmb, int cached)
+{
+    return ops_of_zone(mmb->zone)->mmb_map2kern(mmb, cached);
+}
+
+static int hybrid_mmb_unmap(ot_mmb_t *mmb)
+{
+    return ops_of_zone(mmb->zone)->mmb_unmap(mmb);
+}
+
+static void hybrid_mmb_free(ot_mmb_t *mmb)
+{
+    ops_of_zone(mmb->zone)->mmb_free(mmb);
+}
+
+static void *hybrid_mmf_map(phys_addr_t phys, int len, int cache)
+{
+    struct hybrid_mmf *f = NULL;
+    void *virt = NULL;
+
+    if (!mmz_is_cma(zone_of_phys(phys))) {
+        return g_ot_ops.mmf_map(phys, len, cache);
+    }
+    f = kmalloc(sizeof(*f), GFP_KERNEL);
+    if (f == NULL) {
+        return NULL;
+    }
+    virt = g_cma_ops.mmf_map(phys, len, cache);
+    if (virt == NULL) {
+        kfree(f);
+        return NULL;
+    }
+    f->virt = virt;
+    mutex_lock(&g_hybrid_mmf_lock);
+    list_add(&f->list, &g_hybrid_mmf);
+    mutex_unlock(&g_hybrid_mmf_lock);
+    return virt;
+}
+
+static void hybrid_mmf_unmap(void *virt)
+{
+    struct hybrid_mmf *f = NULL, *n = NULL;
+
+    mutex_lock(&g_hybrid_mmf_lock);
+    list_for_each_entry_safe(f, n, &g_hybrid_mmf, list) {
+        if (f->virt == virt) {
+            list_del(&f->list);
+            mutex_unlock(&g_hybrid_mmf_lock);
+            kfree(f);
+            g_cma_ops.mmf_unmap(virt);
+            return;
+        }
+    }
+    mutex_unlock(&g_hybrid_mmf_lock);
+    g_ot_ops.mmf_unmap(virt);
+}
+
+static void hybrid_allocator_setopt(struct mmz_allocator *allocator)
+{
+    ot_allocator_setopt(&g_ot_ops);
+    cma_allocator_setopt(&g_cma_ops);
+    g_hybrid = true;
+    allocator->init         = hybrid_init;
+    allocator->mmb_alloc    = hybrid_mmb_alloc;
+    allocator->mmb_map2kern = hybrid_mmb_map2kern;
+    allocator->mmb_unmap    = hybrid_mmb_unmap;
+    allocator->mmb_free     = hybrid_mmb_free;
+    allocator->mmf_map      = hybrid_mmf_map;
+    allocator->mmf_unmap    = hybrid_mmf_unmap;
+}
+
 int __init media_mem_init(void)
 {
     int ret = 0;
@@ -1145,8 +1327,15 @@ int __init media_mem_init(void)
 #endif
     } else if (strcmp(g_setup_allocator, "ot") == 0) {
         ot_allocator_setopt(&g_the_allocator);
+    } else if (strcmp(g_setup_allocator, "hybrid") == 0) {
+#ifdef CONFIG_CMA
+        hybrid_allocator_setopt(&g_the_allocator);
+#else
+        pr_err("hybrid needs cma, which is not enabled in kernel, please check!\n");
+        return -EINVAL;
+#endif
     } else {
-        mmz_err_trace("The module param \"g_setup_allocator\" should be \"cma\" or \"ot\", which is \"%s\"\n",
+        mmz_err_trace("The module param \"g_setup_allocator\" should be \"cma\", \"ot\" or \"hybrid\", which is \"%s\"\n",
             g_setup_allocator);
         mmz_exit_check();
         return -EINVAL;

@@ -93,7 +93,8 @@ static ot_mmb_t *allocator_mmb_alloc(const ot_mmz_alloc_para_in *para_in)
     mmz_debug_info("anonymous=%s, size=%luKB", mmz_name, size / SZ_1K);
 
     osal_list_for_each_entry(mmz, ot_mmz_get_mmz_list(), list) {
-        if (mmz_default_filter(mmz, gfp, mmz_name) != 0) {
+        /* a carve-out zone of a hybrid layout is ot_allocator's */
+        if (mmz->cma_dev == NULL || mmz_default_filter(mmz, gfp, mmz_name) != 0) {
             continue;
         }
         page = dma_alloc_from_contiguous(mmz->cma_dev, count, order, 0);
