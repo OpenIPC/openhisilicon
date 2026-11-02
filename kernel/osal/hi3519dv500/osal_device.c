@@ -123,9 +123,29 @@ static ssize_t osal_read(struct file *file, char __user *buf, size_t size, loff_
     return 0;
 }
 
+/*
+ * Handed to the driver's write, as osal_read hands its read. This used to
+ * answer 0 without calling it, so a write never reached any driver: the
+ * watchdog's magic close ("V" before the close, which ot_dog_write takes) was
+ * dropped, and its caller was told nothing had been written.
+ */
 static ssize_t osal_write(struct file *file, const char __user *buf, size_t size, loff_t *offset)
 {
-    osal_unused(file, buf, size, offset);
+    osal_fileops_info *fileops_node = NULL;
+    if (file == NULL) {
+        osal_log("file NULL!\n");
+        return OSAL_FAILURE;
+    }
+    fileops_node = (osal_fileops_info *)file->private_data;
+    if (fileops_node == NULL || fileops_node->fops == NULL) {
+        osal_log("fileops_node NULL!\n");
+        return OSAL_FAILURE;
+    }
+
+    if (fileops_node->fops->write != NULL) {
+        return fileops_node->fops->write(buf, (int)size, (long *)offset, (void *)&(fileops_node->private_data));
+    }
+
     return 0;
 }
 
