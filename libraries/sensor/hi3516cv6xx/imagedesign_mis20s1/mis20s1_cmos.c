@@ -720,7 +720,11 @@ static td_s32 cmos_isp_set_image_mode(ot_vi_pipe vi_pipe, const ot_isp_cmos_sns_
 /*
  * The conversion gain ratio, as the vendor driver reads it before the init
  * table: the integer part in the low nibble of OTP 0x2003, tenths in 0x2004
- * shifted right by 2. An unprogrammed 0x2003 (0 or 0xff) keeps 9.0x.
+ * shifted right by 2. An unprogrammed 0x2003 (0 or 0xff) keeps 9.0x, and so
+ * does one whose integer nibble is 0, which the vendor's check lets through:
+ * a ratio of 0 would put every gain on the HCG branch at the top code. Each
+ * fallback is said, so a module running on 9.0x is not mistaken for one
+ * running on its own calibration.
  */
 static td_void mis20s1_read_dcg(cis_info *cis, ot_vi_pipe vi_pipe)
 {
@@ -728,8 +732,13 @@ static td_void mis20s1_read_dcg(cis_info *cis, ot_vi_pipe vi_pipe)
     td_u8 frac = 0;
 
     g_mis20s1_dcg[vi_pipe] = MIS20S1_DCG_DEFAULT;
-    if (mis20s1_read_reg(&cis->i2c, MIS20S1_DCG_OTP_INT, &integer) != TD_SUCCESS ||
-        integer == 0 || integer == 0xff) {
+    if (mis20s1_read_reg(&cis->i2c, MIS20S1_DCG_OTP_INT, &integer) != TD_SUCCESS) {
+        isp_err_trace("mis20s1: OTP 0x2003 unreadable; conversion gain ratio taken as 9.0x\n");
+        return;
+    }
+    if (integer == 0 || integer == 0xff || (integer & 0xf) == 0) {
+        isp_err_trace("mis20s1: OTP 0x2003 is 0x%02x, no ratio; conversion gain ratio taken as 9.0x\n",
+                      integer);
         return;
     }
     g_mis20s1_dcg[vi_pipe] = (integer & 0xf) * 10;
@@ -951,10 +960,19 @@ static td_void cmos_mirror_flip(ot_vi_pipe vi_pipe, ot_isp_sns_mirrorflip_type s
             mode = ISP_SNS_NORMAL;
             break;
     }
-    (td_void)cis_write_reg(&cis->i2c, MIS20S1_STREAM_ADDR, MIS20S1_STREAM_OFF);
+    /* Stream on is written whatever came before it, and retried once: a
+     * sensor left in stream off is a camera with no picture. */
+    if (cis_write_reg(&cis->i2c, MIS20S1_STREAM_ADDR, MIS20S1_STREAM_OFF) != TD_SUCCESS) {
+        isp_err_trace("mis20s1: stream off before mirror/flip failed\n");
+    }
     cis_delay_ms(50); /* 50 ms */
-    (td_void)cis_write_reg(&cis->i2c, MIS20S1_MIRROR_FLIP_ADDR, mode);
-    (td_void)cis_write_reg(&cis->i2c, MIS20S1_STREAM_ADDR, MIS20S1_STREAM_ON);
+    if (cis_write_reg(&cis->i2c, MIS20S1_MIRROR_FLIP_ADDR, mode) != TD_SUCCESS) {
+        isp_err_trace("mis20s1: writing mirror/flip mode %u failed\n", mode);
+    }
+    if (cis_write_reg(&cis->i2c, MIS20S1_STREAM_ADDR, MIS20S1_STREAM_ON) != TD_SUCCESS &&
+        cis_write_reg(&cis->i2c, MIS20S1_STREAM_ADDR, MIS20S1_STREAM_ON) != TD_SUCCESS) {
+        isp_err_trace("mis20s1: stream on after mirror/flip failed; the sensor is stopped\n");
+    }
 }
 
 static td_s32 cmos_write_register(ot_vi_pipe vi_pipe, td_u32 addr, td_u32 data)
