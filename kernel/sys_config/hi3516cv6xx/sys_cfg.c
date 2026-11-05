@@ -43,6 +43,8 @@
  * "24Minput"/"27Mclk" banner, the VS4388 is the one left in the 24 MHz group.
  */
 #define SENSOR_NAME_VS4388 "vs4388"
+/* MIS20S1, 27 MHz: "mis20s1 27Mclk 2M30fps(MIPI)" in the vendor's CV610 firmware */
+#define SENSOR_NAME_MIS20S1 "mis20s1"
 #define MIPI_AD "mipi_ad"
 
 static void *g_reg_crg_base = NULL;
@@ -303,6 +305,7 @@ static unsigned int parse_sensor_clock(const char *name, unsigned int name_len)
         (strncmp(SENSOR_NAME_GC4023, name, len) == 0) ||
         (strncmp(SENSOR_NAME_GC2083, name, len) == 0) ||
         (strncmp(SENSOR_NAME_GC4653, name, len) == 0) ||
+        (strncmp(SENSOR_NAME_MIS20S1, name, len) == 0) ||
         (strncmp(SENSOR_NAME_SC431HAI, name, len) == 0) ||
         (strncmp(SENSOR_NAME_SC450AI, name, len) == 0) ||
         (strncmp(SENSOR_NAME_SC500AI, name, len) == 0)) {
