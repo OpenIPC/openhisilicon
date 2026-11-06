@@ -28,7 +28,7 @@ extern "C" {
  * registers, the low byte at the lowest address. These are the registers,
  * and the order, the vendor's CV608 firmware hands the ISP to sync.
  */
-#define CV2003_EXPO_L_ADDR    0x3048 /* integration time in lines, 24 bits */
+#define CV2003_EXPO_L_ADDR    0x3048 /* shutter start: frame length - integration time */
 #define CV2003_EXPO_M_ADDR    0x3049
 #define CV2003_EXPO_H_ADDR    0x304a
 #define CV2003_AGAIN_ADDR     0x3154 /* code c: gain = 256 / (256 - c) */
@@ -74,6 +74,8 @@ extern "C" {
 #define DGAIN_ACCURACY         0.015625
 #define FL_OFFSET_LINEAR       10
 #define CV2003_INT_TIME_MIN    4
+#define CV2003_SHS_MIN         6 /* the vendor driver's bounds on the shutter start */
+#define CV2003_SHS_FL_MARGIN   2
 
 /****************************************************************************
  * sensor awb calibrate configs                                             *
