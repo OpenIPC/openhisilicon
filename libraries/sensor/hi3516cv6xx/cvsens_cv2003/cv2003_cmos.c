@@ -241,17 +241,37 @@ static td_void cmos_slow_framerate_set(ot_vi_pipe pipe, td_u32 lines, ot_isp_ae_
 }
 
 
+/*
+ * 0x3048..0x304a hold where the shutter opens, counted from the start of the
+ * frame, not how long it stays open: integration time is the frame length
+ * minus this value. So the vendor's driver writes frame length minus the
+ * integration time, rounded down to even and kept in 6..frame length - 2,
+ * with the third register taking bits 15:12 -- reproduced here as it does
+ * it. Writing the integration time itself inverts AE: asked for 4 lines, the
+ * sensor exposes nearly the whole frame, and AE, seeing a blown-out picture
+ * at what it believes is its shortest exposure, cannot pull it back.
+ */
 static td_void cmos_inttime_update_linear(ot_isp_sns_state *st, td_u32 t)
 {
-    if (t > st->fl[0] - FL_OFFSET_LINEAR) {
-        t = st->fl[0] - FL_OFFSET_LINEAR;
+    td_u32 fl = st->fl[0];
+    td_u32 shs;
+
+    if (t > fl - FL_OFFSET_LINEAR) {
+        t = fl - FL_OFFSET_LINEAR;
     }
     if (t < CV2003_INT_TIME_MIN) {
         t = CV2003_INT_TIME_MIN;
     }
-    st->regs_info[0].i2c_data[CV2003_REG_EXPO_L].data = t & 0xff;
-    st->regs_info[0].i2c_data[CV2003_REG_EXPO_M].data = (t >> 8) & 0xff;
-    st->regs_info[0].i2c_data[CV2003_REG_EXPO_H].data = (t >> 16) & 0xff;
+    shs = (fl - t) & ~1U;
+    if (shs > fl - CV2003_SHS_FL_MARGIN) {
+        shs = fl - CV2003_SHS_FL_MARGIN;
+    }
+    if (shs < CV2003_SHS_MIN) {
+        shs = CV2003_SHS_MIN;
+    }
+    st->regs_info[0].i2c_data[CV2003_REG_EXPO_L].data = shs & 0xff;
+    st->regs_info[0].i2c_data[CV2003_REG_EXPO_M].data = (shs >> 8) & 0xff;
+    st->regs_info[0].i2c_data[CV2003_REG_EXPO_H].data = (shs >> 12) & 0xf;
 }
 
 
