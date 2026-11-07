@@ -216,24 +216,26 @@ static td_void cmos_fps_set(ot_vi_pipe pipe, td_float fps, ot_isp_ae_sensor_defa
 }
 
 
+/*
+ * No slow shutter: the frame stays at its standard length and exposure is
+ * capped to it, as the vendor's own CV610 driver does -- its
+ * cmos_slow_framerate_set sets the frame length back to 2400 and the
+ * integration limit to 2390, and never writes VMAX. Stretching the frame
+ * here (up to 28800 lines) put the shutter start, which is counted against
+ * the frame length, past the end of the frame the sensor actually ran:
+ * almost no exposure, and AE making up for it with gain, so a dark and noisy
+ * picture (OpenIPC/majestic#355).
+ */
 static td_void cmos_slow_framerate_set(ot_vi_pipe pipe, td_u32 lines, ot_isp_ae_sensor_default *d)
 {
     ot_isp_sns_state *st;
-    td_u32 vmax;
     sns_check_pipe_void_return(pipe);
     sns_check_pointer_void_return(d);
     st = cmos_get_state(pipe);
     sns_check_pointer_void_return(st);
-    /* AE passes an exposure limit; VMAX includes the margin. */
-    vmax = lines > CV2003_FULL_LINES_MAX_LINEAR - FL_OFFSET_LINEAR ?
-        CV2003_FULL_LINES_MAX_LINEAR : lines + FL_OFFSET_LINEAR;
-    if (vmax < CV2003_VMAX_LINEAR) {
-        vmax = CV2003_VMAX_LINEAR;
-    }
-    st->fl[0] = vmax;
-    cmos_config_vmax(st, vmax);
+    st->fl[0] = st->fl_std;
     d->full_lines = lines;
-    d->max_int_time = vmax - FL_OFFSET_LINEAR;
+    d->max_int_time = st->fl_std - FL_OFFSET_LINEAR;
     if (d->max_int_time > CV2003_INT_TIME_MAX) {
         d->max_int_time = CV2003_INT_TIME_MAX;
     }
