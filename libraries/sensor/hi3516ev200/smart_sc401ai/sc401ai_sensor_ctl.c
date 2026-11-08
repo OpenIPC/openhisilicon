@@ -372,6 +372,7 @@ void sc401ai_linear_4m30_init(VI_PIPE ViPipe)
 	sc401ai_write_register(ViPipe, 0x4827, 0x04);
 	sc401ai_write_register(ViPipe, 0x4829, 0x07);
 #endif
+	sc401ai_write_register(ViPipe, 0x5001, 0x44);
 	sc401ai_write_register(ViPipe, 0x57a8, 0xd0);
 	sc401ai_write_register(ViPipe, 0x36e9, 0x14);
 	sc401ai_write_register(ViPipe, 0x36f9, 0x14);

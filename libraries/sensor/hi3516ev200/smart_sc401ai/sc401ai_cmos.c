@@ -84,8 +84,8 @@ extern int sc401ai_read_register(VI_PIPE ViPipe, int addr);
 #define SC401AI_VMAX_H_ADDR 0x320e
 #define SC401AI_VMAX_L_ADDR 0x320f
 
-#define SC401AI_FULL_LINES_MAX 0x7FFF
-#define SC401AI_FRAME_RATE_MIN 0x4B00
+/* frame length in half-lines; VMAX (0x320e/0x320f, in lines) is half of it */
+#define SC401AI_FULL_LINES_MAX 0xFFFF
 #define SC401AI_INCREASE_LINES \
 	0 /* make real fps less than stand fps because NVR require */
 #define SC401AI_VMAX_2560x1440_LINEAR (1500 + SC401AI_INCREASE_LINES)
@@ -106,7 +106,6 @@ static GK_S32 cmos_get_ae_default(VI_PIPE ViPipe,
 	memset_s(&pstAeSnsDft->stAERouteAttr, sizeof(ISP_AE_ROUTE_S), 0,
 		 sizeof(ISP_AE_ROUTE_S));
 
-	pstSnsState->u32FLStd = SC401AI_VMAX_2560x1440_LINEAR;
 	pstAeSnsDft->u32FullLinesStd = pstSnsState->u32FLStd;
 	pstAeSnsDft->u32FlickerFreq = 50 * 256;
 	pstAeSnsDft->u32FullLinesMax = SC401AI_FULL_LINES_MAX;
@@ -123,7 +122,7 @@ static GK_S32 cmos_get_ae_default(VI_PIPE ViPipe,
 
 	pstAeSnsDft->u32ISPDgainShift = 8;
 	pstAeSnsDft->u32MinISPDgainTarget = 1 << pstAeSnsDft->u32ISPDgainShift;
-	pstAeSnsDft->u32MaxISPDgainTarget = 4 << pstAeSnsDft->u32ISPDgainShift;
+	pstAeSnsDft->u32MaxISPDgainTarget = 2 << pstAeSnsDft->u32ISPDgainShift;
 
 	pstAeSnsDft->enMaxIrisFNO = ISP_IRIS_F_NO_1_0;
 	pstAeSnsDft->enMinIrisFNO = ISP_IRIS_F_NO_32_0;
@@ -162,12 +161,12 @@ static GK_S32 cmos_get_ae_default(VI_PIPE ViPipe,
 		pstAeSnsDft->u32InitExposure =
 			g_au32InitExposure[ViPipe] ?
 				g_au32InitExposure[ViPipe] :
-				148859;
+				76151;
 
 		pstAeSnsDft->u32MaxIntTime = pstSnsState->u32FLStd - 8;
-		pstAeSnsDft->u32MinIntTime = 3;
+		pstAeSnsDft->u32MinIntTime = 1;
 		pstAeSnsDft->u32MaxIntTimeTarget = 65535;
-		pstAeSnsDft->u32MinIntTimeTarget = 3;
+		pstAeSnsDft->u32MinIntTimeTarget = 1;
 		break;
 	}
 	return GK_SUCCESS;
@@ -187,7 +186,9 @@ static GK_VOID cmos_fps_set(VI_PIPE ViPipe, GK_FLOAT f32Fps,
 
 	switch (pstSnsState->u8ImgMode) {
 	case SC401AI_SENSOR_2560x1440_30FPS_LINEAR_MODE:
-		if ((f32Fps <= 30) && (f32Fps >= 5)) { /* Minimum 5fps */
+		if ((f32Fps <= 30) &&
+		    (f32Fps >= SC401AI_VMAX_2560x1440_LINEAR * 30.0 /
+				       (SC401AI_FULL_LINES_MAX >> 1))) {
 			u32VMAX = SC401AI_VMAX_2560x1440_LINEAR * 30 /
 				  DIV_0_TO_1_FLOAT(f32Fps);
 		} else {
@@ -200,8 +201,9 @@ static GK_VOID cmos_fps_set(VI_PIPE ViPipe, GK_FLOAT f32Fps,
 		break;
 	}
 
-	u32VMAX = (u32VMAX > SC401AI_FULL_LINES_MAX) ? SC401AI_FULL_LINES_MAX :
-						       u32VMAX;
+	u32VMAX = (u32VMAX > (SC401AI_FULL_LINES_MAX >> 1)) ?
+			  (SC401AI_FULL_LINES_MAX >> 1) :
+			  u32VMAX;
 
 	pstSnsState->astRegsInfo[0].astI2cData[7].u32Data = LOW_8BITS(u32VMAX);
 	pstSnsState->astRegsInfo[0].astI2cData[8].u32Data = HIGH_8BITS(u32VMAX);
@@ -229,14 +231,14 @@ static GK_VOID cmos_slow_framerate_set(VI_PIPE ViPipe, GK_U32 u32FullLines,
 	SC401AI_SENSOR_GET_CTX(ViPipe, pstSnsState);
 	CMOS_CHECK_POINTER_VOID(pstSnsState);
 
-	u32FullLines = (u32FullLines > SC401AI_FRAME_RATE_MIN) ?
-			       SC401AI_FRAME_RATE_MIN :
+	u32FullLines = (u32FullLines > SC401AI_FULL_LINES_MAX) ?
+			       SC401AI_FULL_LINES_MAX :
 			       u32FullLines;
 	pstSnsState->au32FL[0] = u32FullLines;
 	pstSnsState->astRegsInfo[0].astI2cData[7].u32Data =
-		LOW_8BITS((pstSnsState->au32FL[0] + 8) >> 1);
+		LOW_8BITS(pstSnsState->au32FL[0] >> 1);
 	pstSnsState->astRegsInfo[0].astI2cData[8].u32Data =
-		HIGH_8BITS((pstSnsState->au32FL[0] + 8) >> 1);
+		HIGH_8BITS(pstSnsState->au32FL[0] >> 1);
 
 	pstAeSnsDft->u32FullLines = pstSnsState->au32FL[0];
 	pstAeSnsDft->u32MaxIntTime = pstSnsState->au32FL[0] - 8;
@@ -761,13 +763,14 @@ static GK_VOID cmos_set_pixel_detect(VI_PIPE ViPipe, GK_BOOL bEnable)
 	CMOS_CHECK_POINTER_VOID(pstSnsState);
 
 	u32FullLines_5Fps = (SC401AI_VMAX_2560x1440_LINEAR * 30) / 5;
-	u32MaxIntTime_5Fps = u32FullLines_5Fps - 8; /* sub 8 */
+	/* VMAX counts lines, the shutter half-lines */
+	u32MaxIntTime_5Fps = u32FullLines_5Fps * 2 - 8; /* sub 8 */
 
 	if (bEnable) { /* setup for ISP pixel calibration mode */
 		sc401ai_write_register(ViPipe, SC401AI_AGAIN_L_ADDR, 0x10);
 		sc401ai_write_register(ViPipe, SC401AI_AGAIN_H_ADDR, 0x00);
 		sc401ai_write_register(ViPipe, SC401AI_EXP_L_ADDR,
-				       LOWER_4BITS(u32MaxIntTime_5Fps) << 4);
+				       LOWER_4BITS(u32MaxIntTime_5Fps));
 		sc401ai_write_register(ViPipe, SC401AI_EXP_M_ADDR,
 				       HIGHER_8BITS(u32MaxIntTime_5Fps));
 		sc401ai_write_register(ViPipe, SC401AI_EXP_H_ADDR,
@@ -784,9 +787,9 @@ static GK_VOID cmos_set_pixel_detect(VI_PIPE ViPipe, GK_BOOL bEnable)
 				pstSnsState->u32FLStd;
 
 		sc401ai_write_register(ViPipe, SC401AI_VMAX_L_ADDR,
-				       (pstSnsState->u32FLStd & 0xFF));
+				       LOW_8BITS(pstSnsState->u32FLStd >> 1));
 		sc401ai_write_register(ViPipe, SC401AI_VMAX_H_ADDR,
-				       (pstSnsState->u32FLStd & 0xFF00) >> 8);
+				       HIGH_8BITS(pstSnsState->u32FLStd >> 1));
 		pstSnsState->bSyncInit = GK_FALSE;
 	}
 
@@ -879,10 +882,12 @@ static GK_S32 cmos_get_sns_regs_info(VI_PIPE ViPipe,
 		pstSnsState->astRegsInfo[0].astI2cData[6].u32RegAddr =
 			SC401AI_DGAIN_H_ADDR;
 
-		pstSnsState->astRegsInfo[0].astI2cData[7].u8DelayFrmNum = 0;
+		/* a frame later than the shutter, so a longer frame and the
+		 * longer exposure that needs it reach the sensor together */
+		pstSnsState->astRegsInfo[0].astI2cData[7].u8DelayFrmNum = 1;
 		pstSnsState->astRegsInfo[0].astI2cData[7].u32RegAddr =
 			SC401AI_VMAX_L_ADDR;
-		pstSnsState->astRegsInfo[0].astI2cData[8].u8DelayFrmNum = 0;
+		pstSnsState->astRegsInfo[0].astI2cData[8].u8DelayFrmNum = 1;
 		pstSnsState->astRegsInfo[0].astI2cData[8].u32RegAddr =
 			SC401AI_VMAX_H_ADDR;
 		pstSnsState->astRegsInfo[0].astI2cData[9].u8DelayFrmNum = 1;
@@ -906,7 +911,13 @@ static GK_S32 cmos_get_sns_regs_info(VI_PIPE ViPipe,
 					.bUpdate = GK_TRUE;
 			}
 		}
-		if (pstSnsState->astRegsInfo[0].astI2cData[10].bUpdate) {
+		/* every gain change goes inside group hold with its 0x363a,
+		 * not only the ones that move 0x363a */
+		if (pstSnsState->astRegsInfo[0].astI2cData[3].bUpdate ||
+		    pstSnsState->astRegsInfo[0].astI2cData[4].bUpdate ||
+		    pstSnsState->astRegsInfo[0].astI2cData[5].bUpdate ||
+		    pstSnsState->astRegsInfo[0].astI2cData[6].bUpdate ||
+		    pstSnsState->astRegsInfo[0].astI2cData[10].bUpdate) {
 			pstSnsState->astRegsInfo[0].astI2cData[9].bUpdate =
 				GK_TRUE;
 			pstSnsState->astRegsInfo[0].astI2cData[10].bUpdate =
