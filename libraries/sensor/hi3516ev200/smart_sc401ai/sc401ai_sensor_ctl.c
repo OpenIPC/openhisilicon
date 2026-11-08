@@ -15,17 +15,7 @@
 #include "gk_api_isp.h"
 #include "hicompat.h"
 
-#ifdef GPIO_I2C
-#include "gpioi2c_ex.h"
-#else
-
-#ifdef __LITEOS__
 #include "i2c.h"
-#else
-#include "i2c.h"
-#endif
-
-#endif
 
 const unsigned char SC401AI_I2C_ADDR = 0x60; /* I2C Address of sc401ai */
 const unsigned int SC401AI_ADDR_BYTE = 2;
@@ -43,15 +33,6 @@ int sc401ai_i2c_init(VI_PIPE ViPipe)
 	if (g_fd[ViPipe] >= 0) {
 		return GK_SUCCESS;
 	}
-#ifdef GPIO_I2C
-	int ret;
-
-	g_fd[ViPipe] = open("/dev/gpioi2c_ex", O_RDONLY, S_IRUSR);
-	if (g_fd[ViPipe] < 0) {
-		ISP_TRACE(MODULE_DBG_ERR, "Open gpioi2c_ex error!\n");
-		return GK_FAILURE;
-	}
-#else
 	int ret;
 
 	u8DevNum = g_aunSc401aiBusInfo[ViPipe].s8I2cDev;
@@ -72,7 +53,6 @@ int sc401ai_i2c_init(VI_PIPE ViPipe)
 		g_fd[ViPipe] = -1;
 		return ret;
 	}
-#endif
 
 	return GK_SUCCESS;
 }
@@ -130,23 +110,9 @@ int sc401ai_read_register(VI_PIPE ViPipe, GK_U32 addr)
 int sc401ai_write_register(VI_PIPE ViPipe, GK_U32 addr, GK_U32 data)
 {
 	if (g_fd[ViPipe] < 0) {
-		return GK_SUCCESS;
+		return GK_FAILURE;
 	}
 
-#ifdef GPIO_I2C
-	i2c_data.dev_addr = SC401AI_I2C_ADDR;
-	i2c_data.reg_addr = addr;
-	i2c_data.addr_byte_num = SC401AI_ADDR_BYTE;
-	i2c_data.data = data;
-	i2c_data.data_byte_num = SC401AI_DATA_BYTE;
-
-	ret = ioctl(g_fd[ViPipe], GPIO_I2C_WRITE, &i2c_data);
-
-	if (ret) {
-		ISP_TRACE(MODULE_DBG_ERR, "GPIO-I2C write faild!\n");
-		return ret;
-	}
-#else
 	int idx = 0;
 	int ret;
 	char buf[8];
@@ -171,7 +137,6 @@ int sc401ai_write_register(VI_PIPE ViPipe, GK_U32 addr, GK_U32 data)
 		return GK_FAILURE;
 	}
 
-#endif
 	return GK_SUCCESS;
 }
 
@@ -222,7 +187,11 @@ void sc401ai_init(VI_PIPE ViPipe)
 {
 	GK_U32 i;
 
-	sc401ai_i2c_init(ViPipe);
+	if (sc401ai_i2c_init(ViPipe) != GK_SUCCESS) {
+		ISP_TRACE(MODULE_DBG_ERR,
+			  "sc401ai: no I2C, sensor not set up\n");
+		return;
+	}
 
 	sc401ai_linear_4m30_init(ViPipe);
 	delay_ms(10);

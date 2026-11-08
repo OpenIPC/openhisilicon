@@ -78,6 +78,7 @@ BUS_TYPE parse_sensor_bus_type(const char *name)
 	    (0 == strncmp("imx307_2l", name, len)) ||
 	    (0 == strncmp("imx327_2l", name, len)) ||
 	    (0 == strncmp("sc500ai", name, len)) ||
+	    (0 == strncmp("sc401ai", name, len)) ||
 	    (0 == strncmp("gc4653_2l", name, len)))
 
 	{
@@ -120,7 +121,8 @@ int parse_sensor_clock(const char *name)
 		   (strncmp("gc2053", name, len) == 0) ||
 		   (strncmp("gc4653_2l", name, len) == 0) ||
 		   (strncmp("sc3235", name, len) == 0) ||
-		   (strncmp("sc500ai", name, len) == 0)) {
+		   (strncmp("sc500ai", name, len) == 0) ||
+		   (strncmp("sc401ai", name, len) == 0)) {
 		clock = 0x6;
 	} else {
 		printk("FUNC:%s line:%d  SNS: is [%s]!\n", __FUNCTION__,
