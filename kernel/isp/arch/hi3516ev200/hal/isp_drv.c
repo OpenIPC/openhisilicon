@@ -2589,7 +2589,7 @@ GK_S32 ISP_DRV_BE_STT_StatisticsRead(VI_PIPE ViPipe, ISP_STAT_S *pstStat,
 	}
 
 	pstDrvCtx->stBeOnlineSttBuf.u32CurWriteFlag = 1 - u32CurReadFlag;
-	//ISP_DRV_SetOnlineSttAddr(ViPipe, pstDrvCtx->stBeOnlineSttBuf.astBeSttBuf[u32CurReadFlag].u64PhyAddr);
+	ISP_DRV_SetOnlineSttAddr(ViPipe, pstDrvCtx->stBeOnlineSttBuf.astBeSttBuf[u32CurReadFlag].u64PhyAddr);
 
 	pVirAddr =
 		pstDrvCtx->stBeOnlineSttBuf.astBeSttBuf[u32CurReadFlag].pVirAddr;
