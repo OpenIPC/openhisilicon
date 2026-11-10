@@ -1,63 +1,64 @@
 # Sony IMX662 for Hi3516CV610
 
-A source-built HiSilicon V5 sensor driver, developed and verified on the
-SIP-K662C6S module (Hi3516CV610, four MIPI lanes) by
-[snokvist](https://github.com/snokvist/waybeam_venc/tree/master/sensors/cv610/imx662)
-and contributed here (OpenIPC/defib#148). It builds against this tree's
-public sensor interface and `common/sensor_common.c` like the other cv6xx
-drivers; no SDK source or binary is involved.
+The IMX662 driver of the SIP-K662C6S module's stock firmware (xipc, sensor
+type 272), recovered from that firmware and rebuilt against this tree's public
+sensor interface and `common/sensor_common.c`.
 
-Modes verified there: 1920x1080 at 30 and 60 fps in RAW12, and 90 and 100
-fps in RAW10. 100 fps needs a 27 MHz sensor clock; `sys_config` feeds an
-`imx662` 37.125 MHz, which is right for the others, so `cmos_set_image_mode()`
-refuses anything above 90 fps until that is switched.
+Modes: 1920x1080 linear at 30 and 60 fps in RAW12 and 90 fps in RAW10, all at
+the 37.125 MHz sensor clock `sys_config` feeds an `imx662`. The frame rate is
+set by HMAX; VMAX is 1251 in every mode. No WDR: `cmos_isp_set_wdr_mode()`
+rejects every mode but linear.
 
-Linear mode only: `cmos_set_wdr_mode()` rejects every WDR mode.
+## Where it comes from
 
-**Not tuned.** The ISP tables are seeds borrowed from `smart_sc450ai` (see
-below), there is no measured IMX662 calibration, and the default image came
-out blue-tinted. Part of that was a black level of 200 where the ISP wanted
-800 (see `imx662_cmos_param.h`); 800 is derived from the register units and
-has not yet been checked on a sensor. A calibrated IQ profile is the main
-thing missing.
+- `imx662_cfg.h`: the power-on register tables, byte for byte, one per mode.
+  `imx662_sensor_ctrl.c` writes them in standby, then cancels standby and
+  starts the master.
+- `imx662_cmos.h`: the register map, exposure and gain model, limits and AWB
+  calibration, as the vendor's `cmos_*` functions use them.
+- `imx662_cmos_param.h`: the ISP default tables (CLUT, DPC, LSC, ACS,
+  demosaic, sharpen, DRC, Bayer NR, anti-false-colour, LDCI, gamma, dehaze,
+  noise calibration, black level, colour matrix, AWB saturation by gain).
+  Each one is a byte image of its B051 structure. A `_Static_assert` beside
+  each one refuses to compile if a structure stops matching the image, rather
+  than letting the ISP read a shifted table.
 
-## What the plugin programs
+## Exposure and gain
 
-`imx662_cfg.h` holds Sony's power-on sequence — the reserved analog/ADC trim,
-the MIPI TX timing, the readout window and the HDR context that linear mode
-needs parked. It runs once, in standby, before the per-mode writes, and the
-per-mode writes win where the two overlap. That ordering matters for
-`0x3A50/51/52`, which keys off ADBIT rather than output depth: the table holds
-the 12-bit form and the RAW10 modes overwrite it.
+SHR0 (0x3050) holds the exposure, counted back from the frame end. The gain
+register (0x3070) takes 0.3 dB steps. Analog and digital gain are two indexes
+into one table, summed into it. Above index 99 of analog gain, the driver
+switches the sensor to high conversion gain (FDG 0x3030) and takes 51 steps
+(15.3 dB) off the code.
 
-`cmos_get_isp_default()` and `cmos_get_awb_default()` seed the ISP once at init.
-The algorithm tables in `imx662_cmos_param.h` are ported from the in-tree
-`smart_sc450ai` driver, which targets this same ISP silicon. The blocks that
-describe ISP behaviour (gamma, CLUT, demosaic, CAC, anti-false-colour, LDCI,
-dehaze, CA) transfer on principle; the noise-fitted ones (bayer_nr, sharpen,
-noise_calibration, DRC) are borrowed from a 4 MP sensor and are kept on a
-hardware A/B rather than a calibration — a measured IMX662 fit should replace
-them. The AWB saturation curve is scaled up from sc450ai's at the low-ISO end.
+The ceilings are 45.3 dB analog (high conversion gain included), 42 dB sensor
+digital and 2x ISP gain. The AE route a host program runs is its own business:
+the vendor firmware's own day scene (route, Bayer NR, DPC, saturation) ships as
+OpenIPC's `iq/imx662.ini` for majestic, not here.
 
-Two blocks are seeded but not switched on: `g_cmos_drc` and `g_cmos_dehaze`
-carry `enable = 0`, inherited from sc450ai's linear-mode defaults, and the ISP
-bypasses both at runtime (confirmed by `ss_mpi_isp_get_module_ctrl()`).
+## Compared with the driver it replaced
 
-## Low-light behaviour
+On the same module, at night, at an equal exposure and gain (50 ms, about 37x):
 
-The sharpen auto tables are tapered along their ISO axis to zero by bucket 9,
-with the daylight buckets (0-3) left byte-identical. Sharpening is a high-pass
-filter, so at high gain the sc450ai tables — which *rise* along ISO, edge
-strength 195 to 500 — were amplifying noise into the encoder: measured 65.4 to
-7.8 Mbps on the bench with sharpen off. The AWB saturation curve tapers harder
-above daylight for the same reason, chroma noise being the ugliest high-gain
-artifact.
+- **Colour.** This driver's AWB calibration, colour matrix and saturation
+  table come from the vendor, and a street at night keeps its colour. The
+  previous driver borrowed them from `smart_sc450ai` and gave an almost grey
+  picture.
+- **Detail.** This picture is slightly softer.
+- **Shortest exposure.** It is 9 lines (240 us), not 1.
 
-Conversion gain follows the analog gain: `FDG_SEL0` selects HCG above a
-threshold and LCG below it, with the written gain code compensated by 15.3 dB
-(Rcg typ 5.8) so the switch is continuous. `max_isp_dgain_target` is 4x, which
-puts the total ceiling at 398 x 4 = 1592x (~64 dB) and makes AE exhaust analog
-before it reaches for digital.
+## Orientation
 
-`g_cmos_noise_calibration` is still sc450ai's photon-transfer fit and is the
-main thing left wrong for this sensor.
+`pfn_mirror_flip` writes HREVERSE (0x3020) and VREVERSE (0x3021); the readout
+window and its Bayer phase follow them on this sensor, so nothing else moves.
+Measured on the module: all four orientations, live and from a restart, with
+R/G and B/G within 0.04 of the upright picture. The request is kept per pipe
+and written again by every bring-up while the sensor is still in standby, under
+`cis->mutex`, which the callback takes as well.
+
+## Not done here
+
+- `pfn_read_reg` is a stub that reads nothing, as `cis_read_reg` is for every
+  sensor in this tree and as it was in the driver this replaced.
+- No 100 fps mode: it needs a 27 MHz sensor clock. The driver this replaced
+  declared one and refused it at 37.125 MHz.
