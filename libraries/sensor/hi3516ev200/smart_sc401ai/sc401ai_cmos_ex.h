@@ -71,7 +71,7 @@ static const ISP_CMOS_DEMOSAIC_S g_stIspDemosaic = {
 	/* au8NonDirStr */
 	/* 1,    2,    4,    8,   16,   32,   64,   128,   256,  512, 1024, 2048, 4096, 8192, 16384, 32768 */
 	{ 64, 64, 64, 64, 64, 64, 64, 64, 64, 64, 64, 64, 64, 64, 64, 64 },
-	/* au8NonDirLFDetailEhc */
+	/* au8NonDirMFDetailEhc */
 	{ 31, 31, 31, 31, 31, 31, 21, 21, 21, 18, 18, 18, 18, 18, 18, 18 },
 	/* au8NonDirHFDetailEhc */
 	{ 3, 3, 4, 5, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7 },
