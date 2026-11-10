@@ -5,6 +5,7 @@
  * SHR0 exposure (0x3050), shared 0.3dB gain ladder with HCG split (FDG 0x3030).
  */
 #include <stdio.h>
+#include <pthread.h>
 #include "sensor_common.h"
 #include "ot_mpi_isp.h"
 #include "ot_mpi_ae.h"
@@ -259,7 +260,14 @@ static td_void cmos_inttime_update(ot_vi_pipe vi_pipe, td_u32 int_time)
     sns_state = cmos_get_state(vi_pipe);
     sns_check_pointer_void_return(sns_state);
 
-    shr0 = sns_state->fl[0] - int_time;
+    /* An exposure as long as the frame or longer (AE can ask for one while the
+     * frame length is changing) is the longest the frame allows, not a
+     * wrapped subtraction that lands on the shortest. */
+    if (int_time >= sns_state->fl[0] - SHR0_MIN) {
+        shr0 = SHR0_MIN;
+    } else {
+        shr0 = sns_state->fl[0] - int_time;
+    }
     shr0 = MIN2(shr0, IMX662_FULL_LINES_MAX);
     shr0 = clip3(shr0, SHR0_MIN, sns_state->fl[0] - FL_OFFSET_LINEAR);
 
@@ -586,6 +594,27 @@ static td_void cmos_comm_sns_reg_info_init(cis_info *cis, ot_isp_sns_state *sns_
     sns_state->regs_info[0].i2c_data[VMAX_M_IDX].reg_addr = IMX662_VMAX_ADDR_M;
     sns_state->regs_info[0].i2c_data[VMAX_H_IDX].reg_addr = IMX662_VMAX_ADDR_H;
     sns_state->regs_info[0].i2c_data[FDG_IDX].reg_addr = IMX662_FDG_ADDR; /* conversion gain */
+
+    /* The bring-up replays these slots before AE has filled them, and global
+     * init left them zero: a VMAX of 0 and an SHR0 below its minimum. Seed
+     * what is unset -- the mode's frame length and the shortest exposure --
+     * and leave alone what AE already wrote, so a re-init keeps the exposure
+     * in force. */
+    if ((sns_state->regs_info[0].i2c_data[VMAX_L_IDX].data |
+         sns_state->regs_info[0].i2c_data[VMAX_M_IDX].data |
+         sns_state->regs_info[0].i2c_data[VMAX_H_IDX].data) == 0) {
+        sns_state->regs_info[0].i2c_data[VMAX_L_IDX].data = low_8bits(sns_state->fl[0]);
+        sns_state->regs_info[0].i2c_data[VMAX_M_IDX].data = high_8bits(sns_state->fl[0]);
+        sns_state->regs_info[0].i2c_data[VMAX_H_IDX].data = (sns_state->fl[0] >> 16) & 0xf;
+    }
+    if ((sns_state->regs_info[0].i2c_data[SHR0_L_IDX].data |
+         sns_state->regs_info[0].i2c_data[SHR0_M_IDX].data |
+         sns_state->regs_info[0].i2c_data[SHR0_H_IDX].data) == 0) {
+        td_u32 shr0 = sns_state->fl[0] - FL_OFFSET_LINEAR;
+        sns_state->regs_info[0].i2c_data[SHR0_L_IDX].data = low_8bits(shr0);
+        sns_state->regs_info[0].i2c_data[SHR0_M_IDX].data = high_8bits(shr0);
+        sns_state->regs_info[0].i2c_data[SHR0_H_IDX].data = (shr0 >> 16) & 0xf;
+    }
     return;
 }
 
@@ -687,21 +716,29 @@ static void cmos_isp_init(ot_vi_pipe vi_pipe)
     cis->i2c.addr_byte_num = IMX662_ADDR_BYTE;
     cis->i2c.data_byte_num = IMX662_DATA_BYTE;
 
+    /* Under the sensor lock: a live orientation callback checks and uses the
+     * descriptor under it. */
+    (td_void)pthread_mutex_lock(&cis->mutex);
     ret = cis_i2c_init(cis);
+    (td_void)pthread_mutex_unlock(&cis->mutex);
     if (ret != TD_SUCCESS) {
         isp_err_trace("i2c init failed!\n");
         return;
     }
     switch (sensor_state->img_mode) {
         case IMX662_2M_60FPS_12BIT_LINEAR_MODE:
-            imx662_linear_2m60_12bit_init(cis);
+            ret = imx662_linear_2m60_12bit_init(cis);
             break;
         case IMX662_2M_90FPS_10BIT_LINEAR_MODE:
-            imx662_linear_2m90_10bit_init(cis);
+            ret = imx662_linear_2m90_10bit_init(cis);
             break;
         default:
-            imx662_linear_2m30_12bit_init(cis);
+            ret = imx662_linear_2m30_12bit_init(cis);
             break;
+    }
+    if (ret != TD_SUCCESS) {
+        isp_err_trace("imx662: bring-up of image mode %u failed!\n", sensor_state->img_mode);
+        return;
     }
     sensor_state->init = TD_TRUE;
     return;
@@ -713,7 +750,9 @@ static void cmos_isp_exit(ot_vi_pipe vi_pipe)
     sns_check_pipe_void_return(vi_pipe);
     cis = cmos_get_info(vi_pipe);
     sns_check_pointer_void_return(cis);
+    (td_void)pthread_mutex_lock(&cis->mutex);
     (td_void)cis_i2c_exit(cis);
+    (td_void)pthread_mutex_unlock(&cis->mutex);
     return;
 }
 

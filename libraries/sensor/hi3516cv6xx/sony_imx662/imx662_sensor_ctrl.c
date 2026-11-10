@@ -71,18 +71,18 @@ td_void imx662_clear_orientation(ot_vi_pipe vi_pipe)
     g_imx662_flip[vi_pipe] = TD_FALSE;
 }
 
-static void imx662_default_reg_init(cis_info *cis)
+static td_s32 imx662_default_reg_init(cis_info *cis)
 {
     td_u32 i;
-    td_s32 ret = TD_SUCCESS;
     ot_isp_sns_state *s = cis->sns_state;
     for (i = 0; i < s->regs_info[0].reg_num; i++) {
-        ret += cis_write_reg(&cis->i2c, s->regs_info[0].i2c_data[i].reg_addr,
-                             s->regs_info[0].i2c_data[i].data);
+        if (cis_write_reg(&cis->i2c, s->regs_info[0].i2c_data[i].reg_addr,
+                          s->regs_info[0].i2c_data[i].data) != TD_SUCCESS) {
+            isp_err_trace("imx662: write 0x%04x failed!\n", s->regs_info[0].i2c_data[i].reg_addr);
+            return TD_FAILURE;
+        }
     }
-    if (ret != TD_SUCCESS) {
-        isp_err_trace("write register failed!\n");
-    }
+    return TD_SUCCESS;
 }
 
 static td_s32 imx662_reg_init(cis_info *cis, cis_reg_cfg *cfg, td_u32 len, const char *banner)
@@ -100,7 +100,9 @@ static td_s32 imx662_reg_init(cis_info *cis, cis_reg_cfg *cfg, td_u32 len, const
         }
         cfg++;
     }
-    imx662_default_reg_init(cis);
+    if (imx662_default_reg_init(cis) != TD_SUCCESS) {
+        goto out;
+    }
     /* In standby, so the first frame already comes out the way it was asked. */
     if (imx662_write_orientation_locked(cis) != TD_SUCCESS) {
         isp_err_trace("imx662: writing the orientation failed!\n");
