@@ -56,6 +56,33 @@ R/G and B/G within 0.04 of the upright picture. The request is kept per pipe
 and written again by every bring-up while the sensor is still in standby, under
 `cis->mutex`, which the callback takes as well.
 
+## White balance
+
+The AWB calibration and colour matrices are those of the stock firmware's day
+scene, not the driver defaults it carries. Once its ISP is up the stock
+firmware writes its own AWB curve, reference gains (418/545 at 4950 K) and a
+four-temperature colour matrix table (7500, 6500, 4800, 2600 K) over what the
+driver supplied, so the defaults were never what the module ran.
+
+On the module, with an unchanged host program and IQ profile, a street scene
+measured on the delivered JPEG (R/G and B/G of neutral surfaces):
+
+| | driver defaults | day scene |
+|---|---|---|
+| grey pavement, overcast | 0.62 / 0.55-0.59 | 0.78-0.80 / 0.89 |
+| sky, overcast | 0.79 / 0.88 | 0.84 / 1.03 |
+| white fascia, sun | - | 1.01-1.03 / 0.94-0.97 |
+
+The defaults turned the picture green and the sky cyan. With the day scene a
+sunlit white is within a few percent of neutral, and against raw frames AWB
+lands within 0-5% of the neutral red gain and 4-7% short of the blue. Under
+an overcast sky the picture stays slightly cool: that case has not been
+measured against raw.
+
+The stock firmware's other scenes (1 to 4, with their own curves and
+matrices) are not carried, and neither is its black level of 820 (this
+driver's is 800).
+
 ## Not done here
 
 - `pfn_read_reg` is a stub that reads nothing, as `cis_read_reg` is for every

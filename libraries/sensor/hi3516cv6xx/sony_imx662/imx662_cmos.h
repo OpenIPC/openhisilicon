@@ -77,18 +77,24 @@ extern "C" {
 #define DNG_RAW_FORMAT_BIT_10BIT        10   /* 90fps mode */
 #define DNG_RAW_FORMAT_WHITE_LEVEL_10BIT 1023
 
-/* AWB — IMX662's real values from cmos_get_awb_default (sub_AF988) */
+/*
+ * AWB calibration: the stock firmware's day scene (IMX662_ISP_SetAWBAttr,
+ * scene 0), which it writes over the driver defaults once the ISP is up. The
+ * driver's own defaults (sub_AF988: 450/447 at 4950 K, curve -53, 309, 0,
+ * 160279, 128, -110119) are never what the module runs, and on it they left a
+ * green picture. The scene leaves the reference temperature alone.
+ */
 #define CALIBRATE_STATIC_TEMP       4950
-#define CALIBRATE_STATIC_WB_R_GAIN  450
+#define CALIBRATE_STATIC_WB_R_GAIN  418
 #define CALIBRATE_STATIC_WB_GR_GAIN 256
 #define CALIBRATE_STATIC_WB_GB_GAIN 256
-#define CALIBRATE_STATIC_WB_B_GAIN  447
-#define CALIBRATE_AWB_P1 (-53)
-#define CALIBRATE_AWB_P2 309
+#define CALIBRATE_STATIC_WB_B_GAIN  545
+#define CALIBRATE_AWB_P1 (-86)
+#define CALIBRATE_AWB_P2 342
 #define CALIBRATE_AWB_Q1 0
-#define CALIBRATE_AWB_A1 160279
+#define CALIBRATE_AWB_A1 199146
 #define CALIBRATE_AWB_B1 128
-#define CALIBRATE_AWB_C1 (-110119)
+#define CALIBRATE_AWB_C1 (-148048)
 #define GOLDEN_RGAIN 0
 #define GOLDEN_BGAIN 0
 
