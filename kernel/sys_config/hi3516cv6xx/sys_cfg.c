@@ -23,12 +23,21 @@
 #define SENSOR_NAME_SC4336P "sc4336p"
 #define SENSOR_NAME_GC4023 "gc4023"
 #define SENSOR_NAME_GC2083 "gc2083"
+/* GC2063, 27 MHz: "gc2063 27Mclk 2M30fps(MIPI)" in the vendor's CV610 firmware */
+#define SENSOR_NAME_GC2063 "gc2063"
 /* GC4653, 27 MHz: "gc4653 27Mclk 4M30fps(MIPI)" in the vendor's CV610 firmware */
 #define SENSOR_NAME_GC4653 "gc4653"
 #define SENSOR_NAME_IMX335 "imx335"
 #define SENSOR_NAME_IMX662 "imx662"
+/* IMX415, IMX664, IMX675, IMX678: 37.125 MHz, INCK_SEL in each init table */
+#define SENSOR_NAME_IMX415 "imx415"
+#define SENSOR_NAME_IMX664 "imx664"
+#define SENSOR_NAME_IMX675 "imx675"
+#define SENSOR_NAME_IMX678 "imx678"
 #define SENSOR_NAME_SC450AI "sc450ai"
 #define SENSOR_NAME_SC500AI "sc500ai"
+/* SC850SL, 27 MHz: "27MInput_4lane_1080Mbps_12bit" in the vendor's CV610 firmware */
+#define SENSOR_NAME_SC850SL "sc850sl"
 #define SENSOR_NAME_SC431HAI "sc431hai"
 #define SENSOR_NAME_OS04D10 "os04d10"
 #define SENSOR_NAME_OS02M10 "os02m10"
@@ -304,11 +313,13 @@ static unsigned int parse_sensor_clock(const char *name, unsigned int name_len)
     if ((strncmp(SENSOR_NAME_SC4336P, name, len) == 0) ||
         (strncmp(SENSOR_NAME_GC4023, name, len) == 0) ||
         (strncmp(SENSOR_NAME_GC2083, name, len) == 0) ||
+        (strncmp(SENSOR_NAME_GC2063, name, len) == 0) ||
         (strncmp(SENSOR_NAME_GC4653, name, len) == 0) ||
         (strncmp(SENSOR_NAME_MIS20S1, name, len) == 0) ||
         (strncmp(SENSOR_NAME_SC431HAI, name, len) == 0) ||
         (strncmp(SENSOR_NAME_SC450AI, name, len) == 0) ||
-        (strncmp(SENSOR_NAME_SC500AI, name, len) == 0)) {
+        (strncmp(SENSOR_NAME_SC500AI, name, len) == 0) ||
+        (strncmp(SENSOR_NAME_SC850SL, name, len) == 0)) {
         clock = 0xA001;   /* 27M */
     } else if ((strncmp(SENSOR_NAME_OS04D10, name, len) == 0) ||
                (strncmp(SENSOR_NAME_OS02M10, name, len) == 0) ||
@@ -318,6 +329,10 @@ static unsigned int parse_sensor_clock(const char *name, unsigned int name_len)
         clock = 0x4001;  /* 24M */
     } else if ((strncmp(SENSOR_NAME_IMX335, name, len) == 0) ||
                (strncmp(SENSOR_NAME_IMX662, name, len) == 0) ||
+               (strncmp(SENSOR_NAME_IMX415, name, len) == 0) ||
+               (strncmp(SENSOR_NAME_IMX664, name, len) == 0) ||
+               (strncmp(SENSOR_NAME_IMX675, name, len) == 0) ||
+               (strncmp(SENSOR_NAME_IMX678, name, len) == 0) ||
                (strncmp(MIPI_AD, name, len) == 0)) {
         clock = 0x8010; /* 37.125M */
     } else if ((strncmp("bt656", name, len) == 0) ||
