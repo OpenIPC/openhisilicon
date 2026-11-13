@@ -1,0 +1,223 @@
+/*
+ * SC850SL (SmartSens, 8M) for Hi3516CV610, recovered from the SIP-K662C6S
+ * stock firmware (xipc) on the layout of the vendor's smart_sc450ai driver.
+ */
+
+#ifndef SC850SL_CMOS_H
+#define SC850SL_CMOS_H
+
+#include "ot_common_isp.h"
+#include "ot_sns_ctrl.h"
+#include "securec.h"
+#include "ot_math.h"
+
+#ifdef __cplusplus
+#if __cplusplus
+extern "C" {
+#endif
+#endif
+
+/****************************************************************************
+ * basic info config                                                        *
+ ****************************************************************************/
+/* sensor ID & Resolution */
+#define SC850SL_ID             850
+#define SC850SL_WIDTH          3840
+#define SC850SL_HEIGHT         2160
+
+/* sensor Register Address */
+#define SC850SL_EXP_ADDR                    0x3E00
+#define SC850SL_SEXP_ADDR                   0x3E04
+#define SC850SL_AGAIN_ADDR                  0x3E08
+#define SC850SL_SAGAIN_ADDR                 0x3E12
+#define SC850SL_DGAIN_ADDR                  0x3E06
+#define SC850SL_SDGAIN_ADDR                 0x3E10
+#define SC850SL_VMAX_ADDR                   0x320E
+#define SC850SL_SEXP_MAX_ADDR               0x3E23
+
+/* Stream control: 0x01 streams, 0x00 stops. */
+#define SC850SL_STREAM_ADDR                 0x0100
+#define SC850SL_STREAM_ON                   0x01
+#define SC850SL_STREAM_OFF                  0x00
+
+/* Orientation: [2:1] mirror, [6:5] flip. Both tables write 0x66. */
+#define SC850SL_MIRROR_FLIP_ADDR            0x3221
+#define SC850SL_MIRROR_FLIP_DEFAULT         0x66
+#define SC850SL_MIRROR_BITS                 0x06
+#define SC850SL_FLIP_BITS                   0x60
+
+/****************************************************************************
+ * i2c bus config                                                           *
+ ****************************************************************************/
+/* sensor I2C bus config */
+#define SC850SL_I2C_ADDR    0x60
+#define SC850SL_ADDR_BYTE   2
+#define SC850SL_DATA_BYTE   1
+
+/* common I2C bus config */
+#define I2C_DEV_FILE_NUM     16
+#define I2C_BUF_NUM          8
+
+/****************************************************************************
+ * sensor lines configs                                                     *
+ ****************************************************************************/
+ /* increase line */
+ #define SC850SL_INCREASE_LINES 0  /* make real fps less than stand fps because NVR require */
+/* linear mode */
+#define SC850SL_FULL_LINES_MAX_LINEAR 0x79E0
+#define SC850SL_VMAX_VAL_LINEAR 2250         /* linear init sequence e.g. 0x380e, 0x06, 0x380f, 0x58 */
+#define SC850SL_VMAX_LINEAR     (SC850SL_VMAX_VAL_LINEAR + SC850SL_INCREASE_LINES)
+#define SC850SL_FPS_MAX_LINEAR 30
+#define SC850SL_FPS_MIN_LINEAR 1.5
+#define SC850SL_WIDTH_LINEAR 3840
+#define SC850SL_HEIGHT_LINEAR 2160
+#define SC850SL_MODE_LINEAR 0
+
+/* WDR mode */
+#define SC850SL_FULL_LINES_MAX_2TO1_LINE_WDR 0x2490
+#define SC850SL_VMAX_VAL_2TO1_LINE_WDR 4500         /* WDR init sequence 0x380e, 0x09, 0x380f, 0x84 */
+#define SC850SL_VMAX_2TO1_LINE_WDR   (SC850SL_VMAX_VAL_2TO1_LINE_WDR + SC850SL_INCREASE_LINES)
+#define SC850SL_FPS_MAX_2TO1_LINE_WDR 30
+#define SC850SL_FPS_MIN_2TO1_LINE_WDR 10.0
+#define SC850SL_WIDTH_2TO1_LINE_WDR 3840
+#define SC850SL_HEIGHT_2TO1_LINE_WDR 2160
+#define SC850SL_MODE_2TO1_LINE_WDR 0
+#define SC850SL_EXP_Y 0x5FF
+/* The linear table's own exposure (0x3e00..0x3e02 = 0x00 0x82 0x00), in the
+ * half lines cmos_inttime_update_linear() takes. */
+#define SC850SL_EXP_DEFAULT_LINEAR 0x820
+/* 1x: the first entries of again_table/dgain_table. */
+#define SC850SL_AGAIN_REG_1X 0x0340
+#define SC850SL_DGAIN_REG_1X 0x0080
+/* The WDR table's own exposures: long 0x3e00..0x3e02 = 0x01 0x00 0x00, short
+ * 0x3e04/0x3e05 = 0x10 0x00, short-exposure limit 0x3e23/0x3e24 = 0x01 0x0a. */
+#define SC850SL_EXP_DEFAULT_WDR    0x1000
+#define SC850SL_SEXP_DEFAULT_WDR   0x100
+#define SC850SL_SEXP_MAX_WDR_TABLE 0x10a
+
+/****************************************************************************
+ * sensor ae configs                                                        *
+ ****************************************************************************/
+ /* linear mode */
+#define SC850SL_AGAIN_MIN    1024
+#define SC850SL_AGAIN_MAX    50790
+
+#define SC850SL_DGAIN_MIN    1024
+#define SC850SL_DGAIN_MAX    8192
+
+#define INT_TIME_ACCURACY_LINEAR  1
+#define INT_TIME_ACCURACY_WDR     4
+
+#define AGAIN_ACCURACY            0.0625
+#define DGAIN_ACCURACY            0.125
+#define ISP_DGAIN_SHIFT           8
+#define ISP_DGAIN_TARGET_MIN      1
+#define ISP_DGAIN_TARGET_MAX      32
+
+#define ISP_DGAIN_TARGET_WDR_MAX  2
+
+#define FL_OFFSET_LINEAR                   10
+#define FL_OFFSET_WDR                      18
+#define SFL_OFFSET_WDR                     11
+#define SC850SL_SEXP_MAX_DEFAULT           16
+ /****************************************************************************
+ * sensor awb calibrate configs                                             *
+ ****************************************************************************/
+/* awb static param for Fuji Lens New IR_Cut */
+#define CALIBRATE_STATIC_TEMP       4950
+#define CALIBRATE_STATIC_WB_R_GAIN  478
+#define CALIBRATE_STATIC_WB_GR_GAIN 256
+#define CALIBRATE_STATIC_WB_GB_GAIN 256
+#define CALIBRATE_STATIC_WB_B_GAIN  497
+
+/* Calibration results for Auto WB Planck */
+#define CALIBRATE_AWB_P1 (-102)
+#define CALIBRATE_AWB_P2 358
+#define CALIBRATE_AWB_Q1 0
+#define CALIBRATE_AWB_A1 183957
+#define CALIBRATE_AWB_B1 128
+#define CALIBRATE_AWB_C1 (-135938)
+
+/* Rgain and Bgain of the golden sample */
+#define GOLDEN_RGAIN                                  0
+#define GOLDEN_BGAIN                                  0
+
+/****************************************************************************
+ * sensor other configs                                                     *
+ ****************************************************************************/
+#define STANDARD_FPS              30
+#define FLICKER_FREQ            (50 * 256)  /* light flicker freq: 50Hz, accuracy: 256 */
+
+#define INIT_EXP_DEFAULT_LINEAR   148859
+#define INIT_EXP_DEFAULT_WDR       66462
+
+#define MAX_INT_TIME_TARGET        65535
+
+#define AE_COMENSATION_DEFAULT       0x40
+#define AE_COMENSATION_WDR_LONG_FRM    56
+#define AE_COMENSATION_WDR_NORM_FRM    32
+
+#define AE_ARR_RATIO_0_WDR             0x400
+#define AE_ARR_RATIO_1_WDR             0x40
+#define AE_ARR_RATIO_2_WDR             0x40
+
+// /* Black level */
+#define BLACK_LEVEL_DEFAULT          0x444 /* SC850SL: 1092, from cmos_get_isp_black_level in xipc */
+// /* DNG */
+#define DNG_RAW_FORMAT_BIT_LINEAR         12 /* SC850SL linear is 12 bit (banner: 1080Mbps_12bit) */
+#define DNG_RAW_FORMAT_WHITE_LEVEL_LINEAR 4095 /* 2^12 - 1 */
+#define DNG_RAW_FORMAT_BIT_WDR            10 /* SC850SL WDR2T1 is 10 bit (banner: 1458Mbps_10bit) */
+#define DNG_RAW_FORMAT_WHITE_LEVEL_WDR    1023 /* 2^10 - 1 */
+
+/****************************************************************************
+ * assist function macros                                                   *
+ ****************************************************************************/
+#define high_8bits(x)   (((x) & 0xff00) >> 8)
+#define low_8bits(x)    ((x) & 0x00ff)
+#define lower_4bits(x)  (((x) & 0x000F) << 4)
+#define higher_4bits(x) (((x) & 0xF000) >> 12)
+#define higher_8bits(x) (((x) & 0x0FF0) >> 4)
+#ifndef clip3
+#define clip3(x, min, max) ((x) < (min) ? (min) : ((x) > (max) ? (max) : (x)))
+#endif
+
+typedef enum {
+    SC850SL_8M_30FPS_12BIT_LINEAR_MODE = 0,
+    SC850SL_8M_30FPS_10BIT_2TO1_VC_MODE = 1,
+    SC850SL_MODE_MAX
+} sc850sl_res_mode;
+
+typedef enum {
+    EXPO_L_IDX = 0,
+    EXPO_M_IDX,
+    EXPO_H_IDX,
+    DGAIN_L_IDX,
+    DGAIN_H_IDX,
+    AGAIN_L_IDX,
+    AGAIN_H_IDX,
+    VMAX_L_IDX,
+    VMAX_H_IDX,
+    REG_REV1,
+    SEXPO_L_IDX,
+    SEXPO_H_IDX,
+    SDGAIN_L_IDX,
+    SDGAIN_H_IDX,
+    SAGAIN_L_IDX,
+    SAGAIN_H_IDX,
+    SEXP_MAX_L_IDX,
+    SEXP_MAX_H_IDX
+}sc850sl_reg_index;
+
+typedef struct {
+    td_u32 dec[OT_ISP_WDR_MAX_FRAME_NUM];
+    td_u32 inc[OT_ISP_WDR_MAX_FRAME_NUM];
+} time_step;
+
+ot_isp_sns_obj *sc850sl_get_obj(td_void);
+
+#ifdef __cplusplus
+#if __cplusplus
+}
+#endif
+#endif /* End of #ifdef __cplusplus */
+#endif /* SC850SL_CMOS_H */
