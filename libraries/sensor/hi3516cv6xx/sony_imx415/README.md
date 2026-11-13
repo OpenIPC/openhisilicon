@@ -41,9 +41,9 @@ sensor clock `sys_config` must feed an `imx415`. No WDR:
 ## Exposure and gain
 
 SHR0 (0x3050) holds the exposure, counted back from the frame end, clamped
-to [9, VMAX - 1]. Exposure is 2 to VMAX - 8 lines. An exposure as long as the
-frame or longer gives the longest one the frame allows, not a wrapped
-subtraction.
+to [9, VMAX - 1]. Exposure is 2 to VMAX - 9 lines, the longest SHR0 >= 9
+allows. An exposure as long as the frame or longer gives the longest one the
+frame allows, not a wrapped subtraction.
 
 The gain register (0x3090) takes 0.3 dB steps. Analog and digital gain are
 two indexes into one table, summed into it: analog up to index 100 (30 dB,

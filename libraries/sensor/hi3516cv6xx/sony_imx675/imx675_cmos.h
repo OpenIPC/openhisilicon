@@ -74,10 +74,10 @@ extern "C" {
 #define INIT_EXP_DEFAULT_LINEAR 76151
 #define MAX_INT_TIME_TARGET    0xFFFFF
 #define AE_COMPENSATION_DEFAULT 0x38
-#define FL_OFFSET_LINEAR       2        /* max_int_time = VMAX - 2 */
+#define FL_OFFSET_LINEAR       6        /* max_int_time = VMAX - SHR0_MIN */
 #define SHR0_MAX_OFFSET        1        /* SHR0 clamp upper = VMAX - 1 */
 #define MIN_INT_TIME           9
-#define SHR0_MIN               6        /* SHR0 clamp [6, VMAX-1] (Sony min 6) */
+#define SHR0_MIN               6        /* SHR0 clamp [6, VMAX-1]; Sony allows [4, VMAX-1] */
 
 #define STANDARD_FPS           30
 

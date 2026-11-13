@@ -248,7 +248,7 @@ static td_void cmos_slow_framerate_set(ot_vi_pipe vi_pipe, td_u32 full_lines, ot
     return;
 }
 
-/* IMX664 exposure is inverted: SHR0 = frame_length - int_time, clamp [9, FL-1] */
+/* IMX664 exposure is inverted: SHR0 = frame_length - int_time, clamp [6, FL-1] */
 static td_void cmos_inttime_update(ot_vi_pipe vi_pipe, td_u32 int_time)
 {
     ot_isp_sns_state *sns_state = TD_NULL;

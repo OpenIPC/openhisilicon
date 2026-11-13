@@ -73,7 +73,7 @@ extern "C" {
 #define INIT_EXP_DEFAULT_LINEAR 130000
 #define MAX_INT_TIME_TARGET    65535
 #define AE_COMPENSATION_DEFAULT 0x2D
-#define FL_OFFSET_LINEAR       8        /* max_int_time = VMAX - 8 (ExpLineLimit) */
+#define FL_OFFSET_LINEAR       9        /* max_int_time = VMAX - SHR0_MIN */
 #define SHR0_MAX_OFFSET        1        /* SHR0 clamp upper = VMAX - 1 */
 #define MIN_INT_TIME           2        /* ExpLineMin */
 #define SHR0_MIN               9        /* SHR0 clamp [9, VMAX-1] */

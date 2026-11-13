@@ -89,6 +89,11 @@ extern "C" {
 /* 1x: the first entries of again_table/dgain_table. */
 #define SC850SL_AGAIN_REG_1X 0x0340
 #define SC850SL_DGAIN_REG_1X 0x0080
+/* The WDR table's own exposures: long 0x3e00..0x3e02 = 0x01 0x00 0x00, short
+ * 0x3e04/0x3e05 = 0x10 0x00, short-exposure limit 0x3e23/0x3e24 = 0x01 0x0a. */
+#define SC850SL_EXP_DEFAULT_WDR    0x1000
+#define SC850SL_SEXP_DEFAULT_WDR   0x100
+#define SC850SL_SEXP_MAX_WDR_TABLE 0x10a
 
 /****************************************************************************
  * sensor ae configs                                                        *

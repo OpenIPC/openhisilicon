@@ -1163,31 +1163,53 @@ static td_void cmos_comm_sns_reg_info_init(cis_info *cis, ot_isp_sns_state *sns_
 
     /* The bring-up replays these slots before AE has filled them, and global
      * init left them zero: a frame length of 0 lines, no exposure and a gain
-     * code below 1x. Seed what is unset -- the mode's frame length and, in
-     * linear mode, the table's own exposure at 1x -- and leave alone what AE
-     * already wrote, so a re-init keeps the exposure in force. */
+     * code below 1x. Seed what is unset -- the mode's frame length, the mode
+     * table's own exposures and 1x gain -- and leave alone what AE already
+     * wrote, so a re-init keeps the exposure in force. */
     if ((sns_state->regs_info[0].i2c_data[VMAX_L_IDX].data |
          sns_state->regs_info[0].i2c_data[VMAX_H_IDX].data) == 0) {
         sns_state->regs_info[0].i2c_data[VMAX_L_IDX].data = high_8bits(sns_state->fl_std >> 1);
         sns_state->regs_info[0].i2c_data[VMAX_H_IDX].data = low_8bits(sns_state->fl_std >> 1);
     }
-    if (sns_state->wdr_mode == OT_WDR_MODE_NONE) {
-        if ((sns_state->regs_info[0].i2c_data[EXPO_L_IDX].data |
-             sns_state->regs_info[0].i2c_data[EXPO_M_IDX].data |
-             sns_state->regs_info[0].i2c_data[EXPO_H_IDX].data) == 0) {
-            sns_state->regs_info[0].i2c_data[EXPO_L_IDX].data = higher_4bits(SC850SL_EXP_DEFAULT_LINEAR);
-            sns_state->regs_info[0].i2c_data[EXPO_M_IDX].data = higher_8bits(SC850SL_EXP_DEFAULT_LINEAR);
-            sns_state->regs_info[0].i2c_data[EXPO_H_IDX].data = lower_4bits(SC850SL_EXP_DEFAULT_LINEAR);
+    if ((sns_state->regs_info[0].i2c_data[EXPO_L_IDX].data |
+         sns_state->regs_info[0].i2c_data[EXPO_M_IDX].data |
+         sns_state->regs_info[0].i2c_data[EXPO_H_IDX].data) == 0) {
+        td_u32 exp = (sns_state->wdr_mode == OT_WDR_MODE_2To1_LINE) ?
+            SC850SL_EXP_DEFAULT_WDR : SC850SL_EXP_DEFAULT_LINEAR;
+        sns_state->regs_info[0].i2c_data[EXPO_L_IDX].data = higher_4bits(exp);
+        sns_state->regs_info[0].i2c_data[EXPO_M_IDX].data = higher_8bits(exp);
+        sns_state->regs_info[0].i2c_data[EXPO_H_IDX].data = lower_4bits(exp);
+    }
+    if ((sns_state->regs_info[0].i2c_data[AGAIN_L_IDX].data |
+         sns_state->regs_info[0].i2c_data[AGAIN_H_IDX].data) == 0) {
+        sns_state->regs_info[0].i2c_data[AGAIN_L_IDX].data = high_8bits(SC850SL_AGAIN_REG_1X);
+        sns_state->regs_info[0].i2c_data[AGAIN_H_IDX].data = low_8bits(SC850SL_AGAIN_REG_1X);
+    }
+    if ((sns_state->regs_info[0].i2c_data[DGAIN_L_IDX].data |
+         sns_state->regs_info[0].i2c_data[DGAIN_H_IDX].data) == 0) {
+        sns_state->regs_info[0].i2c_data[DGAIN_L_IDX].data = high_8bits(SC850SL_DGAIN_REG_1X);
+        sns_state->regs_info[0].i2c_data[DGAIN_H_IDX].data = low_8bits(SC850SL_DGAIN_REG_1X);
+    }
+    if (sns_state->wdr_mode == OT_WDR_MODE_2To1_LINE) {
+        if ((sns_state->regs_info[0].i2c_data[SEXPO_L_IDX].data |
+             sns_state->regs_info[0].i2c_data[SEXPO_H_IDX].data) == 0) {
+            sns_state->regs_info[0].i2c_data[SEXPO_L_IDX].data = higher_8bits(SC850SL_SEXP_DEFAULT_WDR);
+            sns_state->regs_info[0].i2c_data[SEXPO_H_IDX].data = lower_4bits(SC850SL_SEXP_DEFAULT_WDR);
         }
-        if ((sns_state->regs_info[0].i2c_data[AGAIN_L_IDX].data |
-             sns_state->regs_info[0].i2c_data[AGAIN_H_IDX].data) == 0) {
-            sns_state->regs_info[0].i2c_data[AGAIN_L_IDX].data = high_8bits(SC850SL_AGAIN_REG_1X);
-            sns_state->regs_info[0].i2c_data[AGAIN_H_IDX].data = low_8bits(SC850SL_AGAIN_REG_1X);
+        if ((sns_state->regs_info[0].i2c_data[SAGAIN_L_IDX].data |
+             sns_state->regs_info[0].i2c_data[SAGAIN_H_IDX].data) == 0) {
+            sns_state->regs_info[0].i2c_data[SAGAIN_L_IDX].data = high_8bits(SC850SL_AGAIN_REG_1X);
+            sns_state->regs_info[0].i2c_data[SAGAIN_H_IDX].data = low_8bits(SC850SL_AGAIN_REG_1X);
         }
-        if ((sns_state->regs_info[0].i2c_data[DGAIN_L_IDX].data |
-             sns_state->regs_info[0].i2c_data[DGAIN_H_IDX].data) == 0) {
-            sns_state->regs_info[0].i2c_data[DGAIN_L_IDX].data = high_8bits(SC850SL_DGAIN_REG_1X);
-            sns_state->regs_info[0].i2c_data[DGAIN_H_IDX].data = low_8bits(SC850SL_DGAIN_REG_1X);
+        if ((sns_state->regs_info[0].i2c_data[SDGAIN_L_IDX].data |
+             sns_state->regs_info[0].i2c_data[SDGAIN_H_IDX].data) == 0) {
+            sns_state->regs_info[0].i2c_data[SDGAIN_L_IDX].data = high_8bits(SC850SL_DGAIN_REG_1X);
+            sns_state->regs_info[0].i2c_data[SDGAIN_H_IDX].data = low_8bits(SC850SL_DGAIN_REG_1X);
+        }
+        if ((sns_state->regs_info[0].i2c_data[SEXP_MAX_L_IDX].data |
+             sns_state->regs_info[0].i2c_data[SEXP_MAX_H_IDX].data) == 0) {
+            sns_state->regs_info[0].i2c_data[SEXP_MAX_L_IDX].data = high_8bits(SC850SL_SEXP_MAX_WDR_TABLE);
+            sns_state->regs_info[0].i2c_data[SEXP_MAX_H_IDX].data = low_8bits(SC850SL_SEXP_MAX_WDR_TABLE);
         }
     }
     return;
@@ -1507,17 +1529,23 @@ static td_void cmos_isp_set_pixel_detect(ot_vi_pipe vi_pipe, td_bool enable)
         cis_write_reg(i2c, SC850SL_DGAIN_ADDR, 0x00);
         cis_write_reg(i2c, SC850SL_DGAIN_ADDR + 1, 0x80);
 
-        cis_write_reg(i2c, SC850SL_VMAX_ADDR, low_8bits(full_lines_5fps));
-        cis_write_reg(i2c, SC850SL_VMAX_ADDR + 1, high_8bits(full_lines_5fps));
+        /* VMAX is high byte first (0x320e, 0x320f); the exposure is in half
+         * lines, split 4/8/4 bits as cmos_inttime_update_linear() writes it. */
+        cis_write_reg(i2c, SC850SL_VMAX_ADDR, high_8bits(full_lines_5fps));
+        cis_write_reg(i2c, SC850SL_VMAX_ADDR + 1, low_8bits(full_lines_5fps));
 
-        cis_write_reg(i2c, SC850SL_EXP_ADDR, low_8bits(full_lines_5fps - 10));  /* sub 10 */
-        cis_write_reg(i2c, SC850SL_EXP_ADDR + 1, high_8bits(full_lines_5fps - 10));  /* sub 10 */
-        cis_write_reg(i2c, SC850SL_EXP_ADDR + 2, lower_4bits(full_lines_5fps - 10)); /* sub 10 index 2 */
+        cis_write_reg(i2c, SC850SL_EXP_ADDR, higher_4bits((full_lines_5fps - 10) << 1));  /* 10 lines short */
+        cis_write_reg(i2c, SC850SL_EXP_ADDR + 1, higher_8bits((full_lines_5fps - 10) << 1));
+        cis_write_reg(i2c, SC850SL_EXP_ADDR + 2, lower_4bits((full_lines_5fps - 10) << 1));
     } else { /* setup for ISP 'normal mode' */
-        sns_state->fl_std = (sns_state->fl_std > SC850SL_FULL_LINES_MAX_LINEAR) ?
-            SC850SL_FULL_LINES_MAX_LINEAR : sns_state->fl_std;
-        cis_write_reg(i2c, SC850SL_VMAX_ADDR, low_8bits(sns_state->fl_std));
-        cis_write_reg(i2c, SC850SL_VMAX_ADDR + 1, high_8bits(sns_state->fl_std));
+        td_u32 vmax;
+
+        /* fl_std is in half lines; VMAX is in lines. */
+        sns_state->fl_std = (sns_state->fl_std > (SC850SL_FULL_LINES_MAX_LINEAR << 1)) ?
+            (SC850SL_FULL_LINES_MAX_LINEAR << 1) : sns_state->fl_std;
+        vmax = sns_state->fl_std >> 1;
+        cis_write_reg(i2c, SC850SL_VMAX_ADDR, high_8bits(vmax));
+        cis_write_reg(i2c, SC850SL_VMAX_ADDR + 1, low_8bits(vmax));
         sns_state->sync_init = TD_FALSE;
     }
     return;

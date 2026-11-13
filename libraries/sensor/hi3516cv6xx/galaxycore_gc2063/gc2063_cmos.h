@@ -68,6 +68,8 @@ extern "C" {
 /* AE: analog gain is a 29-entry table (value->index->regs); isp digital gain
  * is 1/64 fixed point (64=1x, 512=8x) packed into the auto-pregain regs. */
 #define GC2063_AGAIN_MIN      1024
+/* 113168, not the table's last entry (123568): the Hi3516CV500 GC2053 driver
+ * stops AE there too, so the top step, 108904..123568, is never reached. */
 #define GC2063_AGAIN_MAX      113168
 #define GC2063_DGAIN_MIN      64
 #define GC2063_DGAIN_MAX      512
