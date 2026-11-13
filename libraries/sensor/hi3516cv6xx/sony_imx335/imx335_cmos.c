@@ -897,7 +897,13 @@ static td_s32 cmos_isp_get_default(ot_vi_pipe vi_pipe, ot_isp_cmos_default *isp_
     isp_def->key.bit1_wdr     = 1;
     isp_def->wdr              = &g_cmos_wdr;
 
-    isp_def->key.bit1_lsc      = 1;   /* vendor IMX335 LSC table (matches xrscam byte-for-byte) */
+    /*
+     * Off, as in the vendor CV610 SDK (every CV610 sensor ships 0). The ISP
+     * takes x/y_grid_width verbatim and requires sum == frame size / 4; this
+     * table sums to 640x360 (2560x1440), which no IMX335 mode captures, so
+     * isp_lsc_init() rejects it and never programs the LSC registers (#299).
+     */
+    isp_def->key.bit1_lsc      = 0;
     isp_def->lsc               = &g_cmos_lsc;
 
     isp_def->key.bit1_acs      = 0;
