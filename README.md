@@ -218,9 +218,12 @@ sensor driver found online came from — see
 | | IMX335 | | | | | | x | x | x |
 | | IMX385 | | | | x | x | | | |
 | | IMX390 | | | | | | x | | |
-| | IMX415 | | | | | | x | | |
+| | IMX415 | | | | | | x | | x |
 | | IMX458 | | | | | | x | | |
 | | IMX662 | | | | | | | | x |
+| | IMX664 | | | | | | | | x |
+| | IMX675 | | | | | | | | x |
+| | IMX678 | | | | | | | | x |
 | | ICX692 | x | | | | | | | |
 | **Aptina** | AR0130 | x | x | | | | | | |
 | | AR0230 | | x | x | | | | | |
@@ -249,6 +252,7 @@ sensor driver found online came from — see
 | | SC4336P | | | | | | | | x |
 | | SC450AI | | | | | | | | x |
 | | SC500AI | | | | | | | | x |
+| | SC850SL | | | | | | | | x |
 | **Panasonic** | MN34031 | x | | | | | | | |
 | | MN34041 | x | | | | | | | |
 | | MN34220 | | | x | | | x | | |
@@ -260,9 +264,14 @@ sensor driver found online came from — see
 | | JXF23 | | x | | | | | | |
 | | JXF37 | | | | | | | x | |
 | **GalaxyCore** | GC2053 | | | | | | x | x | |
+| | GC2063 | | | | | | | | x |
 | | GC2083 | | | | | | | | x |
 | | GC4023 | | | | | | | | x |
+| | GC4653 | | | | | | | | x |
 | **SuperPix** | SP2308 | | | | | | | x | x |
+| **ImageDesign** | MIS20S1 | | | | | | | | x |
+| **CVSENS** | CV2003 | | | | | | | | x |
+| **ViSemi** | VS4388 | | | | | | | | x |
 
 Each sensor has `.so` (shared) and `.a` (static) library builds. The goal is to eventually unify sensor drivers across platforms where the same sensor model is used.
 
