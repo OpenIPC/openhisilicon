@@ -64,9 +64,12 @@ extern "C" {
 #define INIT_EXP_DEFAULT_LINEAR 76151
 #define MAX_INT_TIME_TARGET    0xFFFFF
 #define AE_COMPENSATION_DEFAULT 0x38
-#define FL_OFFSET_LINEAR       2        /* max_int_time = VMAX - 2 */
+/* Sony allows SHR0 from 4 to VMAX - 1 (the IMX662 register setting sheet,
+ * and the upstream Linux STARVIS 2 driver since its v7 exposure fix). SHR0
+ * stays at 4 or above, and AE is told the longest exposure that leaves. */
+#define FL_OFFSET_LINEAR       4        /* max_int_time = VMAX - 4 */
 #define MIN_INT_TIME           9
-#define SHR0_MIN               3        /* SHR0 clamp [3, VMAX-2] */
+#define SHR0_MIN               4        /* SHR0 clamp [4, VMAX-4] */
 
 #define STANDARD_FPS           30
 
