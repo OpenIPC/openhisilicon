@@ -115,18 +115,24 @@ $(PREFIX)hifb-objs := $(CV100_BLOB_DIR)/hifb.o $(CV100_INIT_DIR)/hifb_init.o
 
 # --- Peripheral modules (blob — V1 source uses mach/hardware.h and IO_ADDRESS,
 #     needs kernel 3.0→4.9 porting. Source kept in repo for reference.) ---
-$(PREFIX)wdt-objs       := $(CV100_BLOB_DIR)/wdt.o       $(CV100_INIT_DIR)/wdt_init.o
 $(PREFIX)hi_user-objs   := $(CV100_BLOB_DIR)/hiuser.o    $(CV100_INIT_DIR)/hiuser_init.o
 $(PREFIX)hidmac-objs    := $(CV100_BLOB_DIR)/hidmac.o    $(CV100_INIT_DIR)/hidmac_init.o
 $(PREFIX)rtc-objs       := $(CV100_BLOB_DIR)/hi_rtc.o    $(CV100_INIT_DIR)/rtc_init.o
 $(PREFIX)pwm-objs       := $(CV100_BLOB_DIR)/pwm.o       $(CV100_INIT_DIR)/pwm_init.o
 $(PREFIX)sensor_i2c-objs := $(CV100_BLOB_DIR)/hi_i2c.o   $(CV100_INIT_DIR)/sensor_i2c_init.o
-obj-m += $(PREFIX)wdt.o
 obj-m += $(PREFIX)hi_user.o
 obj-m += $(PREFIX)hidmac.o
 obj-m += $(PREFIX)rtc.o
 obj-m += $(PREFIX)pwm.o
 obj-m += $(PREFIX)sensor_i2c.o
+
+# --- Watchdog (source, GPL) — the V2 hi_wdt.c with openhisilicon's fixes
+#     (#223, #235): the kernel feeder only covers the time before userspace
+#     opens /dev/watchdog, so a crashed or hung owner lets it reset the board.
+#     The vendor blob this replaces fed it for good once anything had opened
+#     it (OpenIPC/firmware#1534). Same SP805 at 0x20040000 as hi3516cv200. ---
+$(PREFIX)wdt-objs := wdt/hi3516cv100/hi_wdt.o
+obj-m += $(PREFIX)wdt.o
 
 # --- SAR ADC (source, GPL — the photocell input; no vendor driver exists) ---
 $(PREFIX)adc-objs := adc/hi3516cv100/adc.o
