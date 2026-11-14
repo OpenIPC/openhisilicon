@@ -444,17 +444,25 @@ static long hidog_ioctl(struct file *file,
             return 0;
 
         case WDIOC_SETTIMEOUT: {
-            int err;
+            int err, margin = 0;
 
             if (get_user(new_margin, p))
                 return -EFAULT;
+            /* Serialised, so two callers sharing a descriptor cannot leave
+             * cur_margin naming one margin while the hardware runs the other,
+             * and each reads back the margin its own call set. */
+            mutex_lock(&hidog_lifecycle);
             err = hidog_set_heartbeat(new_margin);
+            if (!err) {
+                hidog_keepalive();
+                margin = cur_margin;
+            }
+            mutex_unlock(&hidog_lifecycle);
             if (err)
                 return err;
-            hidog_keepalive();
             /* Falls through to GETTIMEOUT, as the watchdog core does: the
              * caller reads back the margin the device is running at. */
-            return put_user(cur_margin, p);
+            return put_user(margin, p);
         }
 
         case WDIOC_GETTIMEOUT:
@@ -465,12 +473,18 @@ static long hidog_ioctl(struct file *file,
             unsigned long left;
 
             spin_lock_irqsave(&hidog_lock, flags);
-            left = hiwdt_readl(HIWDT_VALUE);
-            /* The counter is loaded with half a margin and run twice, so with
-             * no interrupt pending there is still a whole load to go after
-             * this one. */
-            if (!(hiwdt_readl(HIWDT_RIS) & 0x1))
-                left += (unsigned long)load_val + 1;
+            /* Stopped, nothing is counting down: hidog_stop() parks the load
+             * at the maximum, which must not read as a deadline. */
+            if (!(hiwdt_readl(HIWDT_CTRL) & 0x1)) {
+                left = 0;
+            } else {
+                left = hiwdt_readl(HIWDT_VALUE);
+                /* The counter is loaded with half a margin and run twice, so
+                 * with no interrupt pending there is still a whole load to go
+                 * after this one. */
+                if (!(hiwdt_readl(HIWDT_RIS) & 0x1))
+                    left += (unsigned long)load_val + 1;
+            }
             spin_unlock_irqrestore(&hidog_lock, flags);
 
             return put_user((int)(left / rate), p);
@@ -480,8 +494,17 @@ static long hidog_ioctl(struct file *file,
             if (get_user(new_options, p))
                 return -EFAULT;
             if(new_options & WDIOS_ENABLECARD) {
+                /* An open descriptor must not re-arm what the reboot notifier
+                 * has stopped: the same refusal as hidog_open(), under the
+                 * same mutex. */
+                mutex_lock(&hidog_lifecycle);
+                if (shutting_down) {
+                    mutex_unlock(&hidog_lifecycle);
+                    return -ENODEV;
+                }
                 hidog_start();
                 hidog_set_heartbeat(cur_margin);
+                mutex_unlock(&hidog_lifecycle);
                 return 0;
             } else if (new_options & WDIOS_DISABLECARD) {
                 /* nowayout means the device cannot be stopped, which is what
@@ -508,7 +531,9 @@ static long hidog_ioctl(struct file *file,
 static int hidog_notifier_sys(struct notifier_block *this, unsigned long code,
     void *unused)
 {
-    if(code==SYS_DOWN || code==SYS_HALT) {
+    /* A poweroff with the board still powered is a shutdown like any other:
+     * left armed, the dog resets it instead of letting it stay off. */
+    if(code==SYS_DOWN || code==SYS_HALT || code==SYS_POWER_OFF) {
         /*
          * Under the same mutex as a complete open, so the two cannot
          * interleave: either the open finishes and this stops the timer
@@ -688,6 +713,10 @@ watchdog_init_errC:
 watchdog_init_errB:
     unregister_reboot_notifier(&hidog_notifier);
 watchdog_init_errA:
+    iounmap(reg_ctl_base_va);
+    iounmap(reg_wdt_base_va);
+    reg_ctl_base_va = NULL;
+    reg_wdt_base_va = NULL;
     return ret;
 }
 
