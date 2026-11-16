@@ -208,7 +208,15 @@ static HI_VOID cmos_gains_update(HI_U32 u32Again, HI_U32 u32Dgain)
 {
     HI_U16 u16RegValue;
 
-    u16RegValue = (((1 << u32Again) - 1) << 4) | ((u32Dgain - 16) & 0xf);
+    /* OV2710 codes gain as 16 * linear, 9 bits wide across 0x350a/0x350b.
+     * Subtracting one step before the shift made 1x write 0x000, and let the
+     * 32x entry reach 0x200, which the 1-bit high-byte mask below truncates
+     * back to 0x000. Clamp so the pair stays inside the nine bits. */
+    u16RegValue = ((1u << u32Again) << 4) | ((u32Dgain - 16) & 0xf);
+    if (u16RegValue > 0x1ff)
+    {
+        u16RegValue = 0x1ff;
+    }
 
     g_stSnsRegsInfo.astI2cData[4].u32Data = (u16RegValue >> 8) & 0x1;
     g_stSnsRegsInfo.astI2cData[5].u32Data = u16RegValue & 0xff;
