@@ -246,6 +246,7 @@ sensor driver found online came from — see
 | | SC2035 | | x | | | | | | |
 | | SC2135 | | x | | | | | | |
 | | SC2235 | | x | | x | | | x | |
+| | SC2315E | | | | | | | x | |
 | | SC4210 | | | | | | x | | |
 | | SC4236 | | | x | | | | x | |
 | | SC431HAI | | | | | | | | x |
