@@ -86,12 +86,19 @@ syms=$("$READELF" -rW "$IN" | awk '
 	}')
 fi
 
+# .plt / .init.plt are the 1-byte placeholders a module built with
+# CONFIG_ARM_MODULE_PLTS gets from the kernel's module.lds. Relinked here,
+# the kernel's module.lds adds its own, with other flags, so the .ko would
+# carry two .init.plt: "sysfs: cannot create duplicate filename
+# '/module/<m>/sections/.init.plt'" and a stack dump on every load.
 # shellcheck disable=SC2086 # $syms is a list of options
 "$OBJCOPY" $syms \
 	--rename-section .gnu.linkonce.this_module=.data.vendor_this_module \
 	--weaken-symbol=__this_module \
 	--remove-section=.modinfo \
 	--remove-section=.note.Linux \
+	--remove-section=.plt \
+	--remove-section=.init.plt \
 	--redefine-sym init_module=_${PREFIX}_${mod}_init \
 	--redefine-sym cleanup_module=_${PREFIX}_${mod}_exit \
 	"$IN" "$OUT"
