@@ -773,10 +773,12 @@ static GK_VOID cmos_set_pixel_detect(VI_PIPE ViPipe, GK_BOOL bEnable) {
     pstSnsState->u32FLStd = (pstSnsState->u32FLStd > SC2315E_FULL_LINES_MAX * 2)
                                 ? (SC2315E_FULL_LINES_MAX * 2)
                                 : pstSnsState->u32FLStd;
+    /* u32FLStd counts full lines, twice VMAX (cmos_fps_set). */
     sc2315e_write_register(ViPipe, SC2315E_VMAX_H_ADDR,
-                           (pstSnsState->u32FLStd & 0xFF00) >> 8); /* 30fps */
+                           ((pstSnsState->u32FLStd >> 1) & 0xFF00) >>
+                               8); /* 30fps */
     sc2315e_write_register(ViPipe, SC2315E_VMAX_L_ADDR,
-                           (pstSnsState->u32FLStd & 0xFF));
+                           ((pstSnsState->u32FLStd >> 1) & 0xFF));
 
     pstSnsState->bSyncInit = GK_FALSE;
   }
@@ -958,9 +960,10 @@ static GK_VOID sensor_global_init(VI_PIPE ViPipe) {
   pstSnsState->bSyncInit = GK_FALSE;
   pstSnsState->u8ImgMode = SC2315E_SENSOR_1080P_30FPS_LINEAR_MODE;
   pstSnsState->enWDRMode = WDR_MODE_NONE;
-  pstSnsState->u32FLStd = SC2315E_VMAX_1080P30_LINEAR;
-  pstSnsState->au32FL[0] = SC2315E_VMAX_1080P30_LINEAR;
-  pstSnsState->au32FL[1] = SC2315E_VMAX_1080P30_LINEAR;
+  /* Full lines, twice VMAX, the unit cmos_fps_set() keeps them in. */
+  pstSnsState->u32FLStd = SC2315E_VMAX_1080P30_LINEAR * 2;
+  pstSnsState->au32FL[0] = SC2315E_VMAX_1080P30_LINEAR * 2;
+  pstSnsState->au32FL[1] = SC2315E_VMAX_1080P30_LINEAR * 2;
 
   memset(&pstSnsState->astRegsInfo[0], 0, sizeof(ISP_SNS_REGS_INFO_S));
   memset(&pstSnsState->astRegsInfo[1], 0, sizeof(ISP_SNS_REGS_INFO_S));
