@@ -21,6 +21,14 @@
 # modpost's <mod>.mod.o wins, every THIS_MODULE in the blob points at the real
 # struct module, and the blob's copy is a few hundred dead bytes.
 #
+# .plt and .init.plt are dropped when they are what a module built with
+# CONFIG_ARM_MODULE_PLTS gets from the kernel's module.lds: 1-byte
+# placeholders (BYTE(0)), with no relocation section of their own. Relinked,
+# the kernel's module.lds adds its own .init.plt with other flags, so the .ko
+# would carry two: "sysfs: cannot create duplicate filename
+# '/module/<m>/sections/.init.plt'" and a stack dump on every load. A .plt
+# that holds real stubs is left alone, and the conversion stops.
+#
 # init_module/cleanup_module become _<prefix>_<mod>_init/_exit, which the
 # wrapper in kernel/init/<chiparch>/ calls from its own module_init/
 # module_exit. <mod> is the .ko basename without its xm_/hi_/gk_ prefix, or
@@ -86,19 +94,29 @@ syms=$("$READELF" -rW "$IN" | awk '
 	}')
 fi
 
-# .plt / .init.plt are the 1-byte placeholders a module built with
-# CONFIG_ARM_MODULE_PLTS gets from the kernel's module.lds. Relinked here,
-# the kernel's module.lds adds its own, with other flags, so the .ko would
-# carry two .init.plt: "sysfs: cannot create duplicate filename
-# '/module/<m>/sections/.init.plt'" and a stack dump on every load.
+# Drop .plt / .init.plt only as the placeholders described above.
+plt=
+for s in .plt .init.plt; do
+	size=$("$READELF" -SW "$IN" | awk -v s="$s" '
+		{ sub(/^ *\[ *[0-9]+\] */, "") }
+		$1 == s { print $5; exit }')
+	[ -n "$size" ] || continue
+	size=$((0x$size))
+	if [ "$size" -gt 1 ] ||
+	   "$READELF" -SW "$IN" | grep -qE "[[:space:]]\.rela?\$s[[:space:]]"; then
+		echo "ko2obj.sh: $IN: $s holds $size bytes or has relocations;" \
+			"not a module.lds placeholder, refusing to drop it" >&2
+		exit 1
+	fi
+	plt="$plt --remove-section=$s"
+done
+
 # shellcheck disable=SC2086 # $syms is a list of options
-"$OBJCOPY" $syms \
+"$OBJCOPY" $syms $plt \
 	--rename-section .gnu.linkonce.this_module=.data.vendor_this_module \
 	--weaken-symbol=__this_module \
 	--remove-section=.modinfo \
 	--remove-section=.note.Linux \
-	--remove-section=.plt \
-	--remove-section=.init.plt \
 	--redefine-sym init_module=_${PREFIX}_${mod}_init \
 	--redefine-sym cleanup_module=_${PREFIX}_${mod}_exit \
 	"$IN" "$OUT"
