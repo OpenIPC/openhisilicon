@@ -210,7 +210,16 @@ static GK_VOID cmos_fps_set(VI_PIPE ViPipe, GK_FLOAT f32Fps,
   LABEL_10:
     pstSnsState->astRegsInfo[0].astI2cData[7].u32Data = LVMAX;
     pstSnsState->astRegsInfo[0].astI2cData[8].u32Data = HVMAX;
-    pstSnsState[1].astRegsInfo[0].astI2cData[19].u32RegAddr = u32FullLines;
+    /* The frame length this rate gives, kept where the stock driver keeps it
+     * (see the #if 0 version below): u32FLStd, and au32FL[0] further down.
+     * These two lines came from a disassembly of the vendor build and read
+     * pstSnsState[1].astRegsInfo[0].astI2cData[19].{u32RegAddr,bUpdate} --
+     * the vendor's state struct is 0x200 bytes longer, so its u32FLStd and
+     * au32FL[0] land there. Here there is one ISP_SNS_STATE_S per pipe, so
+     * pstSnsState[1] was ~490 bytes past the 2156-byte allocation: every
+     * call wrote into whatever the heap held next, and musl's allocator
+     * caught it when the context was freed on a reload. */
+    pstSnsState->u32FLStd = u32FullLines;
     pstAeSnsDft->u32MaxIntTime = maxIntTime;
     pstAeSnsDft->f32Fps = f32Fps;
     pstAeSnsDft->u32FullLinesStd = u32FullLines;
@@ -218,7 +227,7 @@ static GK_VOID cmos_fps_set(VI_PIPE ViPipe, GK_FLOAT f32Fps,
         (unsigned int)(float)((float)(f32Fps * lines) *
                               0.5); // orig SC2315E_VMAX_1080P30_LINEAR * 2 *
                                     // 15;
-    pstSnsState[1].astRegsInfo[0].astI2cData[19].bUpdate = u32FullLines;
+    pstSnsState->au32FL[0] = u32FullLines;
     pstAeSnsDft->u32FullLines = u32FullLines;
     return;
   }
