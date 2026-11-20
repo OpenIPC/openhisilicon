@@ -73,7 +73,7 @@ static td_s32 imx335_start(cis_info *cis)
  * coefficient registers.  Deltas below are the normal -> inverted ones from
  * mainline drivers/media/i2c/imx335.c (V4L2_CID_VFLIP, same sensor):
  *
- *   full/linear (modes 0, 3): 0x3074 176 -> 4112, 0x3081 0x02 -> 0xFE,
+ *   full/linear (modes 0, 3, 6): 0x3074 176 -> 4112, 0x3081 0x02 -> 0xFE,
  *                             0x3083 0x02 -> 0xFE, 0x30B6 0x0000 -> 0x01FA,
  *                             0x3116 0x0008 -> 0x0002
  *   binning     (mode 1):     0x3074 168 -> 4120, 0x3080..0x3087,
@@ -199,6 +199,7 @@ static td_bool imx335_flip_supported(td_u8 img_mode)
 {
     return (img_mode == IMX335_5M_30FPS_12BIT_LINEAR_MODE ||
             img_mode == IMX335_60FPS_FULL_1944P_MODE ||
+            img_mode == IMX335_5M_30FPS_10BIT_2LANE_MODE ||
             img_mode == IMX335_60FPS_BINNING_MODE) ? TD_TRUE : TD_FALSE;
 }
 
@@ -570,6 +571,11 @@ td_s32 imx335_init(cis_info *cis)
             cfg = imx335_full_5m_10bit_40fps;
             len = (td_u32)(sizeof(imx335_full_5m_10bit_40fps) / sizeof(imx335_full_5m_10bit_40fps[0]));
             mode_name = "IMX335_60FPS_FULL_1944P_MODE";
+            break;
+        case IMX335_5M_30FPS_10BIT_2LANE_MODE:
+            cfg = imx335_2lane_5m30_10bit;
+            len = (td_u32)(sizeof(imx335_2lane_5m30_10bit) / sizeof(imx335_2lane_5m30_10bit[0]));
+            mode_name = "IMX335_5M_30FPS_10BIT_2LANE_MODE";
             break;
         case IMX335_5M_30FPS_12BIT_LINEAR_MODE:
         default:

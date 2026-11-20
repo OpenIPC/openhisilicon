@@ -101,6 +101,15 @@ extern "C" {
 #define IMX335_HEIGHT_1520P     1520
 #define IMX335_VMAX_CROPPED_1520P  (0x0C58)
 
+/* 2592x1944 10-bit all-pixel over two CSI-2 lanes at 1188 Mbps/lane (enum 6),
+ * for boards that route only two data lanes. HMAX 0x0258 / VMAX 0x101D give
+ * 74.25 MHz / (600 * 4125) = 30 fps; the rate is lowered through VMAX like the
+ * other full-frame modes. 30 fps is the vendor setting's rate, so it is the
+ * ceiling here: going faster means a shorter HMAX no vendor table covers. */
+#define IMX335_FPS_MAX_2LANE    30
+#define IMX335_FPS_MIN_2LANE    0.02
+#define IMX335_VMAX_5M_2LANE_10BIT  (0x101D)
+
 /* Flexible window-crop linear mode (enum 5): arbitrary W×H, linear 10-bit.
  * The crop registers are computed in imx335_flex_reg_init() from the per-pipe
  * crop set by cmos_isp_set_image_mode(); the datasheet constraints and the
@@ -206,6 +215,7 @@ typedef enum {
     IMX335_60FPS_FULL_1944P_MODE = 3,        /* 2592x1944 @ ~40, 10-bit full */
     IMX335_1520P_10BIT_MODE = 4,             /* 2592x1520, 10-bit linear crop */
     IMX335_CROP_FLEX_LINEAR_MODE = 5,        /* arbitrary W×H, 10-bit linear crop */
+    IMX335_5M_30FPS_10BIT_2LANE_MODE = 6,    /* 2592x1944 @ 30, 10-bit, 2 CSI-2 lanes */
     IMX335_MODE_MAX
 } imx335_res_mode;
 
