@@ -73,7 +73,7 @@ static td_s32 imx335_start(cis_info *cis)
  * coefficient registers.  Deltas below are the normal -> inverted ones from
  * mainline drivers/media/i2c/imx335.c (V4L2_CID_VFLIP, same sensor):
  *
- *   full/linear (modes 0, 3, 6): 0x3074 176 -> 4112, 0x3081 0x02 -> 0xFE,
+ *   full/linear (modes 0, 3, 6-8):  0x3074 176 -> 4112, 0x3081 0x02 -> 0xFE,
  *                             0x3083 0x02 -> 0xFE, 0x30B6 0x0000 -> 0x01FA,
  *                             0x3116 0x0008 -> 0x0002
  *   binning     (mode 1):     0x3074 168 -> 4120, 0x3080..0x3087,
@@ -87,6 +87,7 @@ static td_s32 imx335_start(cis_info *cis)
  * 0x30B4, 0x3112) are not part of the delta and are intentionally left as the
  * mode tables wrote them.
  *
+ * The two-lane window (mode 9) is refused too: not measured.
  * Crop modes (2, 4) and flex are refused: their inverted AREA3 start would run
  * past the crop VMAX that the T6 VI requires to stay at the window length, so
  * the offset recipe cannot be reused there without its own measurement.
@@ -200,6 +201,8 @@ static td_bool imx335_flip_supported(td_u8 img_mode)
     return (img_mode == IMX335_5M_30FPS_12BIT_LINEAR_MODE ||
             img_mode == IMX335_60FPS_FULL_1944P_MODE ||
             img_mode == IMX335_5M_30FPS_10BIT_2LANE_MODE ||
+            img_mode == IMX335_5M_40FPS_10BIT_2LANE_MODE ||
+            img_mode == IMX335_5M_45FPS_10BIT_2LANE_MODE ||
             img_mode == IMX335_60FPS_BINNING_MODE) ? TD_TRUE : TD_FALSE;
 }
 
@@ -388,7 +391,10 @@ td_s32 imx335_apply_orientation(cis_info *cis, td_bool mirror, td_bool flip)
     return ret;
 }
 
-static td_s32 imx335_reg_init(cis_info *cis, cis_reg_cfg *cfg, td_u32 len, td_u32 area3_st_normal)
+/* delta (may be TD_NULL) is written after cfg, still in standby: the registers
+ * by which a mode differs from the table it shares. */
+static td_s32 imx335_reg_init(cis_info *cis, cis_reg_cfg *cfg, td_u32 len,
+    const cis_reg_cfg *delta, td_u32 delta_len, td_u32 area3_st_normal)
 {
     td_bool mirror = TD_FALSE;
     td_bool flip = TD_FALSE;
@@ -403,6 +409,11 @@ static td_s32 imx335_reg_init(cis_info *cis, cis_reg_cfg *cfg, td_u32 len, td_u3
             return TD_FAILURE;
         }
         cfg++;
+    }
+    for (i = 0; i < delta_len; i++) {
+        if (cis_write_reg(&cis->i2c, delta[i].addr, delta[i].data) != TD_SUCCESS) {
+            return TD_FAILURE;
+        }
     }
 
     if (cis->sns_state == TD_NULL || cis->pipe < 0 || cis->pipe >= OT_ISP_MAX_PIPE_NUM) {
@@ -530,7 +541,9 @@ td_s32 imx335_init(cis_info *cis)
 {
     td_s32 ret;
     td_u32 len;
+    td_u32 delta_len = 0;
     cis_reg_cfg *cfg = TD_NULL;
+    const cis_reg_cfg *delta = TD_NULL;
     ot_isp_sns_state *sns_state = TD_NULL;
     const char *mode_name = TD_NULL;
 
@@ -577,6 +590,27 @@ td_s32 imx335_init(cis_info *cis)
             len = (td_u32)(sizeof(imx335_2lane_5m30_10bit) / sizeof(imx335_2lane_5m30_10bit[0]));
             mode_name = "IMX335_5M_30FPS_10BIT_2LANE_MODE";
             break;
+        case IMX335_5M_40FPS_10BIT_2LANE_MODE:
+            cfg = imx335_2lane_5m30_10bit;
+            len = (td_u32)(sizeof(imx335_2lane_5m30_10bit) / sizeof(imx335_2lane_5m30_10bit[0]));
+            delta = imx335_2lane_40fps_delta;
+            delta_len = (td_u32)(sizeof(imx335_2lane_40fps_delta) / sizeof(imx335_2lane_40fps_delta[0]));
+            mode_name = "IMX335_5M_40FPS_10BIT_2LANE_MODE";
+            break;
+        case IMX335_5M_45FPS_10BIT_2LANE_MODE:
+            cfg = imx335_2lane_5m30_10bit;
+            len = (td_u32)(sizeof(imx335_2lane_5m30_10bit) / sizeof(imx335_2lane_5m30_10bit[0]));
+            delta = imx335_2lane_45fps_delta;
+            delta_len = (td_u32)(sizeof(imx335_2lane_45fps_delta) / sizeof(imx335_2lane_45fps_delta[0]));
+            mode_name = "IMX335_5M_45FPS_10BIT_2LANE_MODE";
+            break;
+        case IMX335_2560X1440_10BIT_2LANE_MODE:
+            cfg = imx335_2lane_5m30_10bit;
+            len = (td_u32)(sizeof(imx335_2lane_5m30_10bit) / sizeof(imx335_2lane_5m30_10bit[0]));
+            delta = imx335_2lane_2560x1440_delta;
+            delta_len = (td_u32)(sizeof(imx335_2lane_2560x1440_delta) / sizeof(imx335_2lane_2560x1440_delta[0]));
+            mode_name = "IMX335_2560X1440_10BIT_2LANE_MODE";
+            break;
         case IMX335_5M_30FPS_12BIT_LINEAR_MODE:
         default:
             cfg = imx335_linear_5m30_12bit;
@@ -589,7 +623,7 @@ td_s32 imx335_init(cis_info *cis)
      * imx335_flip_supported()); imx335_apply_orientation() clears 0x304F for it
      * while the per-pipe request is kept, so returning to a full/binning mode
      * restores the orientation the caller asked for. */
-    ret = imx335_reg_init(cis, cfg, len,
+    ret = imx335_reg_init(cis, cfg, len, delta, delta_len,
                           (sns_state->img_mode == IMX335_60FPS_BINNING_MODE) ?
                           IMX335_AREA3_ST_BINNING : IMX335_AREA3_ST_FULL);
     if (ret == TD_SUCCESS &&

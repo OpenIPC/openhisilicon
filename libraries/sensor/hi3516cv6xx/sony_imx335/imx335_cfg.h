@@ -189,6 +189,80 @@ static cis_reg_cfg imx335_2lane_5m30_10bit[] = {
 };
 
 /*
+ * The two-lane modes above 30 fps are imx335_2lane_5m30_10bit with one of the
+ * tables below written on top. None is a vendor setting. What bounds them,
+ * measured on a Hi3516CV613 board with the lanes on PHY 0 and 2:
+ *
+ * - fps = 74.25 MHz * INCKSEL1 / 0x80 / (HMAX * VMAX). INCKSEL1 scales the
+ *   sensor's whole clock tree: pixel clock, ADC and link together.
+ * - HMAX has a floor of 426 at every INCKSEL1 (421 for the 2560-wide window):
+ *   a row must leave the sensor within its row period. Below it the picture
+ *   breaks into shifted bands on the wrong Bayer phase while the receiver
+ *   still counts full frames and no CRC error; only 14 counts lower do rows
+ *   go missing.
+ * - VMAX can drop to the picture's rows plus about 50 blank ones, in units of
+ *   half a row: 3984 for 1944 rows, 2980 for 1440. Below that the SoC's
+ *   VI/VPSS chain drops every frame. (The datasheet asks for more in a
+ *   window: AREA3_WIDTH_1 + 96.)
+ * - How far INCKSEL1 can go depends on the analog gain. At 1x gain, which is
+ *   any well-lit scene, 0x8C and above fill the dark areas with pattern noise
+ *   and lift the blacks; 0x89 and below match Sony's clocks. At full gain the
+ *   picture only breaks from 0x9A. The receiver locks at every step with the
+ *   CSI-2 timing registers left at their reset values.
+ *
+ * Temperature and other boards: not measured.
+ */
+
+/* 2592x1944 @ 40 fps: Sony's clocks, a shorter line. HMAX 450 keeps 5.6% over
+ * the floor; the fastest this readout goes without touching the PLL is 43.7
+ * fps. Clean start, daylight and 1x gain: 40.00 fps, picture equal to 30 fps. */
+static cis_reg_cfg imx335_2lane_40fps_delta[] = {
+    {0x3034, 0xC2},  {0x3035, 0x01},  /* HMAX 450 */
+};
+
+/* 2592x1944 @ 45 fps: INCKSEL1 0x88 runs the sensor 6.25% above Sony's tables,
+ * 2.9% under the first setting that damages the picture, with the lanes at
+ * 1262 Mbps. HMAX 434 keeps 1.9% and VMAX 0x0FC8 1.4%. The clean edge of this
+ * readout is 46.5 fps. Held 45.00 fps for 5 minutes from a clean start in
+ * daylight, picture equal to the 30 fps mode. */
+static cis_reg_cfg imx335_2lane_45fps_delta[] = {
+    {0x3034, 0xB2},  {0x3035, 0x01},  /* HMAX 434 */
+    {0x314C, 0x88},                   /* INCKSEL1 */
+    {0x3030, 0xC8},  {0x3031, 0x0F},  /* VMAX 4040 */
+};
+
+/*
+ * 2560x1440 @ 60 fps: a window on the 45 fps mode's clocks. Window registers
+ * by the datasheet rules the flex mode uses:
+ *
+ *   HNUM = W + 24, HTRIMMING_START = 60 (48 + 12, the step nearest the centre)
+ *   Y_OUT_SIZE = H + 20, AREA3_WIDTH_1 = 2 * Y_OUT_SIZE
+ *   AREA3_ST_ADR_1 = 176 + (1944 - H)
+ *   UNREAD_ED_ADR = AREA3_ST_ADR_1 + AREA3_WIDTH_1 + 208
+ *
+ * These are the values of the SigmaStar (infinity6e) driver's four-lane
+ * 2560x1440 table, except that it starts the window at column 48.
+ *
+ * HMAX 430 keeps 2.1% and VMAX 0x0BF2 2.6%; the edge is 62.9 fps. Held 60.00
+ * fps for 5 minutes from a clean start in daylight, picture equal to Sony's
+ * clocks. Vertical flip is not implemented for the window.
+ */
+static cis_reg_cfg imx335_2lane_2560x1440_delta[] = {
+    {0x3018, 0x04},                   /* WINMODE: window crop */
+    {0x302C, 0x3C},  {0x302D, 0x00},  /* HTRIMMING_START 60 */
+    {0x302E, 0x18},  {0x302F, 0x0A},  /* HNUM 2584 */
+    {0x3056, 0xB4},  {0x3057, 0x05},  /* Y_OUT_SIZE 1460 */
+    {0x3074, 0xA8},  {0x3075, 0x02},  /* AREA3_ST_ADR_1 680 */
+    {0x3076, 0x68},  {0x3077, 0x0B},  /* AREA3_WIDTH_1 2920 */
+    {0x30C6, 0x12},  {0x30CE, 0x64},  /* BLACK_OFSET_ADR, UNRD_LINE_MAX */
+    {0x30D8, 0xE0},  {0x30D9, 0x0E},  /* UNREAD_ED_ADR 3808 */
+    {0x3034, 0xAE},  {0x3035, 0x01},  /* HMAX 430 */
+    {0x314C, 0x88},                   /* INCKSEL1 */
+    {0x3030, 0xF2},  {0x3031, 0x0B},  /* VMAX 3058 */
+    {0x3058, 0xFE},  {0x3059, 0x09},  /* SHR0: ~500 lines of exposure */
+};
+
+/*
  * 2592x1520 @ up to ~42 fps, 10-bit linear cropped readout (WINMODE=0x04).
  * Extracted from the OpenIPC ev200 driver's IMX335_cropped_41fps_2592_1520_init()
  * (HSTART=0x0030, HNUM=0x0A20, VMAX=0x0C58, Y_OUT_SIZE=0x0604, AREA3_ST=0x00B0,
