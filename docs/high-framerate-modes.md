@@ -115,6 +115,79 @@ Ruled out along the way, each leaving the losses unchanged:
 
 The SoC read 84-89 °C throughout, and nothing throttled.
 
+## IMX335 on two CSI-2 lanes (hi3516cv6xx)
+
+For boards that route only two of the sensor's four data lanes. Every other
+IMX335 mode drives four, which such a board receives as CRC errors and no
+frame at all. The two-lane modes are selected by number only (`Isp_SnsMode`),
+never from size and rate: the lane count belongs to the board, not to the
+picture asked for.
+
+Measured on a Hi3516CV613 board with the lanes on MIPI-RX PHY lanes 0 and 2,
+majestic at `video0.size = 1920x1080`, H.265, slow shutter off, daylight at
+1x analog gain. Rates are encoded frames counted in `/proc/umap/venc`.
+
+| Mode | Picture | Encoded | Sensor clocks | Selected by |
+|------|---------|---------|---------------|-------------|
+| 6 | 2592×1944 | 30 fps | Sony's two-lane setting | `Isp_SnsMode=6`, `Isp_FrameRate=30` |
+| 7 | 2592×1944 | 40 fps | Sony's, shorter line | `Isp_SnsMode=7`, `Isp_FrameRate=40` |
+| 8 | 2592×1944 | 45 fps | PLL 6.25% fast | `Isp_SnsMode=8`, `Isp_FrameRate=45` |
+| 9 | 2560×1440 window | 60 fps | PLL 6.25% fast | `Isp_SnsMode=9`, `Isp_FrameRate=60`, `Isp_W=2560`, `Isp_H=1440`, `DevRect_w=2560`, `DevRect_h=1440` |
+
+Against the stock `imx335_i2c_5M.ini` every one of them also needs
+`raw_bitness=10`, `Isp_W`/`Isp_H` set, and the board's lanes in `lane_id`
+(`0|2|-1|-1|-1|-1|-1|-1|` on the measured board). A lower `Isp_FrameRate`
+is reached by lengthening the frame, in every mode. Majestic's slow shutter
+(`isp.slowShutter`, default `medium`) lowers the rate in the dark; `disabled`
+holds it.
+
+The OpenIPC firmware profiles for these modes are `imx335_i2c_5M_2lane.ini`
+(mode 6) in `/etc/sensors`, and `imx335_2lane_40.ini`, `imx335_2lane_45.ini`
+and `imx335_2lane_1440p60.ini` (modes 7 to 9) in `/etc/sensors/modes`. With
+`isp.sensorConfig` empty, majestic tries every `/etc/sensors/imx335*` file in
+name order and keeps the first that gets frames into VI within 2 s. A
+two-lane board therefore comes up at 30 fps on its own, about 4 s later than
+a four-lane one, which succeeds on `imx335_i2c_5M.ini` and never tries the
+two-lane file. The other three are chosen by setting `isp.sensorConfig`.
+
+Only mode 6 is a vendor setting. Each of the others held its rate from a
+clean start with no lost frame and no MIPI error: 40.0 fps for 3 minutes,
+45.0 for 3, 60.0 for 5, and the same rates counted at an RTSP client.
+
+### What bounds them
+
+`fps = 74.25 MHz × INCKSEL1 / 0x80 / (HMAX × VMAX)`. `INCKSEL1` (0x314C)
+scales the sensor's whole clock tree: pixel clock, ADC and link together.
+
+| Limit | Value | How it fails |
+|---|---|---|
+| HMAX floor | 426, or 421 in the 2560-wide window | Picture breaks into shifted bands; every counter stays clean |
+| VMAX floor | the picture's rows plus about 50 blank: 3984 at 1944 rows, 2980 at 1440 | No frames; VPSS counts a `frame_err` each |
+| `INCKSEL1` in a bright scene (1x gain) | 0x89 clean, 0x8C broken | Pattern noise in dark areas, blacks lifted |
+| `INCKSEL1` in a dark scene (full gain) | 0x98 clean, 0x9A broken | Blue cast, column stripes |
+| ISP row time | 10.37 us (2737 cycles of the 264 MHz ISP clock) | No frames; VPSS counts a `frame_err` each |
+
+- **The HMAX floor cannot be seen in any counter.** From 425 down to 414 the
+  receiver still measures full frames with no CRC error and the encoder runs
+  at the full rate, while the picture is damaged. Only a snapshot shows it.
+- **The PLL has to be checked at both ends of the gain range.** A 45 fps
+  setting on `INCKSEL1` 0x90 passed in room light and at night and failed in
+  daylight. Modes 8 and 9 therefore stay at 0x88 and take the rest from HMAX
+  and VMAX.
+- With the PLL held there the two-lane link is what binds: 43.7 fps on
+  Sony's clocks and 46.5 at 0x88 for the full sensor, 62.9 for the window.
+  The ISP limit is only reached on clocks the picture does not allow.
+- The window's rate follows its rows, not its pixel count: 1440 rows plus 50
+  blank against 1944 plus 48 is 1.34 times fewer, and 45 fps × 1.34 is 60.
+- Encoding the native size, the encoder binds instead: about 34 fps at
+  2592×1944 and 45 fps at 2560×1440 under majestic.
+- Vertical flip works in modes 6 to 8 and is not implemented in the window,
+  which stays upright and logs it. Mirror works in all four.
+
+Not measured: temperature, other boards, modes 8 and 9 at night (every
+`INCKSEL1` up to 0x98 was clean at full gain at 30 fps timing), and anything
+longer than 5 minutes.
+
 ## IMX307 high-framerate modes (hi3516ev200 / gk7205v200)
 
 Wire fps from VENC `Send` counter (5 s window, h.265 @ 4 Mbps wire) on
