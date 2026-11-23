@@ -223,7 +223,7 @@ static cis_reg_cfg imx335_2lane_40fps_delta[] = {
 /* 2592x1944 @ 45 fps: INCKSEL1 0x88 runs the sensor 6.25% above Sony's tables,
  * 2.9% under the first setting that damages the picture, with the lanes at
  * 1262 Mbps. HMAX 434 keeps 1.9% and VMAX 0x0FC8 1.4%. The clean edge of this
- * readout is 46.5 fps. Held 45.00 fps for 5 minutes from a clean start in
+ * readout is 46.5 fps. Held 45.00 fps for 3 minutes from a clean start in
  * daylight, picture equal to the 30 fps mode. */
 static cis_reg_cfg imx335_2lane_45fps_delta[] = {
     {0x3034, 0xB2},  {0x3035, 0x01},  /* HMAX 434 */

@@ -87,6 +87,11 @@ static td_s32 imx335_start(cis_info *cis)
  * 0x30B4, 0x3112) are not part of the delta and are intentionally left as the
  * mode tables wrote them.
  *
+ * Mode 8 is the one full mode whose VMAX (4040) is below the inverted start
+ * (4112).  Its flipped picture was checked by snapshot on a Hi3516CV613: a
+ * clean upside-down image at the full 45 fps, offset by the same rows as
+ * mode 6's (VMAX 4125), so the start is not bounded by VMAX there.
+ *
  * The two-lane window (mode 9) is refused too: not measured.
  * Crop modes (2, 4) and flex are refused: their inverted AREA3 start would run
  * past the crop VMAX that the T6 VI requires to stay at the window length, so

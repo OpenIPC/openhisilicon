@@ -135,9 +135,12 @@ majestic at `video0.size = 1920x1080`, H.265, slow shutter off, daylight at
 | 9 | 2560×1440 window | 60 fps | PLL 6.25% fast | `Isp_SnsMode=9`, `Isp_FrameRate=60`, `Isp_W=2560`, `Isp_H=1440`, `DevRect_w=2560`, `DevRect_h=1440` |
 
 Against the stock `imx335_i2c_5M.ini` every one of them also needs
-`raw_bitness=10`, `Isp_W`/`Isp_H` set, and the board's lanes in `lane_id`
-(`0|2|-1|-1|-1|-1|-1|-1|` on the measured board). A lower `Isp_FrameRate`
-is reached by lengthening the frame, in every mode. Majestic's slow shutter
+`raw_bitness=10`, `Isp_W`/`Isp_H` set to the mode's picture, and the board's
+lanes in `lane_id` (`0|2|-1|-1|-1|-1|-1|-1|` on the measured board). The
+driver refuses a two-lane `Isp_SnsMode` whose size, rate or WDR mode does not
+fit the mode, and logs which one. A lower `Isp_FrameRate` is reached by
+lengthening the frame, in every mode, down to the rate at which VMAX is full
+(0.12 fps in mode 6, 0.16 in mode 7, 0.17 in modes 8 and 9). Majestic's slow shutter
 (`isp.slowShutter`, default `medium`) lowers the rate in the dark; `disabled`
 holds it.
 
@@ -182,11 +185,16 @@ scales the sensor's whole clock tree: pixel clock, ADC and link together.
 - Encoding the native size, the encoder binds instead: about 34 fps at
   2592×1944 and 45 fps at 2560×1440 under majestic.
 - Vertical flip works in modes 6 to 8 and is not implemented in the window,
-  which stays upright and logs it. Mirror works in all four.
+  which stays upright and logs it. Mirror works in all four. In mode 8 the
+  flipped readout starts at row 4112, past its VMAX of 4040; a snapshot shows
+  it intact, like mode 6's.
+- The window is stretched through VMAX like the full-frame modes, unlike the
+  four-lane crop modes: 50, 30 and 5 fps and majestic's slow shutter (18 fps
+  at full gain in a dim room) delivered every frame with the picture intact.
 
-Not measured: temperature, other boards, modes 8 and 9 at night (every
-`INCKSEL1` up to 0x98 was clean at full gain at 30 fps timing), and anything
-longer than 5 minutes.
+Not measured: temperature, other boards, modes 7 and 8 at night (every
+`INCKSEL1` up to 0x98 was clean at full gain at 30 fps timing; mode 9 ran at
+full gain in a dim room), and anything longer than 5 minutes.
 
 ## IMX307 high-framerate modes (hi3516ev200 / gk7205v200)
 

@@ -57,22 +57,26 @@ static cis_info g_imx335_info[OT_ISP_MAX_PIPE_NUM] = {
               OT_WDR_MODE_NONE, "IMX335_CROP_FLEX_LINEAR_MODE" },
             /* 6: 2592x1944 10-bit over two CSI-2 lanes (never auto-selected) */
             { IMX335_VMAX_5M_2LANE_10BIT, IMX335_FULL_LINES_MAX,
-              IMX335_FPS_MAX_2LANE, IMX335_FPS_MIN_2LANE,
+              IMX335_FPS_MAX_2LANE,
+              IMX335_2LANE_FPS_MIN(IMX335_FPS_MAX_2LANE, IMX335_VMAX_5M_2LANE_10BIT),
               IMX335_WIDTH, IMX335_HEIGHT, IMX335_5M_30FPS_10BIT_2LANE_MODE,
               OT_WDR_MODE_NONE, "IMX335_5M_30FPS_10BIT_2LANE_MODE" },
             /* 7: the same over two lanes at 40 fps (never auto-selected) */
             { IMX335_VMAX_5M_2LANE_10BIT, IMX335_FULL_LINES_MAX,
-              IMX335_FPS_MAX_2LANE_40, IMX335_FPS_MIN_2LANE,
+              IMX335_FPS_MAX_2LANE_40,
+              IMX335_2LANE_FPS_MIN(IMX335_FPS_MAX_2LANE_40, IMX335_VMAX_5M_2LANE_10BIT),
               IMX335_WIDTH, IMX335_HEIGHT, IMX335_5M_40FPS_10BIT_2LANE_MODE,
               OT_WDR_MODE_NONE, "IMX335_5M_40FPS_10BIT_2LANE_MODE" },
             /* 8: the same over two lanes at 45 fps (never auto-selected) */
             { IMX335_VMAX_5M_2LANE_45FPS, IMX335_FULL_LINES_MAX,
-              IMX335_FPS_MAX_2LANE_45, IMX335_FPS_MIN_2LANE,
+              IMX335_FPS_MAX_2LANE_45,
+              IMX335_2LANE_FPS_MIN(IMX335_FPS_MAX_2LANE_45, IMX335_VMAX_5M_2LANE_45FPS),
               IMX335_WIDTH, IMX335_HEIGHT, IMX335_5M_45FPS_10BIT_2LANE_MODE,
               OT_WDR_MODE_NONE, "IMX335_5M_45FPS_10BIT_2LANE_MODE" },
             /* 9: 2560x1440 window over two lanes (never auto-selected) */
             { IMX335_VMAX_2560X1440_2LANE, IMX335_FULL_LINES_MAX,
-              IMX335_FPS_MAX_2560X1440_2LANE, IMX335_FPS_MIN_2LANE,
+              IMX335_FPS_MAX_2560X1440_2LANE,
+              IMX335_2LANE_FPS_MIN(IMX335_FPS_MAX_2560X1440_2LANE, IMX335_VMAX_2560X1440_2LANE),
               IMX335_WIDTH_2560X1440, IMX335_HEIGHT_2560X1440, IMX335_2560X1440_10BIT_2LANE_MODE,
               OT_WDR_MODE_NONE, "IMX335_2560X1440_10BIT_2LANE_MODE" },
         },
@@ -364,7 +368,12 @@ static td_void cmos_config_vmax(ot_isp_sns_state *sns_state, td_u32 vmax)
 
 /* Crop modes (window crop / flex) must keep VMAX at the window's own frame
  * length: the T6 VI drops frames once it is scaled away from it. The rate is
- * carried by HMAX instead, so it is these modes that program HMAX at runtime. */
+ * carried by HMAX instead, so it is these modes that program HMAX at runtime.
+ *
+ * The two-lane window (mode 9) is a crop too but is not listed: it runs
+ * stretched through VMAX like the full-frame modes, and that was measured on
+ * a Hi3516CV613 -- 50, 30 and 5 fps (VMAX up to 12x the table's) and slow
+ * shutter at 18 fps, every frame through VI and VPSS, picture intact. */
 static td_bool imx335_is_crop_mode(td_u8 img_mode)
 {
     return ((img_mode == IMX335_60FPS_CROPPED_1080P_MODE) ||
@@ -1265,15 +1274,28 @@ static td_s32 cmos_isp_set_image_mode(ot_vi_pipe vi_pipe, const ot_isp_cmos_sns_
         sns_image_mode->sns_mode > 0 && sns_image_mode->sns_mode < IMX335_MODE_MAX &&
         sns_image_mode->sns_mode != IMX335_CROP_FLEX_LINEAR_MODE) {
         td_u8 hint = sns_image_mode->sns_mode;
-        if (sns_state->wdr_mode == cis->mode_tbl[hint].wdr_mode &&
-            sns_image_mode->fps <= cis->mode_tbl[hint].max_fps &&
-            sns_image_mode->fps >= cis->mode_tbl[hint].min_fps) {
+        const cis_video_mode_tbl *m = &cis->mode_tbl[hint];
+        const char *bad = TD_NULL;
+
+        if (sns_state->wdr_mode != m->wdr_mode) {
+            bad = "WDR mode";
+        } else if (sns_image_mode->fps > m->max_fps || sns_image_mode->fps < m->min_fps) {
+            bad = "frame rate";
+        } else if (imx335_is_2lane_mode(hint) == TD_TRUE &&
+                   (sns_image_mode->width != m->width || sns_image_mode->height != m->height)) {
+            /* A two-lane mode is reached only through this hint, so nothing
+             * else checks that VI/ISP were sized for the window it programs. */
+            bad = "picture size";
+        }
+        if (bad == TD_NULL) {
             image_mode = hint;
         } else if (imx335_is_2lane_mode(hint) == TD_TRUE) {
             /* Every mode the auto-match below could pick instead drives four
              * lanes, which a two-lane board receives as nothing but CRC errors. */
-            isp_err_trace("imx335 2-lane: fps %f outside [%f, %f]\n",
-                sns_image_mode->fps, cis->mode_tbl[hint].min_fps, cis->mode_tbl[hint].max_fps);
+            isp_err_trace("imx335 2-lane mode %u: %s not supported: asked wdr %d, %ux%u at %f fps; "
+                "the mode is wdr %d, %ux%u at %f..%f fps\n", hint, bad, sns_state->wdr_mode,
+                sns_image_mode->width, sns_image_mode->height, sns_image_mode->fps,
+                m->wdr_mode, m->width, m->height, m->min_fps, m->max_fps);
             return TD_FAILURE;
         }
     }

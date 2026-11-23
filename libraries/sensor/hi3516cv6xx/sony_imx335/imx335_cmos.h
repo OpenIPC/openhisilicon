@@ -101,13 +101,18 @@ extern "C" {
 #define IMX335_HEIGHT_1520P     1520
 #define IMX335_VMAX_CROPPED_1520P  (0x0C58)
 
+/* The lowest rate a two-lane mode reaches by stretching VMAX from its table
+ * value at max_fps up to IMX335_FULL_LINES_MAX; asking for less would clip
+ * VMAX while auto-exposure still counted on the requested rate. */
+#define IMX335_2LANE_FPS_MIN(max_fps, vmax) \
+    ((max_fps) * (double)(vmax) / IMX335_FULL_LINES_MAX)
+
 /* 2592x1944 10-bit all-pixel over two CSI-2 lanes at 1188 Mbps/lane (enum 6),
  * for boards that route only two data lanes. HMAX 0x0258 / VMAX 0x101D give
- * 74.25 MHz / (600 * 4125) = 30 fps; the rate is lowered through VMAX like the
- * other full-frame modes. 30 fps is the vendor setting's rate, so it is the
- * ceiling here: going faster means a shorter HMAX no vendor table covers. */
+ * 74.25 MHz / (600 * 4125) = 30 fps, Sony's own two-lane setting; the rate is
+ * lowered through VMAX like the other full-frame modes. Modes 7-9 below are
+ * measured deltas on top of this table, not vendor settings. */
 #define IMX335_FPS_MAX_2LANE    30
-#define IMX335_FPS_MIN_2LANE    0.02
 #define IMX335_VMAX_5M_2LANE_10BIT  (0x101D)
 
 /* The same two-lane readout at 40 fps (enum 7): Sony's clocks, only the line
