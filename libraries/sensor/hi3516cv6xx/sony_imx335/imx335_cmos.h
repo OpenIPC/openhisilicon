@@ -101,6 +101,39 @@ extern "C" {
 #define IMX335_HEIGHT_1520P     1520
 #define IMX335_VMAX_CROPPED_1520P  (0x0C58)
 
+/* The lowest rate a two-lane mode reaches by stretching VMAX from its table
+ * value at max_fps up to IMX335_FULL_LINES_MAX; asking for less would clip
+ * VMAX while auto-exposure still counted on the requested rate. */
+#define IMX335_2LANE_FPS_MIN(max_fps, vmax) \
+    ((max_fps) * (double)(vmax) / IMX335_FULL_LINES_MAX)
+
+/* 2592x1944 10-bit all-pixel over two CSI-2 lanes at 1188 Mbps/lane (enum 6),
+ * for boards that route only two data lanes. HMAX 0x0258 / VMAX 0x101D give
+ * 74.25 MHz / (600 * 4125) = 30 fps, Sony's own two-lane setting; the rate is
+ * lowered through VMAX like the other full-frame modes. Modes 7-9 below are
+ * measured deltas on top of this table, not vendor settings. */
+#define IMX335_FPS_MAX_2LANE    30
+#define IMX335_VMAX_5M_2LANE_10BIT  (0x101D)
+
+/* The same two-lane readout at 40 fps (enum 7): Sony's clocks, only the line
+ * is shorter than Sony's two-lane table -- see imx335_2lane_40fps_delta. */
+#define IMX335_FPS_MAX_2LANE_40 40
+
+/* And at 45 fps (enum 8), by a shorter HMAX, fewer blank rows and a slightly
+ * faster sensor PLL. This is outside Sony's tables -- see
+ * imx335_2lane_45fps_delta. */
+#define IMX335_FPS_MAX_2LANE_45 45
+#define IMX335_VMAX_5M_2LANE_45FPS  (0x0FC8)
+
+/* A 2560x1440 window over two lanes (enum 9), on the 45 fps mode's clocks.
+ * Fewer rows shorten the frame; the limits are measured, see
+ * imx335_2lane_2560x1440_delta. The rate is lowered through VMAX like the
+ * full-frame two-lane modes. */
+#define IMX335_WIDTH_2560X1440          2560
+#define IMX335_HEIGHT_2560X1440         1440
+#define IMX335_FPS_MAX_2560X1440_2LANE  60
+#define IMX335_VMAX_2560X1440_2LANE     (0x0BF2)
+
 /* Flexible window-crop linear mode (enum 5): arbitrary W×H, linear 10-bit.
  * The crop registers are computed in imx335_flex_reg_init() from the per-pipe
  * crop set by cmos_isp_set_image_mode(); the datasheet constraints and the
@@ -206,6 +239,10 @@ typedef enum {
     IMX335_60FPS_FULL_1944P_MODE = 3,        /* 2592x1944 @ ~40, 10-bit full */
     IMX335_1520P_10BIT_MODE = 4,             /* 2592x1520, 10-bit linear crop */
     IMX335_CROP_FLEX_LINEAR_MODE = 5,        /* arbitrary W×H, 10-bit linear crop */
+    IMX335_5M_30FPS_10BIT_2LANE_MODE = 6,    /* 2592x1944 @ 30, 10-bit, 2 CSI-2 lanes */
+    IMX335_5M_40FPS_10BIT_2LANE_MODE = 7,    /* the same at 40 fps, Sony's clocks */
+    IMX335_5M_45FPS_10BIT_2LANE_MODE = 8,    /* the same at 45 fps, sensor PLL x1.0625 */
+    IMX335_2560X1440_10BIT_2LANE_MODE = 9,   /* 2560x1440 window @ 60, 2 CSI-2 lanes */
     IMX335_MODE_MAX
 } imx335_res_mode;
 

@@ -55,6 +55,30 @@ static cis_info g_imx335_info[OT_ISP_MAX_PIPE_NUM] = {
               IMX335_FPS_MAX_FLEX, IMX335_FPS_MIN_FLEX,
               IMX335_WIDTH, IMX335_HEIGHT, IMX335_CROP_FLEX_LINEAR_MODE,
               OT_WDR_MODE_NONE, "IMX335_CROP_FLEX_LINEAR_MODE" },
+            /* 6: 2592x1944 10-bit over two CSI-2 lanes (never auto-selected) */
+            { IMX335_VMAX_5M_2LANE_10BIT, IMX335_FULL_LINES_MAX,
+              IMX335_FPS_MAX_2LANE,
+              IMX335_2LANE_FPS_MIN(IMX335_FPS_MAX_2LANE, IMX335_VMAX_5M_2LANE_10BIT),
+              IMX335_WIDTH, IMX335_HEIGHT, IMX335_5M_30FPS_10BIT_2LANE_MODE,
+              OT_WDR_MODE_NONE, "IMX335_5M_30FPS_10BIT_2LANE_MODE" },
+            /* 7: the same over two lanes at 40 fps (never auto-selected) */
+            { IMX335_VMAX_5M_2LANE_10BIT, IMX335_FULL_LINES_MAX,
+              IMX335_FPS_MAX_2LANE_40,
+              IMX335_2LANE_FPS_MIN(IMX335_FPS_MAX_2LANE_40, IMX335_VMAX_5M_2LANE_10BIT),
+              IMX335_WIDTH, IMX335_HEIGHT, IMX335_5M_40FPS_10BIT_2LANE_MODE,
+              OT_WDR_MODE_NONE, "IMX335_5M_40FPS_10BIT_2LANE_MODE" },
+            /* 8: the same over two lanes at 45 fps (never auto-selected) */
+            { IMX335_VMAX_5M_2LANE_45FPS, IMX335_FULL_LINES_MAX,
+              IMX335_FPS_MAX_2LANE_45,
+              IMX335_2LANE_FPS_MIN(IMX335_FPS_MAX_2LANE_45, IMX335_VMAX_5M_2LANE_45FPS),
+              IMX335_WIDTH, IMX335_HEIGHT, IMX335_5M_45FPS_10BIT_2LANE_MODE,
+              OT_WDR_MODE_NONE, "IMX335_5M_45FPS_10BIT_2LANE_MODE" },
+            /* 9: 2560x1440 window over two lanes (never auto-selected) */
+            { IMX335_VMAX_2560X1440_2LANE, IMX335_FULL_LINES_MAX,
+              IMX335_FPS_MAX_2560X1440_2LANE,
+              IMX335_2LANE_FPS_MIN(IMX335_FPS_MAX_2560X1440_2LANE, IMX335_VMAX_2560X1440_2LANE),
+              IMX335_WIDTH_2560X1440, IMX335_HEIGHT_2560X1440, IMX335_2560X1440_10BIT_2LANE_MODE,
+              OT_WDR_MODE_NONE, "IMX335_2560X1440_10BIT_2LANE_MODE" },
         },
         .i2c.fd = -1,
     }
@@ -344,7 +368,12 @@ static td_void cmos_config_vmax(ot_isp_sns_state *sns_state, td_u32 vmax)
 
 /* Crop modes (window crop / flex) must keep VMAX at the window's own frame
  * length: the T6 VI drops frames once it is scaled away from it. The rate is
- * carried by HMAX instead, so it is these modes that program HMAX at runtime. */
+ * carried by HMAX instead, so it is these modes that program HMAX at runtime.
+ *
+ * The two-lane window (mode 9) is a crop too but is not listed: it runs
+ * stretched through VMAX like the full-frame modes, and that was measured on
+ * a Hi3516CV613 -- 50, 30 and 5 fps (VMAX up to 12x the table's) and slow
+ * shutter at 18 fps, every frame through VI and VPSS, picture intact. */
 static td_bool imx335_is_crop_mode(td_u8 img_mode)
 {
     return ((img_mode == IMX335_60FPS_CROPPED_1080P_MODE) ||
@@ -818,6 +847,10 @@ static td_void cmos_isp_get_dng_default(const ot_isp_sns_state *sns_state, ot_is
         case IMX335_60FPS_FULL_1944P_MODE:
         case IMX335_1520P_10BIT_MODE:
         case IMX335_CROP_FLEX_LINEAR_MODE:
+        case IMX335_5M_30FPS_10BIT_2LANE_MODE:
+        case IMX335_5M_40FPS_10BIT_2LANE_MODE:
+        case IMX335_5M_45FPS_10BIT_2LANE_MODE:
+        case IMX335_2560X1440_10BIT_2LANE_MODE:
         default:
             isp_def->sns_mode.dng_raw_format.bits_per_sample = DNG_RAW_FORMAT_BIT_CROP;
             isp_def->sns_mode.dng_raw_format.white_level = DNG_RAW_FORMAT_WHITE_LEVEL_CROP;
@@ -1128,6 +1161,16 @@ static td_void cmos_isp_config_image_mode_param(ot_vi_pipe vi_pipe, td_u8 sns_im
                 IMX335_VMAX_5M_30FPS_12BIT_LINEAR;
             break;
         }
+        case IMX335_5M_30FPS_10BIT_2LANE_MODE:
+        case IMX335_5M_40FPS_10BIT_2LANE_MODE:
+            sns_state->fl_std = IMX335_VMAX_5M_2LANE_10BIT;
+            break;
+        case IMX335_5M_45FPS_10BIT_2LANE_MODE:
+            sns_state->fl_std = IMX335_VMAX_5M_2LANE_45FPS;
+            break;
+        case IMX335_2560X1440_10BIT_2LANE_MODE:
+            sns_state->fl_std = IMX335_VMAX_2560X1440_2LANE;
+            break;
         case IMX335_60FPS_FULL_1944P_MODE:
         case IMX335_5M_30FPS_12BIT_LINEAR_MODE:
         default:
@@ -1135,6 +1178,22 @@ static td_void cmos_isp_config_image_mode_param(ot_vi_pipe vi_pipe, td_u8 sns_im
             break;
     }
     return;
+}
+
+static td_bool imx335_is_2lane_mode(td_u8 img_mode)
+{
+    return ((img_mode == IMX335_5M_30FPS_10BIT_2LANE_MODE) ||
+            (img_mode == IMX335_5M_40FPS_10BIT_2LANE_MODE) ||
+            (img_mode == IMX335_5M_45FPS_10BIT_2LANE_MODE) ||
+            (img_mode == IMX335_2560X1440_10BIT_2LANE_MODE)) ? TD_TRUE : TD_FALSE;
+}
+
+/* Modes the resolution match must never pick: flex has no fixed size, and the
+ * lane count is a property of the board, not of the picture asked for. */
+static td_bool imx335_is_hint_only_mode(td_u8 img_mode)
+{
+    return ((img_mode == IMX335_CROP_FLEX_LINEAR_MODE) ||
+            (imx335_is_2lane_mode(img_mode) == TD_TRUE)) ? TD_TRUE : TD_FALSE;
 }
 
 static td_s32 cmos_isp_set_image_mode(ot_vi_pipe vi_pipe, const ot_isp_cmos_sns_image_mode *sns_image_mode)
@@ -1215,15 +1274,34 @@ static td_s32 cmos_isp_set_image_mode(ot_vi_pipe vi_pipe, const ot_isp_cmos_sns_
         sns_image_mode->sns_mode > 0 && sns_image_mode->sns_mode < IMX335_MODE_MAX &&
         sns_image_mode->sns_mode != IMX335_CROP_FLEX_LINEAR_MODE) {
         td_u8 hint = sns_image_mode->sns_mode;
-        if (sns_state->wdr_mode == cis->mode_tbl[hint].wdr_mode &&
-            sns_image_mode->fps <= cis->mode_tbl[hint].max_fps &&
-            sns_image_mode->fps >= cis->mode_tbl[hint].min_fps) {
+        const cis_video_mode_tbl *m = &cis->mode_tbl[hint];
+        const char *bad = TD_NULL;
+
+        if (sns_state->wdr_mode != m->wdr_mode) {
+            bad = "WDR mode";
+        } else if (sns_image_mode->fps > m->max_fps || sns_image_mode->fps < m->min_fps) {
+            bad = "frame rate";
+        } else if (imx335_is_2lane_mode(hint) == TD_TRUE &&
+                   (sns_image_mode->width != m->width || sns_image_mode->height != m->height)) {
+            /* A two-lane mode is reached only through this hint, so nothing
+             * else checks that VI/ISP were sized for the window it programs. */
+            bad = "picture size";
+        }
+        if (bad == TD_NULL) {
             image_mode = hint;
+        } else if (imx335_is_2lane_mode(hint) == TD_TRUE) {
+            /* Every mode the auto-match below could pick instead drives four
+             * lanes, which a two-lane board receives as nothing but CRC errors. */
+            isp_err_trace("imx335 2-lane mode %u: %s not supported: asked wdr %d, %ux%u at %f fps; "
+                "the mode is wdr %d, %ux%u at %f..%f fps\n", hint, bad, sns_state->wdr_mode,
+                sns_image_mode->width, sns_image_mode->height, sns_image_mode->fps,
+                m->wdr_mode, m->width, m->height, m->min_fps, m->max_fps);
+            return TD_FAILURE;
         }
     }
-    /* 2) Exact resolution match (flex is hint-only). */
+    /* 2) Exact resolution match (flex and 2-lane are hint-only). */
     for (i = 0; image_mode == IMX335_MODE_MAX && i < IMX335_MODE_MAX; i++) {
-        if (i == IMX335_CROP_FLEX_LINEAR_MODE) {
+        if (imx335_is_hint_only_mode((td_u8)i) == TD_TRUE) {
             continue;
         }
         if (sns_image_mode->width == cis->mode_tbl[i].width &&
@@ -1234,9 +1312,9 @@ static td_s32 cmos_isp_set_image_mode(ot_vi_pipe vi_pipe, const ot_isp_cmos_sns_
             image_mode = (td_u8)i;
         }
     }
-    /* 3) Widest mode that can still serve the requested size (flex excluded). */
+    /* 3) Widest mode that can still serve the requested size (hint-only modes excluded). */
     for (i = 0; image_mode == IMX335_MODE_MAX && i < IMX335_MODE_MAX; i++) {
-        if (i == IMX335_CROP_FLEX_LINEAR_MODE) {
+        if (imx335_is_hint_only_mode((td_u8)i) == TD_TRUE) {
             continue;
         }
         if (sns_image_mode->width <= cis->mode_tbl[i].width &&

@@ -14,7 +14,8 @@ extern "C" {
 #endif
 
 /*
- * 2592x1944 @ 30 fps, 12-bit linear, 2-lane.
+ * 2592x1944 @ 30 fps, 12-bit linear, 4-lane (LANEMODE 0x3A01 stays at its
+ * reset value 0x03; read back from a running sensor).
  * Extracted from the OpenIPC ev200 driver's IMX335_linear_5M30_12bit_init()
  * (which itself carries the OpenIPC fixes). SensorReset() and the final
  * start writes (0x3000/0x3002) are issued by imx335_sensor_ctrl.c around
@@ -127,6 +128,138 @@ static cis_reg_cfg imx335_full_5m_10bit_40fps[] = {
     {0x3A20, 0x3F},  {0x3A22, 0x6F},  {0x3A24, 0x3F},  {0x3A26, 0x5F},
     {0x3A28, 0x2F},  {0x3058, 0xA0},  {0x3059, 0x0F},  {0x305A, 0x00},
     {0x30E8, 0x00},  {0x30E9, 0x00},
+};
+
+/*
+ * 2592x1944 @ 30 fps, 10-bit linear, all-pixel scan over two CSI-2 lanes at
+ * 1188 Mbps/lane, for boards that route only two data lanes (LANEMODE=0x01).
+ *
+ * Timing is Sony's "All-pixel scan CSI-2_2lane 1188Mbps AD:10bit 30fps"
+ * setting as shipped in the SigmaStar vendor driver: HMAX=0x0258, VMAX=0x101D.
+ * The link rate is the vendor's too. A 10-bit row is 2616 * 10 = 26.2 kbit in
+ * a 16.2 us row period, i.e. 1.62 Gbit/s: the 891 Mbps the other tables run
+ * would leave two lanes under 10% for packet framing and the per-row LP/HS
+ * transitions, where 1188 Mbps leaves 30%.
+ *
+ * The vendor table is for a 27 MHz INCK; this platform feeds 37.125 MHz, so the
+ * clock registers are that frequency's 1188 Mbps set. INCKSEL1 * INCK is the
+ * same 4752 MHz in every vendor row (27 MHz 0xB0, 24 MHz 0xC6), which makes
+ * 37.125 MHz 0x80; INCKSEL3=0x68 is the reset value the other 37.125 MHz
+ * tables rely on, written here so the set is complete; INCKSEL2=0x02 and
+ * SYS_MODE=0x01 select 1188 Mbps. It is the same clock set as the two-lane
+ * linear init of hi3516ev200/sony_imx335_2L, which also runs 37.125 MHz.
+ *
+ * The CSI-2 global timing registers 0x3A18..0x3A28 are deliberately absent:
+ * imx335_reset() restores their reset values, which are the 1188 Mbps set, and
+ * the vendor's 1188 Mbps tables leave them alone too. The other tables write
+ * them only because they run 891 Mbps.
+ *
+ * Readout window and analog settings are those of imx335_full_5m_10bit_40fps.
+ */
+static cis_reg_cfg imx335_2lane_5m30_10bit[] = {
+    {0x300C, 0x5B},  {0x300D, 0x40},  {0x3034, 0x58},  {0x3035, 0x02},
+    {0x3018, 0x00},  {0x302C, 0x30},  {0x302D, 0x00},  {0x302E, 0x38},
+    {0x302F, 0x0A},  {0x3030, 0x1D},  {0x3031, 0x10},  {0x3032, 0x00},
+    {0x3056, 0xAC},  {0x3057, 0x07},  {0x3072, 0x28},  {0x3073, 0x00},
+    {0x3076, 0x58},  {0x3077, 0x0F},  {0x3050, 0x00},  {0x3074, 0xB0},
+    {0x3075, 0x00},  {0x30C6, 0x00},  {0x30CE, 0x00},  {0x30D8, 0x4C},
+    {0x30D9, 0x10},  {0x314C, 0x80},  {0x315A, 0x02},  {0x3168, 0x68},
+    {0x316A, 0x7E},  {0x319D, 0x00},  {0x319E, 0x01},  {0x31A1, 0x00},
+    {0x3288, 0x21},  {0x328A, 0x02},  {0x3414, 0x05},  {0x3416, 0x18},
+    {0x341C, 0xFF},  {0x341D, 0x01},  {0x3648, 0x01},  {0x364A, 0x04},
+    {0x364C, 0x04},  {0x3678, 0x01},  {0x367C, 0x31},  {0x367E, 0x31},
+    {0x3706, 0x10},  {0x3708, 0x03},  {0x3714, 0x02},  {0x3715, 0x02},
+    {0x3716, 0x01},  {0x3717, 0x03},  {0x371C, 0x3D},  {0x371D, 0x3F},
+    {0x372C, 0x00},  {0x372D, 0x00},  {0x372E, 0x46},  {0x372F, 0x00},
+    {0x3730, 0x89},  {0x3731, 0x00},  {0x3732, 0x08},  {0x3733, 0x01},
+    {0x3734, 0xFE},  {0x3735, 0x05},  {0x3740, 0x02},  {0x375D, 0x00},
+    {0x375E, 0x00},  {0x375F, 0x11},  {0x3760, 0x01},  {0x3768, 0x1B},
+    {0x3769, 0x1B},  {0x376A, 0x1B},  {0x376B, 0x1B},  {0x376C, 0x1A},
+    {0x376D, 0x17},  {0x376E, 0x0F},  {0x3776, 0x00},  {0x3777, 0x00},
+    {0x3778, 0x46},  {0x3779, 0x00},  {0x377A, 0x89},  {0x377B, 0x00},
+    {0x377C, 0x08},  {0x377D, 0x01},  {0x377E, 0x23},  {0x377F, 0x02},
+    {0x3780, 0xD9},  {0x3781, 0x03},  {0x3782, 0xF5},  {0x3783, 0x06},
+    {0x3784, 0xA5},  {0x3788, 0x0F},  {0x378A, 0xD9},  {0x378B, 0x03},
+    {0x378C, 0xEB},  {0x378D, 0x05},  {0x378E, 0x87},  {0x378F, 0x06},
+    {0x3790, 0xF5},  {0x3792, 0x43},  {0x3794, 0x7A},  {0x3796, 0xA1},
+    {0x3A01, 0x01},
+    /* Initial SHR0 (~500 lines of exposure at VMAX 0x101D), 1x gain. */
+    {0x3058, 0x29},  {0x3059, 0x0E},  {0x305A, 0x00},
+    {0x30E8, 0x00},  {0x30E9, 0x00},
+};
+
+/*
+ * The two-lane modes above 30 fps are imx335_2lane_5m30_10bit with one of the
+ * tables below written on top. None is a vendor setting. What bounds them,
+ * measured on a Hi3516CV613 board with the lanes on PHY 0 and 2:
+ *
+ * - fps = 74.25 MHz * INCKSEL1 / 0x80 / (HMAX * VMAX). INCKSEL1 scales the
+ *   sensor's whole clock tree: pixel clock, ADC and link together.
+ * - HMAX has a floor of 426 at every INCKSEL1 (421 for the 2560-wide window):
+ *   a row must leave the sensor within its row period. Below it the picture
+ *   breaks into shifted bands on the wrong Bayer phase while the receiver
+ *   still counts full frames and no CRC error; only 14 counts lower do rows
+ *   go missing.
+ * - VMAX can drop to the picture's rows plus about 50 blank ones, in units of
+ *   half a row: 3984 for 1944 rows, 2980 for 1440. Below that the SoC's
+ *   VI/VPSS chain drops every frame. (The datasheet asks for more in a
+ *   window: AREA3_WIDTH_1 + 96.)
+ * - How far INCKSEL1 can go depends on the analog gain. At 1x gain, which is
+ *   any well-lit scene, 0x8C and above fill the dark areas with pattern noise
+ *   and lift the blacks; 0x89 and below match Sony's clocks. At full gain the
+ *   picture only breaks from 0x9A. The receiver locks at every step with the
+ *   CSI-2 timing registers left at their reset values.
+ *
+ * Temperature and other boards: not measured.
+ */
+
+/* 2592x1944 @ 40 fps: Sony's clocks, a shorter line. HMAX 450 keeps 5.6% over
+ * the floor; the fastest this readout goes without touching the PLL is 43.7
+ * fps. Clean start, daylight and 1x gain: 40.00 fps, picture equal to 30 fps. */
+static cis_reg_cfg imx335_2lane_40fps_delta[] = {
+    {0x3034, 0xC2},  {0x3035, 0x01},  /* HMAX 450 */
+};
+
+/* 2592x1944 @ 45 fps: INCKSEL1 0x88 runs the sensor 6.25% above Sony's tables,
+ * 2.9% under the first setting that damages the picture, with the lanes at
+ * 1262 Mbps. HMAX 434 keeps 1.9% and VMAX 0x0FC8 1.4%. The clean edge of this
+ * readout is 46.5 fps. Held 45.00 fps for 3 minutes from a clean start in
+ * daylight, picture equal to the 30 fps mode. */
+static cis_reg_cfg imx335_2lane_45fps_delta[] = {
+    {0x3034, 0xB2},  {0x3035, 0x01},  /* HMAX 434 */
+    {0x314C, 0x88},                   /* INCKSEL1 */
+    {0x3030, 0xC8},  {0x3031, 0x0F},  /* VMAX 4040 */
+};
+
+/*
+ * 2560x1440 @ 60 fps: a window on the 45 fps mode's clocks. Window registers
+ * by the datasheet rules the flex mode uses:
+ *
+ *   HNUM = W + 24, HTRIMMING_START = 60 (48 + 12, the step nearest the centre)
+ *   Y_OUT_SIZE = H + 20, AREA3_WIDTH_1 = 2 * Y_OUT_SIZE
+ *   AREA3_ST_ADR_1 = 176 + (1944 - H)
+ *   UNREAD_ED_ADR = AREA3_ST_ADR_1 + AREA3_WIDTH_1 + 208
+ *
+ * These are the values of the SigmaStar (infinity6e) driver's four-lane
+ * 2560x1440 table, except that it starts the window at column 48.
+ *
+ * HMAX 430 keeps 2.1% and VMAX 0x0BF2 2.6%; the edge is 62.9 fps. Held 60.00
+ * fps for 5 minutes from a clean start in daylight, picture equal to Sony's
+ * clocks. Vertical flip is not implemented for the window.
+ */
+static cis_reg_cfg imx335_2lane_2560x1440_delta[] = {
+    {0x3018, 0x04},                   /* WINMODE: window crop */
+    {0x302C, 0x3C},  {0x302D, 0x00},  /* HTRIMMING_START 60 */
+    {0x302E, 0x18},  {0x302F, 0x0A},  /* HNUM 2584 */
+    {0x3056, 0xB4},  {0x3057, 0x05},  /* Y_OUT_SIZE 1460 */
+    {0x3074, 0xA8},  {0x3075, 0x02},  /* AREA3_ST_ADR_1 680 */
+    {0x3076, 0x68},  {0x3077, 0x0B},  /* AREA3_WIDTH_1 2920 */
+    {0x30C6, 0x12},  {0x30CE, 0x64},  /* BLACK_OFSET_ADR, UNRD_LINE_MAX */
+    {0x30D8, 0xE0},  {0x30D9, 0x0E},  /* UNREAD_ED_ADR 3808 */
+    {0x3034, 0xAE},  {0x3035, 0x01},  /* HMAX 430 */
+    {0x314C, 0x88},                   /* INCKSEL1 */
+    {0x3030, 0xF2},  {0x3031, 0x0B},  /* VMAX 3058 */
+    {0x3058, 0xFE},  {0x3059, 0x09},  /* SHR0: ~500 lines of exposure */
 };
 
 /*
