@@ -59,8 +59,15 @@ extern "C" {
 /****************************************************************************
  * sensor lines / mode configs                                              *
  ****************************************************************************/
+/* The lowest rate a mode reaches by stretching VMAX from its table
+ * value at max_fps up to IMX335_FULL_LINES_MAX; asking for less would clip
+ * VMAX while auto-exposure still counted on the requested rate. */
+#define IMX335_VMAX_FPS_MIN(max_fps, vmax) \
+    ((max_fps) * (double)(vmax) / IMX335_FULL_LINES_MAX)
+
 #define IMX335_FPS_MAX_LINEAR   30
-#define IMX335_FPS_MIN_LINEAR   0.02
+#define IMX335_FPS_MIN_LINEAR \
+    IMX335_VMAX_FPS_MIN(IMX335_FPS_MAX_LINEAR, IMX335_VMAX_5M_30FPS_12BIT_LINEAR)
 #define IMX335_WIDTH_LINEAR     2592
 #define IMX335_HEIGHT_LINEAR    1944
 
@@ -100,12 +107,6 @@ extern "C" {
 #define IMX335_WIDTH_1520P      2592
 #define IMX335_HEIGHT_1520P     1520
 #define IMX335_VMAX_CROPPED_1520P  (0x0C58)
-
-/* The lowest rate a two-lane mode reaches by stretching VMAX from its table
- * value at max_fps up to IMX335_FULL_LINES_MAX; asking for less would clip
- * VMAX while auto-exposure still counted on the requested rate. */
-#define IMX335_2LANE_FPS_MIN(max_fps, vmax) \
-    ((max_fps) * (double)(vmax) / IMX335_FULL_LINES_MAX)
 
 /* 2592x1944 10-bit all-pixel over two CSI-2 lanes at 1188 Mbps/lane (enum 6),
  * for boards that route only two data lanes. HMAX 0x0258 / VMAX 0x101D give
