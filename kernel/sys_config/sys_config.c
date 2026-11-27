@@ -122,7 +122,13 @@ int parse_sensor_clock(const char *name)
 		   (strncmp("gc4653_2l", name, len) == 0) ||
 		   (strncmp("sc3235", name, len) == 0) ||
 		   (strncmp("sc500ai", name, len) == 0) ||
-		   (strncmp("sc401ai", name, len) == 0)) {
+		   (strncmp("sc401ai", name, len) == 0) ||
+		   /* Both init tables are the vendor's 27 MHz-input ones. Left to
+		    * the 37.125 MHz default, sc223a ran 1.375x fast: 41.25 Hz
+		    * at fps 30, which VENC then dropped down unevenly
+		    * (OpenIPC/firmware#2964). */
+		   (strncmp("sc223a", name, len) == 0) ||
+		   (strncmp("sc3336", name, len) == 0)) {
 		clock = 0x6;
 	} else {
 		printk("FUNC:%s line:%d  SNS: is [%s]!\n", __FUNCTION__,
