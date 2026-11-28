@@ -39,8 +39,39 @@ typedef enum {
     OS04A10_4M_30FPS_12BIT_LINEAR_MODE = 0,
     OS04A10_4M_30FPS_12BIT_2TO1_VC_MODE,
     OS04A10_4M_60FPS_12BIT_LINEAR_MODE,
+    OS04A10_FLEX_12BIT_LINEAR_MODE,      /* sns_mode 4: a window of the array, on the 4M60 timing */
     OS04A10_MODE_BUTT
 } os04a10_res_mode;
+
+/*
+ * Flexible crop: the sensor reads only a centred W x H window, on the 4M60
+ * mode's line, and the frame is as short as its rows allow, so the rate rises
+ * as the window shrinks. Selected by sns_mode (the profile's Isp_SnsMode) 4
+ * with W x H in the image mode's size. Rate ceiling: PCLK / (HTS x (H + VBLANK)).
+ *
+ * Measured on a Hi3519DV500 (a static scene in a dim room, at full gain),
+ * each a whole picture checked against the same window at a long frame:
+ *   - Line: the 4M60 mode's 732 is the floor; 710 turns the picture magenta,
+ *     680 and below give no frame.
+ *   - Frame: the window is 16 rows taller than the output; a blank of 60 was
+ *     clean, 40 gave no frame. 64 past the window is kept, as on the OS08A20.
+ *   - The full array runs at 92 fps this way, 12-bit, clean.
+ */
+#define OS04A10_SNS_MODE_FLEX      4
+#define OS04A10_PCLK               107955360 /* HTS x VTS x fps: 732 x 2458 x 60 */
+#define OS04A10_FLEX_HTS           0x2dc     /* 732, the 4M60 line: 6.78 us */
+#define OS04A10_FLEX_VBLANK        (16 + 64) /* window extra rows + 64 */
+#define OS04A10_FLEX_MIN_W         320
+#define OS04A10_FLEX_MIN_H         240
+
+typedef struct {
+    td_u32 width;
+    td_u32 height;
+    td_u32 hts;
+    td_u32 vts;      /* the shortest frame: the window's rows plus the blank */
+} os04a10_flex;
+
+const os04a10_flex *os04a10_get_flex(ot_vi_pipe vi_pipe);
 
 typedef struct {
     td_u32      ver_lines;

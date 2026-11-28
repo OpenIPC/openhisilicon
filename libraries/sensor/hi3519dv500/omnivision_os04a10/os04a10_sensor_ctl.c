@@ -152,6 +152,7 @@ void os04a10_restart(ot_vi_pipe vi_pipe)
 static void os04a10_linear_4m30_12bit_init(ot_vi_pipe vi_pipe);
 static void os04a10_wdr_2to1_4m30_12bit_init(ot_vi_pipe vi_pipe);
 static void os04a10_linear_4m60_12bit_init(ot_vi_pipe vi_pipe);
+static void os04a10_flex_init(ot_vi_pipe vi_pipe);
 
 static void os04a10_default_reg_init(ot_vi_pipe vi_pipe)
 {
@@ -219,6 +220,8 @@ void os04a10_init(ot_vi_pipe vi_pipe)
         } else if (quick_start_flag == TD_FALSE) {
             if (img_mode == OS04A10_4M_60FPS_12BIT_LINEAR_MODE) {
                 os04a10_linear_4m60_12bit_init(vi_pipe);
+            } else if (img_mode == OS04A10_FLEX_12BIT_LINEAR_MODE) {
+                os04a10_flex_init(vi_pipe);
             } else {
                 os04a10_linear_4m30_12bit_init(vi_pipe);
             }
@@ -233,6 +236,8 @@ void os04a10_init(ot_vi_pipe vi_pipe)
         } else if (quick_start_flag == TD_FALSE) {
             if (img_mode == OS04A10_4M_60FPS_12BIT_LINEAR_MODE) {
                 os04a10_linear_4m60_12bit_init(vi_pipe);
+            } else if (img_mode == OS04A10_FLEX_12BIT_LINEAR_MODE) {
+                os04a10_flex_init(vi_pipe);
             } else {
                 os04a10_linear_4m30_12bit_init(vi_pipe);
             }
@@ -1038,7 +1043,9 @@ static const struct {
     {0x4837, 0x0e},
 };
 
-static void os04a10_linear_4m60_12bit_init(ot_vi_pipe vi_pipe)
+/* The 4M60 mode up to the stream-on: the linear list, then, in standby, the
+ * WDR mode's timing. */
+static td_s32 os04a10_linear_4m60_12bit_regs(ot_vi_pipe vi_pipe)
 {
     td_s32 ret = TD_SUCCESS;
     td_u32 i;
@@ -1056,6 +1063,13 @@ static void os04a10_linear_4m60_12bit_init(ot_vi_pipe vi_pipe)
     for (i = 0; i < sizeof(g_os04a10_4m60_timing) / sizeof(g_os04a10_4m60_timing[0]); i++) {
         ret += os04a10_write_register(vi_pipe, g_os04a10_4m60_timing[i].addr, g_os04a10_4m60_timing[i].data);
     }
+    return ret;
+}
+
+static void os04a10_linear_4m60_12bit_init(ot_vi_pipe vi_pipe)
+{
+    td_s32 ret = os04a10_linear_4m60_12bit_regs(vi_pipe);
+
     os04a10_default_reg_init(vi_pipe);
     delay_ms(5); /* 5 ms */
     ret += os04a10_write_register(vi_pipe, 0x0100, 0x01);
@@ -1064,4 +1078,55 @@ static void os04a10_linear_4m60_12bit_init(ot_vi_pipe vi_pipe)
         return;
     }
     printf("=== os04a10 4M60 12bit linear (WDR timing) init OK ===\n");
+}
+
+static td_s32 os04a10_write_u16(ot_vi_pipe vi_pipe, td_u32 addr, td_u32 value)
+{
+    td_s32 ret = os04a10_write_register(vi_pipe, addr, (value >> 8) & 0xff); /* high byte first */
+    ret += os04a10_write_register(vi_pipe, addr + 1, value & 0xff);
+    return ret;
+}
+
+/*
+ * Flexible crop: the 4M60 mode's registers, then a window centred on the
+ * array, the line (HTS) and the shortest frame its rows allow (VTS).
+ *
+ * The lists read the window x 0..2703, y 0..1535 and output its 2688 x 1520
+ * from offset (9, 9). A crop keeps that: the window is the output plus 16
+ * columns and rows, moved in by a multiple of 4 so the Bayer phase does not
+ * change, with the output at the same offset.
+ */
+static td_s32 os04a10_flex_window(ot_vi_pipe vi_pipe, const os04a10_flex *flex)
+{
+    td_u32 dx = ((2688 - flex->width) / 2) & ~3u;
+    td_u32 dy = ((1520 - flex->height) / 2) & ~3u;
+    td_s32 ret = TD_SUCCESS;
+
+    ret += os04a10_write_u16(vi_pipe, 0x3800, dx);                     /* x start */
+    ret += os04a10_write_u16(vi_pipe, 0x3802, dy);                     /* y start */
+    ret += os04a10_write_u16(vi_pipe, 0x3804, dx + flex->width + 16 - 1);  /* x end */
+    ret += os04a10_write_u16(vi_pipe, 0x3806, dy + flex->height + 16 - 1); /* y end */
+    ret += os04a10_write_u16(vi_pipe, 0x3808, flex->width);            /* output */
+    ret += os04a10_write_u16(vi_pipe, 0x380a, flex->height);
+    ret += os04a10_write_u16(vi_pipe, 0x380c, flex->hts);
+    ret += os04a10_write_u16(vi_pipe, 0x384c, flex->hts);              /* the WDR timing sets both */
+    ret += os04a10_write_u16(vi_pipe, 0x380e, flex->vts);
+    ret += os04a10_write_u16(vi_pipe, 0x3501, flex->vts / 2);          /* exposure, until AE sets it */
+    return ret;
+}
+
+static void os04a10_flex_init(ot_vi_pipe vi_pipe)
+{
+    const os04a10_flex *flex = os04a10_get_flex(vi_pipe);
+    td_s32 ret = os04a10_linear_4m60_12bit_regs(vi_pipe);
+
+    ret += os04a10_flex_window(vi_pipe, flex);
+    os04a10_default_reg_init(vi_pipe);
+    delay_ms(5); /* 5 ms */
+    ret += os04a10_write_register(vi_pipe, 0x0100, 0x01);
+    if (ret != TD_SUCCESS) {
+        isp_err_trace("os04a10 write register failed!\n");
+        return;
+    }
+    printf("=== os04a10 flexible crop %ux%u init OK ===\n", flex->width, flex->height);
 }
