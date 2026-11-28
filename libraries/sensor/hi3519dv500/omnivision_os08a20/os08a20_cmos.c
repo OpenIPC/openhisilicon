@@ -3,6 +3,7 @@
  */
 
 #include <stdio.h>
+#include <string.h>
 #include "ot_mpi_isp.h"
 #include "ot_mpi_ae.h"
 #include "ot_mpi_awb.h"
@@ -76,9 +77,44 @@ const os08a20_video_mode_tbl g_os08a20_mode_tbl[OS08A20_MODE_BUTT] = {
      3840, 2180, 0, OT_WDR_MODE_NONE,       "OS08A20_8M_30FPS_12BIT_LINEAR_MODE"},
     {OS08A20_VMAX_8M_30FPS_10BIT_2TO1_WDR,  OS08A20_FULL_LINES_MAX_2TO1_WDR, 30, 5.0,
      3840, 2180, 0, OT_WDR_MODE_2To1_LINE,  "OS08A20_8M_30FPS_10BIT_2TO1_VC_MODE"},
-    {OS08A20_VMAX_2M_60FPS_10BIT_LINEAR,   OS08A20_FULL_LINES_MAX,          60, 2.12,
+    {OS08A20_VMAX_2M_60FPS_10BIT_LINEAR,   OS08A20_FULL_LINES_MAX,          120, 2.12,
      1920, 1080, 0, OT_WDR_MODE_NONE,       "OS08A20_2M_60FPS_10BIT_LINEAR_MODE"},
+    /* The flexible crops' frame length and rate are per pipe (g_os08a20_flex);
+     * cmos_set_image_mode() takes them by sns_mode only, never by size. */
+    /* min: the longest frame, 0xFFFF lines, at each one's line (1440 and 1036) */
+    {0,                                    OS08A20_FULL_LINES_MAX,          0, 1.53,
+     3840, 2160, OS08A20_SNS_MODE_FLEX, OT_WDR_MODE_NONE, "OS08A20_FLEX_12BIT_LINEAR_MODE"},
+    {0,                                    OS08A20_FULL_LINES_MAX,          0, 2.12,
+     1920, 1080, OS08A20_SNS_MODE_FLEX_BIN, OT_WDR_MODE_NONE, "OS08A20_FLEX_BIN_10BIT_LINEAR_MODE"},
 };
+
+static os08a20_flex g_os08a20_flex[OT_ISP_MAX_PIPE_NUM];
+
+const os08a20_flex *os08a20_get_flex(ot_vi_pipe vi_pipe)
+{
+    return &g_os08a20_flex[vi_pipe];
+}
+
+static td_bool os08a20_is_flex(td_u8 img_mode)
+{
+    return img_mode == OS08A20_FLEX_12BIT_LINEAR_MODE || img_mode == OS08A20_FLEX_BIN_10BIT_LINEAR_MODE;
+}
+
+/* The mode's shortest frame and the rate it gives. */
+static td_u32 os08a20_mode_lines(ot_vi_pipe vi_pipe, td_u8 img_mode)
+{
+    return os08a20_is_flex(img_mode) ? g_os08a20_flex[vi_pipe].vts : g_os08a20_mode_tbl[img_mode].ver_lines;
+}
+
+static td_float os08a20_mode_max_fps(ot_vi_pipe vi_pipe, td_u8 img_mode)
+{
+    const os08a20_flex *flex = &g_os08a20_flex[vi_pipe];
+
+    if (os08a20_is_flex(img_mode)) {
+        return (td_float)OS08A20_PCLK / ((td_float)flex->hts * div_0_to_1_float((td_float)flex->vts));
+    }
+    return g_os08a20_mode_tbl[img_mode].max_fps;
+}
 
 /****************************************************************************
  * local variables                                                            *
@@ -117,7 +153,7 @@ static td_void cmos_get_ae_comm_default(ot_vi_pipe vi_pipe, ot_isp_ae_sensor_def
     ae_sns_dft->flicker_freq = 50 * 256; /* light flicker freq: 50Hz, accuracy: 256 */
     ae_sns_dft->full_lines_max = OS08A20_FULL_LINES_MAX;
     ae_sns_dft->hmax_times = (1000000000) / /* 1000000000ns, line time at the mode's max fps */
-        (sns_state->fl_std * g_os08a20_mode_tbl[sns_state->img_mode].max_fps);
+        (sns_state->fl_std * os08a20_mode_max_fps(vi_pipe, sns_state->img_mode));
 
     ae_sns_dft->int_time_accu.accu_type = OT_ISP_AE_ACCURACY_LINEAR;
     ae_sns_dft->int_time_accu.accuracy = 1;
@@ -133,7 +169,7 @@ static td_void cmos_get_ae_comm_default(ot_vi_pipe vi_pipe, ot_isp_ae_sensor_def
     ae_sns_dft->min_isp_dgain_target = 1 << ae_sns_dft->isp_dgain_shift;
     ae_sns_dft->max_isp_dgain_target = 128 << ae_sns_dft->isp_dgain_shift; /* max 128 */
     if (g_lines_per500ms[vi_pipe] == 0) {
-        ae_sns_dft->lines_per500ms = sns_state->fl_std * g_os08a20_mode_tbl[sns_state->img_mode].max_fps / 2;
+        ae_sns_dft->lines_per500ms = sns_state->fl_std * os08a20_mode_max_fps(vi_pipe, sns_state->img_mode) / 2;
     } else {
         ae_sns_dft->lines_per500ms = g_lines_per500ms[vi_pipe];
     }
@@ -302,11 +338,16 @@ static td_void cmos_fps_set(ot_vi_pipe vi_pipe, td_float fps, ot_isp_ae_sensor_d
     os08a20_sensor_get_ctx(vi_pipe, sns_state);
     sns_check_pointer_void_return(sns_state);
 
-    lines = g_os08a20_mode_tbl[sns_state->img_mode].ver_lines;
+    lines = os08a20_mode_lines(vi_pipe, sns_state->img_mode);
     lines_max = g_os08a20_mode_tbl[sns_state->img_mode].max_ver_lines;
-    max_fps = g_os08a20_mode_tbl[sns_state->img_mode].max_fps;
+    max_fps = os08a20_mode_max_fps(vi_pipe, sns_state->img_mode);
     min_fps = g_os08a20_mode_tbl[sns_state->img_mode].min_fps;
 
+    /* A flexible crop's ceiling follows the window: a rate above it runs at
+     * the ceiling rather than not at all. */
+    if (os08a20_is_flex(sns_state->img_mode) && fps > max_fps) {
+        fps = max_fps;
+    }
     if ((fps > max_fps) || (fps < min_fps)) {
         isp_err_trace("Not support Fps: %f\n", fps);
         return;
@@ -833,6 +874,7 @@ static td_void cmos_get_isp_dng_default(const ot_isp_sns_state *sns_state, ot_is
 
         case OS08A20_8M_30FPS_10BIT_2TO1_VC_MODE:
         case OS08A20_2M_60FPS_10BIT_LINEAR_MODE:
+        case OS08A20_FLEX_BIN_10BIT_LINEAR_MODE:
             isp_def->sns_mode.dng_raw_format.bits_per_sample = 10; /* 10bit */
             isp_def->sns_mode.dng_raw_format.white_level = 1023; /* max 1023 */
             break;
@@ -1043,7 +1085,9 @@ static td_void cmos_set_pixel_detect(ot_vi_pipe vi_pipe, td_bool enable)
     if (sns_state->wdr_mode == OT_WDR_MODE_2To1_LINE) {
         return;
     } else {
-        if (sns_state->img_mode == OS08A20_8M_30FPS_12BIT_LINEAR_MODE) {
+        if (os08a20_is_flex(sns_state->img_mode)) {
+            full_lines_5fps = OS08A20_FULL_LINES_MAX;
+        } else if (sns_state->img_mode == OS08A20_8M_30FPS_12BIT_LINEAR_MODE) {
             full_lines_5fps = (OS08A20_VMAX_8M_30FPS_12BIT_LINEAR * 30) / 5; /* 30fps, 5fps */
         } else {
             return;
@@ -1246,7 +1290,6 @@ static td_s32 cmos_get_sns_regs_info(ot_vi_pipe vi_pipe, ot_isp_sns_regs_info *s
 static td_void cmos_config_image_mode_param(ot_vi_pipe vi_pipe, td_u8 sns_image_mode,
     ot_isp_sns_state *sns_state)
 {
-    ot_unused(vi_pipe);
     switch (sns_image_mode) {
         case OS08A20_8M_30FPS_12BIT_LINEAR_MODE:
             sns_state->fl_std = OS08A20_VMAX_8M_30FPS_12BIT_LINEAR;
@@ -1257,12 +1300,63 @@ static td_void cmos_config_image_mode_param(ot_vi_pipe vi_pipe, td_u8 sns_image_
         case OS08A20_2M_60FPS_10BIT_LINEAR_MODE:
             sns_state->fl_std = OS08A20_VMAX_2M_60FPS_10BIT_LINEAR;
             break;
+        case OS08A20_FLEX_12BIT_LINEAR_MODE:
+        case OS08A20_FLEX_BIN_10BIT_LINEAR_MODE:
+            sns_state->fl_std = g_os08a20_flex[vi_pipe].vts;
+            break;
         default:
             sns_state->fl_std = OS08A20_VMAX_8M_30FPS_12BIT_LINEAR;
             break;
     }
 
     return;
+}
+
+static td_s32 cmos_set_flex_mode(ot_vi_pipe vi_pipe, const ot_isp_cmos_sns_image_mode *sns_image_mode,
+    ot_isp_sns_state *sns_state)
+{
+    td_bool bin = (sns_image_mode->sns_mode == OS08A20_SNS_MODE_FLEX_BIN);
+    td_u8 image_mode = bin ? OS08A20_FLEX_BIN_10BIT_LINEAR_MODE : OS08A20_FLEX_12BIT_LINEAR_MODE;
+    os08a20_flex *flex = &g_os08a20_flex[vi_pipe];
+    os08a20_flex want;
+
+    if (sns_state->wdr_mode != OT_WDR_MODE_NONE ||
+        sns_image_mode->width > g_os08a20_mode_tbl[image_mode].width ||
+        sns_image_mode->height > g_os08a20_mode_tbl[image_mode].height ||
+        sns_image_mode->width < OS08A20_FLEX_MIN_W || sns_image_mode->height < OS08A20_FLEX_MIN_H ||
+        (sns_image_mode->width % 8) != 0 || (sns_image_mode->height % 4) != 0) { /* 8, 4: keep the Bayer phase */
+        isp_err_trace("os08a20 flexible crop: %ux%u is not a window of the %s array "
+            "(linear only, %ux%u to %ux%u, width a multiple of 8, height of 4)\n",
+            sns_image_mode->width, sns_image_mode->height, bin ? "2x2-binned" : "native",
+            OS08A20_FLEX_MIN_W, OS08A20_FLEX_MIN_H,
+            g_os08a20_mode_tbl[image_mode].width, g_os08a20_mode_tbl[image_mode].height);
+        return TD_FAILURE;
+    }
+
+    want.width = sns_image_mode->width;
+    want.height = sns_image_mode->height;
+    want.hts = bin ? OS08A20_FLEX_BIN_HTS : OS08A20_FLEX_HTS;
+    want.vts = want.height + (bin ? OS08A20_FLEX_BIN_VBLANK : OS08A20_FLEX_VBLANK);
+    if (!bin && want.height > OS08A20_FLEX_EDGE_HEIGHT) {
+        want.vts += OS08A20_FLEX_EDGE_VBLANK;
+    }
+
+    if (sns_state->init == TD_TRUE && image_mode == sns_state->img_mode &&
+        memcmp(&want, flex, sizeof(want)) == 0) {
+        cmos_config_image_mode_param(vi_pipe, image_mode, sns_state);
+        return OT_ISP_DO_NOT_NEED_SWITCH_IMAGEMODE;
+    }
+    *flex = want;
+    printf("os08a20 flexible crop: %ux%u of the %s array, HTS %u VTS %u, up to %.1f fps\n",
+        flex->width, flex->height, bin ? "2x2-binned" : "native", flex->hts, flex->vts,
+        os08a20_mode_max_fps(vi_pipe, image_mode));
+
+    cmos_config_image_mode_param(vi_pipe, image_mode, sns_state);
+    sns_state->sync_init = TD_FALSE;
+    sns_state->img_mode = image_mode;
+    sns_state->fl[0] = sns_state->fl_std;
+    sns_state->fl[1] = sns_state->fl[0];
+    return TD_SUCCESS;
 }
 
 static td_s32 cmos_set_image_mode(ot_vi_pipe vi_pipe, const ot_isp_cmos_sns_image_mode *sns_image_mode)
@@ -1276,7 +1370,14 @@ static td_s32 cmos_set_image_mode(ot_vi_pipe vi_pipe, const ot_isp_cmos_sns_imag
 
     image_mode = sns_state->img_mode;
 
+    if (sns_image_mode->sns_mode == OS08A20_SNS_MODE_FLEX || sns_image_mode->sns_mode == OS08A20_SNS_MODE_FLEX_BIN) {
+        return cmos_set_flex_mode(vi_pipe, sns_image_mode, sns_state);
+    }
+
     for (i = 0; i < OS08A20_MODE_BUTT; i++) {
+        if (os08a20_is_flex((td_u8)i)) {
+            continue;
+        }
         if (sns_image_mode->fps <= g_os08a20_mode_tbl[i].max_fps &&
             sns_image_mode->width <= g_os08a20_mode_tbl[i].width &&
             sns_image_mode->height <= g_os08a20_mode_tbl[i].height &&
