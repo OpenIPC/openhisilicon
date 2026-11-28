@@ -1021,12 +1021,14 @@ static td_s32 os08a20_write_u16(ot_vi_pipe vi_pipe, td_u32 addr, td_u32 value)
  * (0x3812). In the native list that offset is 0 and the first ~18 rows out
  * are black: measured, offset 16 still left 4 dark rows and 24 none. So the
  * native window starts 24 rows above the picture's first row, with offset
- * 24, and runs 8 rows past its last. The binned list's offset of 8 (binned
- * rows) shows no dark rows, and its window is padded by 16 array rows.
+ * 24, and runs 8 rows past its last. The binned list's offset of 8 binned
+ * rows (16 of the array) shows no dark rows; the binned window starts those
+ * 16 rows above its picture and ends with it.
  */
 #define OS08A20_ARRAY_ROWS    2192
 #define OS08A20_PIC_Y0        12
 #define OS08A20_NATIVE_YOFF   24
+#define OS08A20_BIN_YOFF      16  /* array rows: 0x3813 = 8 binned rows */
 
 static td_s32 os08a20_flex_window(ot_vi_pipe vi_pipe, const os08a20_flex *flex, td_bool bin)
 {
@@ -1038,8 +1040,10 @@ static td_s32 os08a20_flex_window(ot_vi_pipe vi_pipe, const os08a20_flex *flex, 
     td_s32 ret = TD_SUCCESS;
 
     if (bin) {
-        y_start = OS08A20_PIC_Y0 + dy;
-        y_end = y_start + rows + 16 - 1;    /* 16: pad */
+        /* The binned list's output offset (0x3813) is 8 binned rows, 16 of
+         * the array: the window starts that much above the picture. */
+        y_start = (OS08A20_PIC_Y0 + dy >= OS08A20_BIN_YOFF) ? OS08A20_PIC_Y0 + dy - OS08A20_BIN_YOFF : 0;
+        y_end = y_start + rows + 16 - 1;    /* 16: the offset */
     } else {
         y_start = (OS08A20_PIC_Y0 + dy >= OS08A20_NATIVE_YOFF) ? OS08A20_PIC_Y0 + dy - OS08A20_NATIVE_YOFF : 0;
         y_end = y_start + OS08A20_NATIVE_YOFF + rows + 8 - 1; /* 8: pad */
