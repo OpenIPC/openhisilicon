@@ -238,6 +238,14 @@ ccflags-y += -I$(src)/mipi_tx/hi3519dv500
 $(PREFIX)mipi_tx-objs := mipi_tx/hi3519dv500/mipi_tx.o mipi_tx/hi3519dv500/mipi_tx_hal.o $(DV500_SDRV_INIT)/mipi_tx_init.o
 obj-m += $(PREFIX)mipi_tx.o
 
+# LT8618SXB BT.1120 -> HDMI bridge on the demo boards' HDMI adapter (vendor
+# extdrv source). It talks to the chip on I2C7, address 0x39, through the
+# kernel's bsp_i2c_transfer, and creates /dev/lt8618sx: the MPP VO sample
+# sends it LT_CMD_SETMODE when VO starts. On a board without the bridge the
+# chip ID read fails and the module refuses to load.
+$(PREFIX)lt8618sx-objs := lt8618sx/hi3519dv500/lt8618sx.o
+obj-m += $(PREFIX)lt8618sx.o
+
 # gfbg (graphics framebuffer / OSD) — full vendor source (depends on TDE headers)
 DV500_GFBG = gfbg/hi3519dv500
 # gfbg feature config (matches the vendor gfbg Makefile -D flags; e.g.
