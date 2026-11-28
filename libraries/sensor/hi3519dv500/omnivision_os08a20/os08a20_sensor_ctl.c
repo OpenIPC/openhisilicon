@@ -169,6 +169,7 @@ td_void os08a20_blc_clamp(ot_vi_pipe vi_pipe, ot_isp_sns_blc_clamp blc_clamp)
 static td_s32 os08a20_vc_wdr_2t1_8m30_10bit_init(ot_vi_pipe vi_pipe);
 static td_s32 os08a20_linear_8m30_12bit_init(ot_vi_pipe vi_pipe);
 static td_s32 os08a20_linear_2m60_10bit_init(ot_vi_pipe vi_pipe);
+static td_s32 os08a20_flex_init(ot_vi_pipe vi_pipe, td_bool bin);
 
 static td_s32 os08a20_default_reg_init(ot_vi_pipe vi_pipe)
 {
@@ -237,6 +238,10 @@ void os08a20_init(ot_vi_pipe vi_pipe)
             }
         } else if (img_mode == OS08A20_2M_60FPS_10BIT_LINEAR_MODE) {
             init_ret = os08a20_linear_2m60_10bit_init(vi_pipe);
+        } else if (img_mode == OS08A20_FLEX_12BIT_LINEAR_MODE) {
+            init_ret = os08a20_flex_init(vi_pipe, TD_FALSE);
+        } else if (img_mode == OS08A20_FLEX_BIN_10BIT_LINEAR_MODE) {
+            init_ret = os08a20_flex_init(vi_pipe, TD_TRUE);
         } else {
             init_ret = os08a20_linear_8m30_12bit_init(vi_pipe);
         }
@@ -361,7 +366,7 @@ static td_s32 os08a20_linear_8m30_12bit_init_part2(ot_vi_pipe vi_pipe)
     ret += os08a20_write_register(vi_pipe, 0x3800, 0x00);
     ret += os08a20_write_register(vi_pipe, 0x3801, 0x00);
     ret += os08a20_write_register(vi_pipe, 0x3802, 0x00);
-    ret += os08a20_write_register(vi_pipe, 0x3803, 0x0c);
+    ret += os08a20_write_register(vi_pipe, 0x3803, 0x00); /* was 0x0c: see 0x3813 */
     ret += os08a20_write_register(vi_pipe, 0x3804, 0x0e);
     ret += os08a20_write_register(vi_pipe, 0x3805, 0xff);
 
@@ -372,7 +377,7 @@ static td_s32 os08a20_linear_8m30_12bit_init_part3(ot_vi_pipe vi_pipe)
 {
     td_s32 ret = TD_SUCCESS;
     ret += os08a20_write_register(vi_pipe, 0x3806, 0x08);
-    ret += os08a20_write_register(vi_pipe, 0x3807, 0x73);
+    ret += os08a20_write_register(vi_pipe, 0x3807, 0x8f); /* was 0x73: the whole array, rows 0..2191 */
     ret += os08a20_write_register(vi_pipe, 0x3808, 0x0f);
     ret += os08a20_write_register(vi_pipe, 0x3809, 0x00);
     ret += os08a20_write_register(vi_pipe, 0x380a, 0x08);
@@ -381,7 +386,11 @@ static td_s32 os08a20_linear_8m30_12bit_init_part3(ot_vi_pipe vi_pipe)
     ret += os08a20_write_register(vi_pipe, 0x380d, 0x18);
     ret += os08a20_write_register(vi_pipe, 0x380e, 0x09);
     ret += os08a20_write_register(vi_pipe, 0x380f, 0x0a);
-    ret += os08a20_write_register(vi_pipe, 0x3813, 0x00);
+    /* Was 0x00, and the first ~18 rows out were black: the output has to
+     * start 24 rows into the window (measured: 16 left 4 dark rows, 24 none).
+     * With the window from row 0, the 2160 rows VI keeps are array rows
+     * 24..2183. */
+    ret += os08a20_write_register(vi_pipe, 0x3813, 0x18);
     ret += os08a20_write_register(vi_pipe, 0x3814, 0x01);
     ret += os08a20_write_register(vi_pipe, 0x3815, 0x01);
     ret += os08a20_write_register(vi_pipe, 0x3816, 0x01);
@@ -989,6 +998,90 @@ static td_s32 os08a20_linear_2m60_10bit_init(ot_vi_pipe vi_pipe)
         isp_err_trace("os08a20 write register failed!\n");
         return ret;
     }
-    printf("=== OS08A20 1080p60 10bit 2x2 binning linear init OK ===\n");
+    printf("=== OS08A20 1080p 10bit 2x2 binning linear init OK (up to 120 fps) ===\n");
+    return TD_SUCCESS;
+}
+
+static td_s32 os08a20_write_u16(ot_vi_pipe vi_pipe, td_u32 addr, td_u32 value)
+{
+    td_s32 ret = os08a20_write_register(vi_pipe, addr, (value >> 8) & 0xff); /* high byte first */
+    ret += os08a20_write_register(vi_pipe, addr + 1, value & 0xff);
+    return ret;
+}
+
+/*
+ * Flexible crop: the base mode's list, then, in standby, a window centred on
+ * the array, its line (HTS) and the shortest frame its rows allow (VTS).
+ *
+ * The array is 3872 x 2192; the picture is its centre 3840 x 2160, from row
+ * 12. The window moves in by a multiple of 8 columns and 4 rows so the Bayer
+ * phase does not change, and the output is the window's size exactly.
+ *
+ * The sensor's output starts some rows into the window, at the ISP Y offset
+ * (0x3812). In the native list that offset is 0 and the first ~18 rows out
+ * are black: measured, offset 16 still left 4 dark rows and 24 none. So the
+ * native window starts 24 rows above the picture's first row, with offset
+ * 24, and runs 8 rows past its last. The binned list's offset of 8 (binned
+ * rows) shows no dark rows, and its window is padded by 16 array rows.
+ */
+#define OS08A20_ARRAY_ROWS    2192
+#define OS08A20_PIC_Y0        12
+#define OS08A20_NATIVE_YOFF   24
+
+static td_s32 os08a20_flex_window(ot_vi_pipe vi_pipe, const os08a20_flex *flex, td_bool bin)
+{
+    td_u32 scale = bin ? 2 : 1;
+    td_u32 rows = flex->height * scale;
+    td_u32 dx = ((3840 - flex->width * scale) / 2) & ~7u;
+    td_u32 dy = ((2160 - rows) / 2) & ~3u;
+    td_u32 y_start, y_end;
+    td_s32 ret = TD_SUCCESS;
+
+    if (bin) {
+        y_start = OS08A20_PIC_Y0 + dy;
+        y_end = y_start + rows + 16 - 1;    /* 16: pad */
+    } else {
+        y_start = (OS08A20_PIC_Y0 + dy >= OS08A20_NATIVE_YOFF) ? OS08A20_PIC_Y0 + dy - OS08A20_NATIVE_YOFF : 0;
+        y_end = y_start + OS08A20_NATIVE_YOFF + rows + 8 - 1; /* 8: pad */
+        ret += os08a20_write_u16(vi_pipe, 0x3812, OS08A20_NATIVE_YOFF);
+    }
+    if (y_end > OS08A20_ARRAY_ROWS - 1) {
+        y_end = OS08A20_ARRAY_ROWS - 1;
+    }
+
+    ret += os08a20_write_u16(vi_pipe, 0x3800, dx);                 /* x start */
+    ret += os08a20_write_u16(vi_pipe, 0x3802, y_start);
+    ret += os08a20_write_u16(vi_pipe, 0x3804, 3839 - dx);          /* x end */
+    ret += os08a20_write_u16(vi_pipe, 0x3806, y_end);
+    ret += os08a20_write_u16(vi_pipe, 0x3808, flex->width);        /* output */
+    ret += os08a20_write_u16(vi_pipe, 0x380a, flex->height);
+    ret += os08a20_write_u16(vi_pipe, 0x380c, flex->hts);
+    ret += os08a20_write_u16(vi_pipe, 0x380e, flex->vts);
+    ret += os08a20_write_u16(vi_pipe, 0x3501, flex->vts / 2);      /* exposure, until AE sets it */
+    return ret;
+}
+
+static td_s32 os08a20_flex_init(ot_vi_pipe vi_pipe, td_bool bin)
+{
+    const os08a20_flex *flex = os08a20_get_flex(vi_pipe);
+    td_s32 ret;
+
+    if (bin) {
+        ret = os08a20_linear_2m60_10bit_regs(vi_pipe);
+    } else {
+        ret = os08a20_linear_8m30_12bit_init(vi_pipe);
+        ret += os08a20_write_register(vi_pipe, 0x0100, 0x00);   /* standby */
+        delay_ms(5); /* 5 ms: let the frame in progress end */
+    }
+    ret += os08a20_flex_window(vi_pipe, flex, bin);
+    ret += os08a20_default_reg_init(vi_pipe);
+    delay_ms(5); /* 5 ms before streaming */
+    ret += os08a20_write_register(vi_pipe, 0x0100, 0x01);
+    if (ret != TD_SUCCESS) {
+        isp_err_trace("os08a20 write register failed!\n");
+        return ret;
+    }
+    printf("=== OS08A20 flexible crop %ux%u (%s) init OK ===\n", flex->width, flex->height,
+        bin ? "2x2 binned, 10bit" : "native, 12bit");
     return TD_SUCCESS;
 }
