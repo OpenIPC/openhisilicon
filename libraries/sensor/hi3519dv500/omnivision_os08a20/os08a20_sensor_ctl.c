@@ -166,10 +166,11 @@ td_void os08a20_blc_clamp(ot_vi_pipe vi_pipe, ot_isp_sns_blc_clamp blc_clamp)
     return;
 }
 
-static void os08a20_vc_wdr_2t1_8m30_10bit_init(ot_vi_pipe vi_pipe);
-static void os08a20_linear_8m30_12bit_init(ot_vi_pipe vi_pipe);
+static td_s32 os08a20_vc_wdr_2t1_8m30_10bit_init(ot_vi_pipe vi_pipe);
+static td_s32 os08a20_linear_8m30_12bit_init(ot_vi_pipe vi_pipe);
+static td_s32 os08a20_linear_2m60_10bit_init(ot_vi_pipe vi_pipe);
 
-static void os08a20_default_reg_init(ot_vi_pipe vi_pipe)
+static td_s32 os08a20_default_reg_init(ot_vi_pipe vi_pipe)
 {
     td_u32 i;
     td_s32 ret = TD_SUCCESS;
@@ -189,7 +190,7 @@ static void os08a20_default_reg_init(ot_vi_pipe vi_pipe)
         isp_err_trace("write register failed!\n");
     }
 
-    return;
+    return ret;
 }
 
 static td_bool os08a20_get_quick_start_flag(ot_vi_pipe vi_pipe)
@@ -213,6 +214,7 @@ void os08a20_init(ot_vi_pipe vi_pipe)
     td_u8            img_mode;
     td_s32           ret;
     td_bool          quick_start_flag = TD_FALSE;
+    td_s32           init_ret = TD_SUCCESS;
     ot_isp_sns_state *pastos08a20 = TD_NULL;
 
     pastos08a20 = os08a20_get_ctx(vi_pipe);
@@ -230,14 +232,22 @@ void os08a20_init(ot_vi_pipe vi_pipe)
     if (quick_start_flag == TD_FALSE) {
         if (OT_WDR_MODE_2To1_LINE == wdr_mode) {
             if (OS08A20_8M_30FPS_10BIT_2TO1_VC_MODE == img_mode) {  /* OS08A20_VMAX_8M_30FPS_10BIT_2TO1_WDR */
-                os08a20_vc_wdr_2t1_8m30_10bit_init(vi_pipe);
+                init_ret = os08a20_vc_wdr_2t1_8m30_10bit_init(vi_pipe);
             } else {
             }
+        } else if (img_mode == OS08A20_2M_60FPS_10BIT_LINEAR_MODE) {
+            init_ret = os08a20_linear_2m60_10bit_init(vi_pipe);
         } else {
-            os08a20_linear_8m30_12bit_init(vi_pipe);
+            init_ret = os08a20_linear_8m30_12bit_init(vi_pipe);
         }
     }
 
+    /* Only a sensor that took every register is ready: marked initialised
+     * after a failed write, it is never set up again. */
+    if (init_ret != TD_SUCCESS) {
+        isp_err_trace("pipe[%d] os08a20 init failed!\n", vi_pipe);
+        return;
+    }
     pastos08a20->init = TD_TRUE;
     return;
 }
@@ -484,7 +494,7 @@ static td_s32 os08a20_linear_8m30_12bit_init_part5(ot_vi_pipe vi_pipe)
 }
 
 
-static void os08a20_linear_8m30_12bit_init(ot_vi_pipe vi_pipe)
+static td_s32 os08a20_linear_8m30_12bit_init(ot_vi_pipe vi_pipe)
 {
     td_s32 ret = TD_SUCCESS;
 
@@ -495,13 +505,13 @@ static void os08a20_linear_8m30_12bit_init(ot_vi_pipe vi_pipe)
     ret += os08a20_linear_8m30_12bit_init_part5(vi_pipe);
     if (ret != TD_SUCCESS) {
         isp_err_trace("os08a20 write register failed!\n");
-        return;
+        return ret;
     }
 
     printf("========================================================================\n");
     printf("vi_pipe:%d,== os08a20 24Mclk 8M30fps(MIPI) 12bit linear init success! ==\n", vi_pipe);
     printf("========================================================================\n");
-    return;
+    return TD_SUCCESS;
 }
 
 static td_s32 os08a20_vc_wdr_2t1_8m30_10bit_init_part1(ot_vi_pipe vi_pipe)
@@ -728,7 +738,7 @@ static td_s32 os08a20_vc_wdr_2t1_8m30_10bit_init_part5(ot_vi_pipe vi_pipe)
     return ret;
 }
 
-static void os08a20_vc_wdr_2t1_8m30_10bit_init(ot_vi_pipe vi_pipe)
+static td_s32 os08a20_vc_wdr_2t1_8m30_10bit_init(ot_vi_pipe vi_pipe)
 {
     td_s32 ret = TD_SUCCESS;
 
@@ -739,11 +749,246 @@ static void os08a20_vc_wdr_2t1_8m30_10bit_init(ot_vi_pipe vi_pipe)
     ret += os08a20_vc_wdr_2t1_8m30_10bit_init_part5(vi_pipe);
     if (ret != TD_SUCCESS) {
         isp_err_trace("os08a20 write register failed!\n");
-        return;
+        return ret;
     }
 
     printf("========================================================================\n");
     printf("vi_pipe:%d,== os08a20 24Mclk 8M30fps(MIPI) 10bit vc-wdr init success! ==\n", vi_pipe);
     printf("========================================================================\n");
-    return;
+    return TD_SUCCESS;
+}
+
+/* 1920x1080 10-bit linear, 2x2 binning, 60 fps, 4-lane MIPI, 24 MHz MCLK.
+ * GK7206V100 OS08A20 driver (OpenIPC opensdk): its 10-bit linear common init plus its
+ * 1920x1080 binning block, with VTS (0x380e/0x380f) halved from 0x1214 (30 fps) to
+ * 0x090a (60 fps) at the same HTS 0x040c and PLL. */
+static td_s32 os08a20_linear_2m60_10bit_regs(ot_vi_pipe vi_pipe)
+{
+    td_s32 ret = TD_SUCCESS;
+    ret += os08a20_write_register(vi_pipe, 0x0103, 0x01);
+    delay_ms(10); /* soft reset */
+    ret += os08a20_write_register(vi_pipe, 0x0303, 0x01);
+    ret += os08a20_write_register(vi_pipe, 0x0305, 0x5a);
+    ret += os08a20_write_register(vi_pipe, 0x0306, 0x00);
+    ret += os08a20_write_register(vi_pipe, 0x0308, 0x03);
+    ret += os08a20_write_register(vi_pipe, 0x0309, 0x04);
+    ret += os08a20_write_register(vi_pipe, 0x032a, 0x00);
+    ret += os08a20_write_register(vi_pipe, 0x300f, 0x11);
+    ret += os08a20_write_register(vi_pipe, 0x3010, 0x01);
+    ret += os08a20_write_register(vi_pipe, 0x3011, 0x04);
+    ret += os08a20_write_register(vi_pipe, 0x3012, 0x41);
+    ret += os08a20_write_register(vi_pipe, 0x3016, 0xf0);
+    ret += os08a20_write_register(vi_pipe, 0x301e, 0x98);
+    ret += os08a20_write_register(vi_pipe, 0x3031, 0xa9);
+    ret += os08a20_write_register(vi_pipe, 0x3103, 0x92);
+    ret += os08a20_write_register(vi_pipe, 0x3104, 0x01);
+    ret += os08a20_write_register(vi_pipe, 0x3106, 0x10);
+    ret += os08a20_write_register(vi_pipe, 0x3400, 0x04);
+    ret += os08a20_write_register(vi_pipe, 0x3025, 0x03);
+    ret += os08a20_write_register(vi_pipe, 0x3425, 0x01);
+    ret += os08a20_write_register(vi_pipe, 0x3428, 0x01);
+    ret += os08a20_write_register(vi_pipe, 0x3406, 0x08);
+    ret += os08a20_write_register(vi_pipe, 0x3408, 0x03);
+    ret += os08a20_write_register(vi_pipe, 0x340c, 0xff);
+    ret += os08a20_write_register(vi_pipe, 0x340d, 0xff);
+    ret += os08a20_write_register(vi_pipe, 0x031e, 0x09);
+    ret += os08a20_write_register(vi_pipe, 0x3501, 0x08);
+    ret += os08a20_write_register(vi_pipe, 0x3502, 0xe5);
+    ret += os08a20_write_register(vi_pipe, 0x3505, 0x83);
+    ret += os08a20_write_register(vi_pipe, 0x3508, 0x00);
+    ret += os08a20_write_register(vi_pipe, 0x3509, 0x80);
+    ret += os08a20_write_register(vi_pipe, 0x350a, 0x04);
+    ret += os08a20_write_register(vi_pipe, 0x350b, 0x00);
+    ret += os08a20_write_register(vi_pipe, 0x350c, 0x00);
+    ret += os08a20_write_register(vi_pipe, 0x350d, 0x80);
+    ret += os08a20_write_register(vi_pipe, 0x350e, 0x04);
+    ret += os08a20_write_register(vi_pipe, 0x350f, 0x00);
+    ret += os08a20_write_register(vi_pipe, 0x3600, 0x00);
+    ret += os08a20_write_register(vi_pipe, 0x3603, 0x2c);
+    ret += os08a20_write_register(vi_pipe, 0x3605, 0x50);
+    ret += os08a20_write_register(vi_pipe, 0x3609, 0xb5);
+    ret += os08a20_write_register(vi_pipe, 0x3610, 0x39);
+    ret += os08a20_write_register(vi_pipe, 0x360c, 0x01);
+    ret += os08a20_write_register(vi_pipe, 0x3628, 0xa4);
+    ret += os08a20_write_register(vi_pipe, 0x362d, 0x10);
+    ret += os08a20_write_register(vi_pipe, 0x3660, 0x43);
+    ret += os08a20_write_register(vi_pipe, 0x3661, 0x06);
+    ret += os08a20_write_register(vi_pipe, 0x3662, 0x00);
+    ret += os08a20_write_register(vi_pipe, 0x3663, 0x28);
+    ret += os08a20_write_register(vi_pipe, 0x3664, 0x0d);
+    ret += os08a20_write_register(vi_pipe, 0x366a, 0x38);
+    ret += os08a20_write_register(vi_pipe, 0x366b, 0xa0);
+    ret += os08a20_write_register(vi_pipe, 0x366d, 0x00);
+    ret += os08a20_write_register(vi_pipe, 0x366e, 0x00);
+    ret += os08a20_write_register(vi_pipe, 0x3680, 0x00);
+    ret += os08a20_write_register(vi_pipe, 0x36c0, 0x00);
+    ret += os08a20_write_register(vi_pipe, 0x3701, 0x02);
+    ret += os08a20_write_register(vi_pipe, 0x373b, 0x02);
+    ret += os08a20_write_register(vi_pipe, 0x373c, 0x02);
+    ret += os08a20_write_register(vi_pipe, 0x3736, 0x02);
+    ret += os08a20_write_register(vi_pipe, 0x3737, 0x02);
+    ret += os08a20_write_register(vi_pipe, 0x3705, 0x00);
+    ret += os08a20_write_register(vi_pipe, 0x3706, 0x39);
+    ret += os08a20_write_register(vi_pipe, 0x370a, 0x00);
+    ret += os08a20_write_register(vi_pipe, 0x370b, 0x98);
+    ret += os08a20_write_register(vi_pipe, 0x3709, 0x49);
+    ret += os08a20_write_register(vi_pipe, 0x3714, 0x21);
+    ret += os08a20_write_register(vi_pipe, 0x371c, 0x00);
+    ret += os08a20_write_register(vi_pipe, 0x371d, 0x08);
+    ret += os08a20_write_register(vi_pipe, 0x3740, 0x1b);
+    ret += os08a20_write_register(vi_pipe, 0x3741, 0x04);
+    ret += os08a20_write_register(vi_pipe, 0x375e, 0x0b);
+    ret += os08a20_write_register(vi_pipe, 0x3760, 0x10);
+    ret += os08a20_write_register(vi_pipe, 0x3776, 0x10);
+    ret += os08a20_write_register(vi_pipe, 0x3781, 0x02);
+    ret += os08a20_write_register(vi_pipe, 0x3782, 0x04);
+    ret += os08a20_write_register(vi_pipe, 0x3783, 0x02);
+    ret += os08a20_write_register(vi_pipe, 0x3784, 0x08);
+    ret += os08a20_write_register(vi_pipe, 0x3785, 0x08);
+    ret += os08a20_write_register(vi_pipe, 0x3788, 0x01);
+    ret += os08a20_write_register(vi_pipe, 0x3789, 0x01);
+    ret += os08a20_write_register(vi_pipe, 0x3797, 0x04);
+    ret += os08a20_write_register(vi_pipe, 0x3762, 0x11);
+    ret += os08a20_write_register(vi_pipe, 0x380c, 0x08);
+    ret += os08a20_write_register(vi_pipe, 0x380d, 0x18);
+    ret += os08a20_write_register(vi_pipe, 0x380e, 0x09);
+    ret += os08a20_write_register(vi_pipe, 0x380f, 0x0a);
+    ret += os08a20_write_register(vi_pipe, 0x3813, 0x10);
+    ret += os08a20_write_register(vi_pipe, 0x3814, 0x01);
+    ret += os08a20_write_register(vi_pipe, 0x3815, 0x01);
+    ret += os08a20_write_register(vi_pipe, 0x3816, 0x01);
+    ret += os08a20_write_register(vi_pipe, 0x3817, 0x01);
+    ret += os08a20_write_register(vi_pipe, 0x381c, 0x00);
+    ret += os08a20_write_register(vi_pipe, 0x3820, 0x00);
+    ret += os08a20_write_register(vi_pipe, 0x3821, 0x04);
+    ret += os08a20_write_register(vi_pipe, 0x3823, 0x08);
+    ret += os08a20_write_register(vi_pipe, 0x3826, 0x00);
+    ret += os08a20_write_register(vi_pipe, 0x3827, 0x08);
+    ret += os08a20_write_register(vi_pipe, 0x382d, 0x08);
+    ret += os08a20_write_register(vi_pipe, 0x3832, 0x02);
+    ret += os08a20_write_register(vi_pipe, 0x3833, 0x00);
+    ret += os08a20_write_register(vi_pipe, 0x383c, 0x48);
+    ret += os08a20_write_register(vi_pipe, 0x383d, 0xff);
+    ret += os08a20_write_register(vi_pipe, 0x3d85, 0x0b);
+    ret += os08a20_write_register(vi_pipe, 0x3d84, 0x40);
+    ret += os08a20_write_register(vi_pipe, 0x3d8c, 0x63);
+    ret += os08a20_write_register(vi_pipe, 0x3d8d, 0xd7);
+    ret += os08a20_write_register(vi_pipe, 0x4000, 0xf8);
+    ret += os08a20_write_register(vi_pipe, 0x4001, 0x2b);
+    ret += os08a20_write_register(vi_pipe, 0x4004, 0x00);
+    ret += os08a20_write_register(vi_pipe, 0x4005, 0x40);
+    ret += os08a20_write_register(vi_pipe, 0x400a, 0x01);
+    ret += os08a20_write_register(vi_pipe, 0x400f, 0xa0);
+    ret += os08a20_write_register(vi_pipe, 0x4010, 0x12);
+    ret += os08a20_write_register(vi_pipe, 0x4018, 0x00);
+    ret += os08a20_write_register(vi_pipe, 0x4008, 0x02);
+    ret += os08a20_write_register(vi_pipe, 0x4009, 0x0d);
+    ret += os08a20_write_register(vi_pipe, 0x401a, 0x58);
+    ret += os08a20_write_register(vi_pipe, 0x4050, 0x00);
+    ret += os08a20_write_register(vi_pipe, 0x4051, 0x01);
+    ret += os08a20_write_register(vi_pipe, 0x4028, 0x2f);
+    ret += os08a20_write_register(vi_pipe, 0x4052, 0x00);
+    ret += os08a20_write_register(vi_pipe, 0x4053, 0x80);
+    ret += os08a20_write_register(vi_pipe, 0x4054, 0x00);
+    ret += os08a20_write_register(vi_pipe, 0x4055, 0x80);
+    ret += os08a20_write_register(vi_pipe, 0x4056, 0x00);
+    ret += os08a20_write_register(vi_pipe, 0x4057, 0x80);
+    ret += os08a20_write_register(vi_pipe, 0x4058, 0x00);
+    ret += os08a20_write_register(vi_pipe, 0x4059, 0x80);
+    ret += os08a20_write_register(vi_pipe, 0x430b, 0xff);
+    ret += os08a20_write_register(vi_pipe, 0x430c, 0xff);
+    ret += os08a20_write_register(vi_pipe, 0x430d, 0x00);
+    ret += os08a20_write_register(vi_pipe, 0x430e, 0x00);
+    ret += os08a20_write_register(vi_pipe, 0x4501, 0x18);
+    ret += os08a20_write_register(vi_pipe, 0x4502, 0x00);
+    ret += os08a20_write_register(vi_pipe, 0x4643, 0x00);
+    ret += os08a20_write_register(vi_pipe, 0x4640, 0x01);
+    ret += os08a20_write_register(vi_pipe, 0x4641, 0x04);
+    ret += os08a20_write_register(vi_pipe, 0x4800, 0x64);
+    ret += os08a20_write_register(vi_pipe, 0x4809, 0x2b);
+    ret += os08a20_write_register(vi_pipe, 0x4813, 0x90);
+    ret += os08a20_write_register(vi_pipe, 0x4817, 0x04);
+    ret += os08a20_write_register(vi_pipe, 0x4833, 0x18);
+    ret += os08a20_write_register(vi_pipe, 0x4837, 0x0b);
+    ret += os08a20_write_register(vi_pipe, 0x483b, 0x00);
+    ret += os08a20_write_register(vi_pipe, 0x484b, 0x03);
+    ret += os08a20_write_register(vi_pipe, 0x4850, 0x7c);
+    ret += os08a20_write_register(vi_pipe, 0x4852, 0x06);
+    ret += os08a20_write_register(vi_pipe, 0x4856, 0x58);
+    ret += os08a20_write_register(vi_pipe, 0x4857, 0xaa);
+    ret += os08a20_write_register(vi_pipe, 0x4862, 0x0a);
+    ret += os08a20_write_register(vi_pipe, 0x4869, 0x18);
+    ret += os08a20_write_register(vi_pipe, 0x486a, 0xaa);
+    ret += os08a20_write_register(vi_pipe, 0x486e, 0x03);
+    ret += os08a20_write_register(vi_pipe, 0x486f, 0x55);
+    ret += os08a20_write_register(vi_pipe, 0x4875, 0xf0);
+    ret += os08a20_write_register(vi_pipe, 0x5000, 0x89);
+    ret += os08a20_write_register(vi_pipe, 0x5001, 0x42);
+    ret += os08a20_write_register(vi_pipe, 0x5004, 0x40);
+    ret += os08a20_write_register(vi_pipe, 0x5005, 0x00);
+    ret += os08a20_write_register(vi_pipe, 0x5180, 0x00);
+    ret += os08a20_write_register(vi_pipe, 0x5181, 0x10);
+    ret += os08a20_write_register(vi_pipe, 0x580b, 0x03);
+    ret += os08a20_write_register(vi_pipe, 0x4d00, 0x03);
+    ret += os08a20_write_register(vi_pipe, 0x4d01, 0xc9);
+    ret += os08a20_write_register(vi_pipe, 0x4d02, 0xbc);
+    ret += os08a20_write_register(vi_pipe, 0x4d03, 0xc6);
+    ret += os08a20_write_register(vi_pipe, 0x4d04, 0x4a);
+    ret += os08a20_write_register(vi_pipe, 0x4d05, 0x25);
+    ret += os08a20_write_register(vi_pipe, 0x4700, 0x2b);
+    ret += os08a20_write_register(vi_pipe, 0x4e00, 0x2b);
+    ret += os08a20_write_register(vi_pipe, 0x3501, 0x09);
+    ret += os08a20_write_register(vi_pipe, 0x3502, 0x01);
+    ret += os08a20_write_register(vi_pipe, 0x4028, 0x4f);
+    ret += os08a20_write_register(vi_pipe, 0x4029, 0x1f);
+    ret += os08a20_write_register(vi_pipe, 0x402a, 0x7f);
+    ret += os08a20_write_register(vi_pipe, 0x402b, 0x01);
+    ret += os08a20_write_register(vi_pipe, 0x0305, 0x32);
+    ret += os08a20_write_register(vi_pipe, 0x3501, 0x04);
+    ret += os08a20_write_register(vi_pipe, 0x3502, 0x62);
+    ret += os08a20_write_register(vi_pipe, 0x3600, 0x09);
+    ret += os08a20_write_register(vi_pipe, 0x3714, 0x22);
+    ret += os08a20_write_register(vi_pipe, 0x3800, 0x00);
+    ret += os08a20_write_register(vi_pipe, 0x3801, 0x00);
+    ret += os08a20_write_register(vi_pipe, 0x3802, 0x00);
+    ret += os08a20_write_register(vi_pipe, 0x3803, 0x0c);
+    ret += os08a20_write_register(vi_pipe, 0x3804, 0x0e);
+    ret += os08a20_write_register(vi_pipe, 0x3805, 0xff);
+    ret += os08a20_write_register(vi_pipe, 0x3806, 0x08);
+    ret += os08a20_write_register(vi_pipe, 0x3807, 0x6f);
+    ret += os08a20_write_register(vi_pipe, 0x3808, 0x07);
+    ret += os08a20_write_register(vi_pipe, 0x3809, 0x80);
+    ret += os08a20_write_register(vi_pipe, 0x380a, 0x04);
+    ret += os08a20_write_register(vi_pipe, 0x380b, 0x38);
+    ret += os08a20_write_register(vi_pipe, 0x380c, 0x04);
+    ret += os08a20_write_register(vi_pipe, 0x380d, 0x0c);
+    ret += os08a20_write_register(vi_pipe, 0x380e, 0x09);
+    ret += os08a20_write_register(vi_pipe, 0x380f, 0x0a);
+    ret += os08a20_write_register(vi_pipe, 0x3813, 0x08);
+    ret += os08a20_write_register(vi_pipe, 0x3814, 0x03);
+    ret += os08a20_write_register(vi_pipe, 0x3815, 0x01);
+    ret += os08a20_write_register(vi_pipe, 0x3816, 0x03);
+    ret += os08a20_write_register(vi_pipe, 0x3817, 0x01);
+    ret += os08a20_write_register(vi_pipe, 0x381c, 0x00);
+    ret += os08a20_write_register(vi_pipe, 0x3820, 0x01);
+    ret += os08a20_write_register(vi_pipe, 0x3821, 0x05);
+    ret += os08a20_write_register(vi_pipe, 0x4009, 0x05);
+    ret += os08a20_write_register(vi_pipe, 0x4501, 0x98);
+    ret += os08a20_write_register(vi_pipe, 0x4837, 0x14);
+    return ret;
+}
+
+static td_s32 os08a20_linear_2m60_10bit_init(ot_vi_pipe vi_pipe)
+{
+    td_s32 ret = os08a20_linear_2m60_10bit_regs(vi_pipe);
+
+    ret += os08a20_default_reg_init(vi_pipe);
+    delay_ms(5); /* 5 ms before streaming */
+    ret += os08a20_write_register(vi_pipe, 0x0100, 0x01);
+    if (ret != TD_SUCCESS) {
+        isp_err_trace("os08a20 write register failed!\n");
+        return ret;
+    }
+    printf("=== OS08A20 1080p60 10bit 2x2 binning linear init OK ===\n");
+    return TD_SUCCESS;
 }

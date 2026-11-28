@@ -76,6 +76,8 @@ const os08a20_video_mode_tbl g_os08a20_mode_tbl[OS08A20_MODE_BUTT] = {
      3840, 2180, 0, OT_WDR_MODE_NONE,       "OS08A20_8M_30FPS_12BIT_LINEAR_MODE"},
     {OS08A20_VMAX_8M_30FPS_10BIT_2TO1_WDR,  OS08A20_FULL_LINES_MAX_2TO1_WDR, 30, 5.0,
      3840, 2180, 0, OT_WDR_MODE_2To1_LINE,  "OS08A20_8M_30FPS_10BIT_2TO1_VC_MODE"},
+    {OS08A20_VMAX_2M_60FPS_10BIT_LINEAR,   OS08A20_FULL_LINES_MAX,          60, 2.12,
+     1920, 1080, 0, OT_WDR_MODE_NONE,       "OS08A20_2M_60FPS_10BIT_LINEAR_MODE"},
 };
 
 /****************************************************************************
@@ -114,7 +116,8 @@ static td_void cmos_get_ae_comm_default(ot_vi_pipe vi_pipe, ot_isp_ae_sensor_def
     ae_sns_dft->full_lines_std = sns_state->fl_std;
     ae_sns_dft->flicker_freq = 50 * 256; /* light flicker freq: 50Hz, accuracy: 256 */
     ae_sns_dft->full_lines_max = OS08A20_FULL_LINES_MAX;
-    ae_sns_dft->hmax_times = (1000000000) / (sns_state->fl_std * 30); /* 1000000000ns, 30fps */
+    ae_sns_dft->hmax_times = (1000000000) / /* 1000000000ns, line time at the mode's max fps */
+        (sns_state->fl_std * g_os08a20_mode_tbl[sns_state->img_mode].max_fps);
 
     ae_sns_dft->int_time_accu.accu_type = OT_ISP_AE_ACCURACY_LINEAR;
     ae_sns_dft->int_time_accu.accuracy = 1;
@@ -130,7 +133,7 @@ static td_void cmos_get_ae_comm_default(ot_vi_pipe vi_pipe, ot_isp_ae_sensor_def
     ae_sns_dft->min_isp_dgain_target = 1 << ae_sns_dft->isp_dgain_shift;
     ae_sns_dft->max_isp_dgain_target = 128 << ae_sns_dft->isp_dgain_shift; /* max 128 */
     if (g_lines_per500ms[vi_pipe] == 0) {
-        ae_sns_dft->lines_per500ms = sns_state->fl_std * 30 / 2; /* 30fps, div 2 */
+        ae_sns_dft->lines_per500ms = sns_state->fl_std * g_os08a20_mode_tbl[sns_state->img_mode].max_fps / 2;
     } else {
         ae_sns_dft->lines_per500ms = g_lines_per500ms[vi_pipe];
     }
@@ -319,7 +322,9 @@ static td_void cmos_fps_set(ot_vi_pipe vi_pipe, td_float fps, ot_isp_ae_sensor_d
     cmos_config_vmax(sns_state, vmax);
 
     sns_state->fl_std = vmax;
-    ae_sns_dft->lines_per500ms = lines * 15; /* *15 */
+    /* Lines in half a second at the mode's own rate, as cmos_get_ae_default()
+     * has it: 15 frames of them was a 30 fps mode's. */
+    ae_sns_dft->lines_per500ms = (td_u32)(lines * max_fps / 2);
     g_lines_per500ms[vi_pipe] = ae_sns_dft->lines_per500ms;
 
     ae_sns_dft->fps = (achieve_fps_ok == TD_TRUE) ? fps : (lines * max_fps / vmax);
@@ -827,6 +832,7 @@ static td_void cmos_get_isp_dng_default(const ot_isp_sns_state *sns_state, ot_is
             break;
 
         case OS08A20_8M_30FPS_10BIT_2TO1_VC_MODE:
+        case OS08A20_2M_60FPS_10BIT_LINEAR_MODE:
             isp_def->sns_mode.dng_raw_format.bits_per_sample = 10; /* 10bit */
             isp_def->sns_mode.dng_raw_format.white_level = 1023; /* max 1023 */
             break;
@@ -1247,6 +1253,9 @@ static td_void cmos_config_image_mode_param(ot_vi_pipe vi_pipe, td_u8 sns_image_
             break;
         case OS08A20_8M_30FPS_10BIT_2TO1_VC_MODE:
             sns_state->fl_std = OS08A20_VMAX_8M_30FPS_10BIT_2TO1_WDR;
+            break;
+        case OS08A20_2M_60FPS_10BIT_LINEAR_MODE:
+            sns_state->fl_std = OS08A20_VMAX_2M_60FPS_10BIT_LINEAR;
             break;
         default:
             sns_state->fl_std = OS08A20_VMAX_8M_30FPS_12BIT_LINEAR;
