@@ -334,3 +334,118 @@ Limits found along the way:
 A second stream from the same VPSS group is bounded by what the pipeline
 carries in all, about 80 frames of 1080p a second (166 Mpix/s): two 1080p
 streams at 50 come out at 42 and 41.
+
+## OS08A20 and OS04A10 (hi3519dv500)
+
+Measured on a Hi3519DV500 DMEBPRO kit with an OS04A10 on SENSOR0 and an
+OS08A20 on SENSOR1, under majestic. Each stream is H.265 at the sensor's
+output size, with slow shutter off. The scene is a dim room, so AE ran at
+full gain. Rates are VENC's `send` count over 8 s.
+
+### Modes
+
+| Sensor | Mode | Picture | Bits | Rate | Selected by |
+|---|---|---|---|---|---|
+| OS08A20 | vendor | 3840×2160 | 12 | 30 | default |
+| OS08A20 | 2×2 binning | 1920×1080, full field | 10 | up to 120 | `DevRect` 1920×1080, `Isp_FrameRate` above 30 |
+| OS08A20 | native window | any W×H to 3840×2160 | 12 | 44 at 3840×2160 to 173 at 640×480 | `Isp_SnsMode=4`, `raw_bitness=12` |
+| OS08A20 | binned window | any W×H to 1920×1080, field 2W×2H | 10 | 120 at 1920×1080 to 240 at 640×480 | `Isp_SnsMode=5`, `raw_bitness=10` |
+| OS04A10 | vendor | 2688×1520 | 12 | 30 | default |
+| OS04A10 | 4M60 | 2688×1520 | 12 | 60 | `Isp_FrameRate` above 30 |
+| OS04A10 | window | any W×H to 2688×1520 | 12 | 92 at 2688×1520 to 240 at 640×480 | `Isp_SnsMode=4`, `raw_bitness=12` |
+
+A window is centred on the array and sized by `DevRect_w`/`DevRect_h`.
+- **Size rules.** Width must be a multiple of 8, height a multiple of 4,
+  and both at least 320×240. The driver refuses any other size, and logs
+  why.
+- **Line.** The window keeps its base mode's line. The frame is as short
+  as the window's rows allow.
+- **Requests.** A requested rate above the ceiling runs at the ceiling. A
+  lower one lengthens the frame, down to the longest frame the sensor
+  takes: 1.53 fps (OS08A20 native), 2.12 (binned) and 15.2 (OS04A10).
+- **Profile.** Set `Isp_FrameRate` and `Isp_MaxFrameRate` to the rate you
+  want, at most the ceiling, so majestic paces the encoder to it.
+
+| Window | Line | Frame | Ceiling (fps) |
+|---|---|---|---|
+| OS08A20 native (4) | 1440 PCLK, 10.01 µs | H + 96, +16 above 2136 rows | 99888 / frame |
+| OS08A20 binned (5) | 1036 PCLK, 7.20 µs | H + 72 | 138840 / frame |
+| OS04A10 (4) | 732 PCLK, 6.78 µs | H + 80 | 147480 / frame |
+
+| Sensor | Window | Ceiling | Delivered |
+|---|---|---|---|
+| OS08A20 | native 3840×2160 | 44.0 | 44 |
+| OS08A20 | native 3840×1600 | 58.9 | 59 |
+| OS08A20 | native 1920×1080 | 84.9 | 85 |
+| OS08A20 | native 1280×720 | 122.4 | 122 |
+| OS08A20 | native 640×480 | 173.4 | 173 |
+| OS08A20 | binned 1920×1080 | 120.5 | 120 |
+| OS08A20 | binned 1280×720 | 175.3 | 175 |
+| OS08A20 | binned 640×480 | 251.5 | 240 (majestic's cap) |
+| OS04A10 | 2688×1520 | 92.2 | 91 |
+| OS04A10 | 1920×1080 | 127.1 | 127 |
+| OS04A10 | 1280×720 | 184.4 | 184 |
+| OS04A10 | 640×480 | 263.4 | 240 (majestic's cap) |
+
+MIPI CRC/ECC errors were 0 and the stream decoded without error in every
+run. Each picture was checked against the same window at a long frame.
+
+Two of these beat the vendor's own modes, at the same picture:
+- **OS08A20 4K at 44 fps in 12 bits,** against 30.
+- **OS04A10 full array at 92 fps in 12 bits.** Its datasheet gives 45 for
+  12-bit linear at 720 Mbps a lane (table 3-2). The window runs on the
+  vendor 2:1 WDR mode's PLL and line, which drive the lanes faster.
+
+### Latency
+
+From the sensor's readout start to the encoded pack, p50, with VPSS low
+delay, 9 slices a frame and slice output (`docs/hisi/low-latency.md` in
+majestic has the method):
+
+| Sensor | Mode | First slice | Whole frame |
+|---|---|---|---|
+| OS08A20 | binned 1920×1080 at 60 | 2.63 ms | 8.37 ms |
+| OS08A20 | binned 1920×1080 at 120 | 2.58 ms | 8.36 ms |
+| OS08A20 | binned window 1280×720 at 175 | 2.22 ms | 5.68 ms |
+| OS04A10 | 4M60, 2688×1520 to 1080p | 2.94 ms | 10.92 ms |
+| OS04A10 | window 1920×1080 at 127 | 2.52 ms | 7.89 ms |
+
+The whole-frame time follows the rows read times the line, not the frame
+rate: 1080 binned rows take 7.8 ms at 60 fps and at 120 alike. A faster
+rate shortens the wait for the next frame, by half a frame period on
+average, and the exposure. A smaller window shortens the readout itself.
+
+### What bounds them
+
+| Limit | Value | How it fails |
+|---|---|---|
+| OS08A20 native line | 1400 clean, at 1920 and 3840 wide; 1440 kept | 1300: a white picture; 1200: no frame |
+| OS08A20 binned line | 1000 clean; the vendor's 1036 kept | 960: blue cast; 900: purple; 860: no frame |
+| OS04A10 line | the 4M60 mode's 732 | 710: magenta; 680: no frame |
+| Frame past the window | about 56 rows; 64 kept | broken picture at the full rate; further below, no frame |
+| OS08A20 native at full height | 16 rows more | 3840×2160 broke at a blank of 96, clean at 110 |
+
+- **Line floors.** Each line was judged by SSIM against the same window at
+  the vendor line and a long frame, and by the mean colour, where a cast
+  shows first.
+- **Frame past the window.** Each window is taller than its output: by 8
+  binned rows on the OS08A20 binned, 32 on the native, 16 on the OS04A10.
+  The frame has to run about 56 rows past the window. OS08A20 binned broke
+  at a blank of 60 and was clean at 64; native broke at 80 and was clean
+  at 90. OS04A10 was clean at 60 and gave no frame at 40.
+- **Full height.** A native window taller than 2136 rows cannot start 24
+  rows above its picture, so it is clamped to the whole array. 3840×2048,
+  which is not clamped, ran clean at the 96-row blank and nearly the same
+  pixel rate.
+- **No counter shows any of these.** As with the IMX335 line, MIPI counted
+  no CRC or ECC error and the encoder ran at full rate while the picture
+  was broken. Only a snapshot shows it.
+- **The OS08A20's first output rows.** The OS08A20 outputs some 18 black
+  rows at the start of the window unless its ISP Y offset (0x3812) is 24:
+  measured, 16 still left 4 dark rows. The vendor 4K list had offset 0,
+  and its picture carried that black band at the top. The list now starts
+  the window at row 0, with offset 24.
+- **Mirror and flip.** Neither driver implements them, in any mode.
+
+Not measured: a bright scene (every run was at full gain), temperature, runs
+longer than 30 s, and two sensors both in window modes.
