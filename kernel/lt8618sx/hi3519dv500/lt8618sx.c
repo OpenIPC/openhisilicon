@@ -8,16 +8,17 @@
 
 #include "lt8618sx.h"
 #include <linux/module.h>
-#ifndef __LITEOS__
 #include <linux/miscdevice.h>
 #include <linux/reboot.h>
 #include <linux/notifier.h>
-#endif
 #include <linux/slab.h>
 #include <linux/delay.h>
 #include <linux/poll.h>
 #include <linux/i2c.h>
 #include <linux/ioctl.h>
+#include <linux/err.h>
+#include <linux/mutex.h>
+#include <linux/bitops.h>
 #include "ot_osal.h"
 
 #ifdef OT_FPGA
@@ -46,36 +47,6 @@
             printk(KERN_INFO "%s [%s ,%d]: " fmt "\n", DEV_NAME, __FUNCTION__, __LINE__, ##args); \
     } while (0)
 
-#ifdef __LITEOS__
-
-static struct i2c_client *lt8168sx_client = NULL;
-
-struct i2c_client lt_client_obj;
-
-static int i2c_client_init(void)
-{
-    int ret;
-
-    struct i2c_client *i2c_client0 = &lt_client_obj;
-
-    i2c_client0->addr = _LT8618SX_ADR >> 1;
-    ret = client_attach(i2c_client0, I2C_INDEX_0);
-    if (ret) {
-        dprintf("Fail to attach client!\n");
-        return -1;
-    }
-    lt8168sx_client = &lt_client_obj;
-
-    return 0;
-}
-
-static void i2c_client_exit(void)
-{
-    struct i2c_client *i2c_client0 = &lt_client_obj;
-    client_deinit(i2c_client0);
-}
-
-#else
 
 static struct i2c_client *lt8168sx_client = NULL;
 
@@ -86,19 +57,23 @@ static struct i2c_board_info lt8168sx_i2c_info = {
 static int i2c_client_init(void)
 {
     struct i2c_adapter *i2c_adap = NULL;
+    struct i2c_client *client;
 
     i2c_adap = i2c_get_adapter(I2C_INDEX_0);
     if (i2c_adap == NULL) {
         DPRINTK(0, "i2c%d get adapter failed.\n", I2C_INDEX_0);
-        return -1;
+        return -ENODEV;
     }
 
-    lt8168sx_client = i2c_new_client_device(i2c_adap, &lt8168sx_i2c_info);
-    if (lt8168sx_client == NULL) {
-        DPRINTK(0, "i2c%d get new device failed.\n", I2C_INDEX_0);
-        return -1;
-    }
+    /* An error pointer, never NULL, when the address is taken or the client
+     * cannot be made. */
+    client = i2c_new_client_device(i2c_adap, &lt8168sx_i2c_info);
     i2c_put_adapter(i2c_adap);
+    if (IS_ERR(client)) {
+        DPRINTK(0, "i2c%d get new device failed: %ld.\n", I2C_INDEX_0, PTR_ERR(client));
+        return (int)PTR_ERR(client);
+    }
+    lt8168sx_client = client;
 
     return 0;
 }
@@ -110,7 +85,13 @@ static void i2c_client_exit(void)
         lt8168sx_client = NULL;
     }
 }
-#endif
+
+/*
+ * Set by any failed transfer. The register sequences are hundreds of void
+ * writes, so the programming paths clear this first and check it at the end
+ * instead of threading a result through every call.
+ */
+static bool lt_i2c_failed;
 
 static unsigned char _i2c_read_byte(unsigned char devaddress, unsigned char address)
 {
@@ -136,7 +117,8 @@ static unsigned char _i2c_read_byte(unsigned char devaddress, unsigned char addr
     msg[1].buf = &buffer;
 
     ret = bsp_i2c_transfer(client->adapter, msg, 2);
-    if (ret < 0) {
+    if (ret != 2) {
+        lt_i2c_failed = true;
         printk("i2c read failed.\n");
     } else {
         ret_data = buffer;
@@ -161,7 +143,8 @@ static int _i2c_write_byte(unsigned char devaddress, unsigned char address, unsi
     buf[1] = data;
 
     ret = i2c_master_send(client, buf, 2);
-    if (ret < 0) {
+    if (ret != 2) {
+        lt_i2c_failed = true;
         printk("[%s][%d] i2c write failed.\n", __FUNCTION__, __LINE__);
     }
     udelay(300); /* 300us */
@@ -457,8 +440,8 @@ static int Format_Timing[LT_OUT_BUTT][TIMING_BUTT] = {
     {1920, 1080, 2640, 1125,  148, 44, 528, 4, 5, 36, VIC_1920X1080P50Hz, _16_9_, Greater_than_100M, Bound_50_100M},
     {1920, 1080, 2200, 1125,  148, 44, 88, 4, 5, 36, VIC_1920X1080P60Hz, _16_9_, Greater_than_100M, Bound_50_100M},
     {1600, 1200, 2160, 1250, 304, 192, 64, 1, 3, 46, VIC_DEFAULT, _4_3_, Greater_than_100M, Bound_50_100M},
-    {1920, 1200, 2080, 1235,  80, 32,  48, 3, 6, 26, VIC_1920X1080P60Hz, _16_9_, Greater_than_100M, Bound_50_100M},
-    {1920, 2160, 2200, 2240,  148, 44, 88, 8, 5, 67, VIC_1920X1080P60Hz, _4_3_, Greater_than_100M, Bound_50_100M},
+    {1920, 1200, 2080, 1235,  80, 32,  48, 3, 6, 26, VIC_DEFAULT, _16_9_, Greater_than_100M, Bound_50_100M},
+    {1920, 2160, 2200, 2240,  148, 44, 88, 8, 5, 67, VIC_DEFAULT, _4_3_, Greater_than_100M, Bound_50_100M},
     {2560, 1440, 2720, 1481,  80, 32, 48, 2, 5, 34, VIC_DEFAULT, _4_3_, Greater_than_100M, Bound_50_100M},
     {2560, 1440, 2720, 1481,  80, 32, 48, 2, 5, 34, VIC_DEFAULT, _4_3_, Greater_than_100M, Greater_than_100M},
     {2560, 1600, 2720, 1646,  80, 32, 48, 3, 6, 37, VIC_DEFAULT, _4_3_, Greater_than_100M, Greater_than_100M},
@@ -531,119 +514,30 @@ static void LT8618SX_VideoSel(unsigned int vmode)
     CLK_Num = Format_Timing[vmode][Clk_bound_SDR];
 }
 
-static void lt_device_init(unsigned int norm_tmp)
+/* Serializes everything that programs the chip or changes the clock mode:
+ * the ioctls and the reboot notifier. */
+static DEFINE_MUTEX(lt_lock);
+
+static int lt_device_init(unsigned int norm_tmp)
 {
+    lt_i2c_failed = false;
     Resolution_change(norm_tmp);
+    return lt_i2c_failed ? -EIO : 0;
 }
 
-#ifdef __LITEOS__
-
-static unsigned int open_cnt = 0;
-
-static int lt_open(struct file *file)
-{
-    (void)file;
-
-    if ((open_cnt++) == 0) {
-        return 0;
-    }
-
-    DPRINTK(0, "you should close the device first!");
-    return -1;
-}
-
-static int lt_close(struct file *file)
-{
-    (void)file;
-
-    open_cnt--;
-    return 0;
-}
-
-static int lt_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
-{
-    unsigned int norm_tmp = 0;
-    unsigned int use_ddr_clk = 0;
-
-    (void)file;
-
-    if ((char *)(uintptr_t)arg == NULL) {
-        return -1;
-    }
-
-    if (((_IOC_SIZE(cmd) == 0) && (_IOC_DIR(cmd) != _IOC_NONE))) {
-        printk("%s %d - input param err, size of cmd is 0!\n", __FUNCTION__, __LINE__);
-        return -1;
-    }
-
-    if ((_IOC_DIR(cmd) != _IOC_NONE) && (((char *)(uintptr_t)arg) == NULL)) {
-        printk("%s %d - input param err, arg is null!\n", __FUNCTION__, __LINE__);
-        return -1;
-    }
-
-    if (_IOC_DIR(cmd) != _IOC_WRITE) {
-        printk("%s %d - input param err, cmd is not write!\n", __FUNCTION__, __LINE__);
-        return -1;
-    }
-
-    switch (cmd) {
-        case (LT_CMD_SETCLK): {
-            if (copy_from_user(&use_ddr_clk, (void *)(uintptr_t)arg, sizeof(unsigned int))) {
-                return -1;
-            }
-
-            if (norm_tmp <= LT_CLK_EDGE_DUAL) {
-                Use_DDRCLK = use_ddr_clk;
-                return 0;
-            } else {
-                printk("%s havn't the Use_DDRCLK:%u\n", DEV_NAME, use_ddr_clk);
-            }
-            break;
-        }
-
-        case (LT_CMD_SETMODE): {
-            if (copy_from_user(&norm_tmp, (void *)(uintptr_t)arg, sizeof(unsigned int))) {
-                return -1;
-            }
-
-            if ((norm_tmp >= LT_OUT_640x480_60) && (norm_tmp < LT_OUT_USER)) {
-                lt_device_init(norm_tmp);
-                return 0;
-            } else {
-                printk("%s havn't the mode:%u\n", DEV_NAME, norm_tmp);
-            }
-            break;
-        }
-
-        default: {
-            printk("%s havn't the cmd:0x%x\n", DEV_NAME, cmd);
-            break;
-        }
-    }
-    return 0;
-}
-
-const static struct file_operations_vfs lt_fops = {
-    .open = lt_open,
-    .close = lt_close,
-    .ioctl = lt_ioctl,
-};
-
-#else
-
-static unsigned int open_cnt = 0;
+static unsigned long lt_busy;
 
 static int lt_open(struct inode *inode, struct file *file)
 {
     (void)inode;
     (void)file;
 
-    if ((open_cnt++) == 0) {
-        return 0;
+    /* Only an accepted open takes the device, so only its release frees it. */
+    if (test_and_set_bit(0, &lt_busy)) {
+        DPRINTK(0, "you should close the device first!");
+        return -EBUSY;
     }
-
-    DPRINTK(0, "you should close the device first!");
-    return -1;
+    return 0;
 }
 
 static int lt_close(struct inode *inode, struct file *file)
@@ -651,71 +545,44 @@ static int lt_close(struct inode *inode, struct file *file)
     (void)inode;
     (void)file;
 
-    open_cnt--;
+    clear_bit(0, &lt_busy);
     return 0;
 }
 
 static long lt_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
 {
-    unsigned int norm_tmp = 0;
-    unsigned int use_ddr_clk = 0;
+    unsigned int val = 0;
+    long ret;
 
     (void)file;
 
-    if ((char *)(uintptr_t)arg == NULL) {
-        return -1;
+    if (cmd != LT_CMD_SETCLK && cmd != LT_CMD_SETMODE) {
+        printk("%s havn't the cmd:0x%x\n", DEV_NAME, cmd);
+        return -ENOTTY;
     }
 
-    if (((_IOC_SIZE(cmd) == 0) && (_IOC_DIR(cmd) != _IOC_NONE))) {
-        printk("%s %d - input param err, size of cmd is 0!\n", __FUNCTION__, __LINE__);
-        return -1;
+    if (copy_from_user(&val, (void __user *)(uintptr_t)arg, sizeof(val))) {
+        return -EFAULT;
     }
 
-    if ((_IOC_DIR(cmd) != _IOC_NONE) && (((char *)(uintptr_t)arg) == NULL)) {
-        printk("%s %d - input param err, arg is null!\n", __FUNCTION__, __LINE__);
-        return -1;
-    }
-
-    if (_IOC_DIR(cmd) != _IOC_WRITE) {
-        printk("%s %d - input param err, cmd is not write!\n", __FUNCTION__, __LINE__);
-        return -1;
-    }
-
-    switch (cmd) {
-        case (LT_CMD_SETCLK): {
-            if (copy_from_user(&use_ddr_clk, (void *)(uintptr_t)arg, sizeof(unsigned int))) {
-                return -1;
-            }
-
-            if (norm_tmp <= LT_CLK_EDGE_DUAL) {
-                Use_DDRCLK = use_ddr_clk;
-                return 0;
-            } else {
-                printk("%s havn't the Use_DDRCLK:%u\n", DEV_NAME, use_ddr_clk);
-            }
-            break;
+    mutex_lock(&lt_lock);
+    if (cmd == LT_CMD_SETCLK) {
+        if (val != LT_CLK_EDGE_SINGLE && val != LT_CLK_EDGE_DUAL) {
+            printk("%s havn't the Use_DDRCLK:%u\n", DEV_NAME, val);
+            ret = -EINVAL;
+        } else {
+            Use_DDRCLK = (val == LT_CLK_EDGE_DUAL);
+            ret = 0;
         }
-
-        case (LT_CMD_SETMODE): {
-            if (copy_from_user(&norm_tmp, (void *)(uintptr_t)arg, sizeof(unsigned int))) {
-                return -1;
-            }
-
-            if ((norm_tmp >= LT_OUT_640x480_60) && (norm_tmp < LT_OUT_USER)) {
-                lt_device_init(norm_tmp);
-                return 0;
-            } else {
-                printk("%s havn't the mode:%u\n", DEV_NAME, norm_tmp);
-            }
-            break;
-        }
-
-        default: {
-            printk("%s havn't the cmd:0x%x\n", DEV_NAME, cmd);
-            break;
-        }
+    } else if ((val >= LT_OUT_640x480_60) && (val < LT_OUT_USER)) {
+        ret = lt_device_init(val);
+    } else {
+        printk("%s havn't the mode:%u\n", DEV_NAME, val);
+        ret = -EINVAL;
     }
-    return 0;
+    mutex_unlock(&lt_lock);
+
+    return ret;
 }
 
 static struct file_operations lt_fops = {
@@ -730,7 +597,6 @@ static struct miscdevice lt_dev = {
     DEV_NAME,
     &lt_fops,
 };
-#endif
 
 static void lt_reset_ttl(void)
 {
@@ -744,13 +610,14 @@ static void lt_reset_ttl(void)
     HDMI_WriteI2C_Byte(0x13, 0xf1);
 }
 
-#ifndef __LITEOS__
 static int lt_reboot(struct notifier_block *self, unsigned long event, void *data)
 {
     (void)self;
     (void)event;
     (void)data;
+    mutex_lock(&lt_lock);
     lt_reset_ttl();
+    mutex_unlock(&lt_lock);
     return NOTIFY_OK;
 }
 
@@ -768,7 +635,6 @@ static void lt_reboot_exit(void)
 {
     unregister_reboot_notifier(&lt_reboot_notifier);
 }
-#endif
 
 #ifdef _LT8618_HDCP_
 
@@ -1811,16 +1677,18 @@ bool LT8618SXB_Phase_config( void )
 
 #endif
 
-static bool lt_check_module_param(void)
+static int lt_check_module_param(void)
 {
-    if (norm >= LT_OUT_BUTT) {
-        printk("module param norm(%u) invalid, it should be in [%u,%u]\n", norm, 0, LT_OUT_USER);
-        return -1;
+    /* LT_OUT_USER's timing row is all zeroes: nothing fills it in, so it would
+     * program a zero timing. */
+    if (norm >= LT_OUT_USER) {
+        printk("module param norm(%u) invalid, it should be in [%u,%u]\n", norm, 0, LT_OUT_USER - 1);
+        return -EINVAL;
     }
 
     if ((Use_DDRCLK !=  LT_CLK_EDGE_SINGLE) && (Use_DDRCLK != LT_CLK_EDGE_DUAL)) {
         printk("module param Use_DDRCLK(%u) invalid, it should be 0 or 1\n", Use_DDRCLK);
-        return -1;
+        return -EINVAL;
     }
     return 0;
 }
@@ -1853,140 +1721,35 @@ void Resolution_change(unsigned int Resolution)
 #endif
 }
 
-#ifdef __LITEOS__
-
-int LT8618SX_Initial(void *args)
-{
-    int ret = 0;
-
-    if (args != NULL) {
-        norm = *(unsigned int *)args;
-        DPRINTK(DEBUG_LEVEL, "init video norm = %u\n", norm);
-    }
-
-    if (lt_check_module_param() != 0) {
-        return -1;
-    }
-
-    I2CADR = _LT8618SX_ADR;
-
-    ret = register_driver("/dev/" DEV_NAME, &lt_fops, 0666, 0); /* 0666 is RW */
-    if (ret) {
-        DPRINTK(0, "could not register %s device", DEV_NAME);
-        goto end0;
-    }
-
-    ret = i2c_client_init();
-    if (ret != 0) {
-        DPRINTK(0, "could not init i2c client\n");
-        goto end1;
-    }
-    LT8618SX_VideoSel(norm);
-
-    /* wait 2000ms, otherwise i2c not work */
-    DPRINTK(DEBUG_LEVEL, "mdelay 2000.\n");
-    mdelay(2000);  /* delay 2000 ms */
-
-    HDMI_WriteI2C_Byte(0xff, 0x80); // register bank
-    HDMI_WriteI2C_Byte(0xee, 0x01); // enable IIC
-
-    LT8618SXB_Chip_ID();
-
-    LT8618SXB_RST_PD_Init();
-
-    /* TTL mode */
-    LT8618SXB_TTL_Input_Analog();
-
-    LT8618SXB_TTL_Input_Digtal();
-
-    /*
-     * Wait for the signal to be stable and decide whether the delay is
-     * necessary according to the actual situation
-     */
-    mdelay(1000);
-
-    /*
-     * For debug
-     */
-    LT8618SXB_Video_check();
-
-    /*
-     * PLL
-     */
-    LT8618SXB_PLL_setting();
-    LT8618SXB_Audio_setting();
-    LT8618SXB_CSC_setting();
-#ifdef _LT8618_HDCP_
-    LT8618SXB_HDCP_Init();
-#endif
-    LT8618SXB_AVI_setting();
-    /*
-     * This operation is not necessary. Read TV EDID if necessary.
-     * Read TV  EDID
-     */
-    LT8918SXB_Read_EDID();
-#ifdef _LT8618_HDCP_
-    LT8618SXB_HDCP_Enable();
-#endif
-
-#ifdef _Embedded_sync_
-    LT8618SXB_BT_Timing_setting();
-    if (!flag_Ver_u3) {
-        LT8618SXB_Phase_config();
-    }
-#endif
-
-    LT8618SXB_RST_PD_Init();
-    LT8618SXB_TX_Phy();
-
-    printk("load lt8618sx.ko ....OK!\n");
-    return 0;
-end1:
-    unregister_driver("/dev/" DEV_NAME);
-end0:
-    printk("load lt8618sx.ko ....failed!\n");
-    return -1;
-}
-
-void LT8618SX_DeInitial(void)
-{
-    lt_reset_ttl();
-    i2c_client_exit();
-    unregister_driver("/dev/" DEV_NAME);
-    printk("unload lt8618sx.ko ....OK!\n");
-}
-
-#else
 
 static int __init LT8618SX_Initial(void)
 {
     int ret = 0;
 
-    if (lt_check_module_param() != 0) {
-        return -1;
+    ret = lt_check_module_param();
+    if (ret != 0) {
+        return ret;
     }
 
     I2CADR = _LT8618SX_ADR;
 
-    ret = misc_register(&lt_dev);
-    if (ret) {
-        DPRINTK(0, "could not register lt8618sx device\n");
-        goto end0;
-    }
-    lt_reboot_init();
-
+    /*
+     * The chip is programmed before /dev/lt8618sx exists, so no opener can
+     * race the setup, and a board without the bridge never shows the node.
+     */
     ret = i2c_client_init();
     if (ret != 0) {
         DPRINTK(0, "could not init i2c client\n");
-        goto end1;
+        goto end0;
     }
     LT8618SX_VideoSel(norm);
 
+    lt_i2c_failed = false;
     HDMI_WriteI2C_Byte(0xff, 0x80); // register bank
     HDMI_WriteI2C_Byte(0xee, 0x01); // enable IIC
 
     if (LT8618SXB_Chip_ID() == false) {
-        i2c_client_exit();
+        ret = -ENODEV;
         goto end1;
     }
 
@@ -2039,22 +1802,35 @@ static int __init LT8618SX_Initial(void)
     LT8618SXB_RST_PD_Init();
     LT8618SXB_TX_Phy();
 
+    if (lt_i2c_failed) {
+        DPRINTK(0, "an i2c transfer failed while setting up the bridge\n");
+        ret = -EIO;
+        goto end1;
+    }
+
+    ret = misc_register(&lt_dev);
+    if (ret) {
+        DPRINTK(0, "could not register lt8618sx device\n");
+        goto end1;
+    }
+    lt_reboot_init();
+
     printk("load lt8618sx.ko ....OK!\n");
     return 0;
 end1:
-    lt_reboot_exit();
-    misc_deregister(&lt_dev);
+    i2c_client_exit();
 end0:
     printk("load lt8618sx.ko ....failed!\n");
-    return -1;
+    return ret;
 }
 
 static void __exit LT8618SX_DeInitial(void)
 {
+    /* The node goes first, so no ioctl can reach the chip once it is reset. */
+    misc_deregister(&lt_dev);
+    lt_reboot_exit();
     lt_reset_ttl();
     i2c_client_exit();
-    lt_reboot_exit();
-    misc_deregister(&lt_dev);
     printk("unload lt8618sx.ko ....OK!\n");
 }
 
@@ -2063,5 +1839,4 @@ module_exit(LT8618SX_DeInitial);
 
 MODULE_LICENSE("GPL");
 
-#endif
 
