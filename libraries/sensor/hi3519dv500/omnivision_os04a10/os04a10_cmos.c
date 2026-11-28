@@ -75,7 +75,9 @@ const os04a10_video_mode_tbl g_os04a10_mode_tbl[OS04A10_MODE_BUTT] = {
      2692, 1524, 0, OT_WDR_MODE_NONE,    "OS04A10_4M_30FPS_12BIT_LINEAR_MODE"},
     {OS04A10_VMAX_4M_30FPS_12BIT_2TO1_WDR,  OS04A10_FULL_LINES_MAX_2TO1_WDR, 30, 10.0,
      2688, 1520, 0, OT_WDR_MODE_2To1_LINE,  "OS04A10_4M_30FPS_12BIT_2TO1_VC_MODE"},
-    {OS04A10_VMAX_4M_60FPS_12BIT_LINEAR, OS04A10_FULL_LINES_MAX,      60,  5,
+    /* min 15.2: the longest frame, OS04A10_FULL_LINES_MAX, is 2458 * 60 / 9744
+     * = 15.14 fps at this line time */
+    {OS04A10_VMAX_4M_60FPS_12BIT_LINEAR, OS04A10_FULL_LINES_MAX,      60,  15.2,
      2692, 1524, 0, OT_WDR_MODE_NONE,    "OS04A10_4M_60FPS_12BIT_LINEAR_MODE"},
 };
 
@@ -1037,6 +1039,10 @@ static td_void cmos_set_pixel_detect(ot_vi_pipe vi_pipe, td_bool enable)
     } else {
         if (sns_state->img_mode == OS04A10_4M_30FPS_12BIT_LINEAR_MODE) {
             full_lines_5fps = (OS04A10_VMAX_4M_30FPS_12BIT_LINEAR * 30) / 5; /* 30fps, 5fps */
+        } else if (sns_state->img_mode == OS04A10_4M_60FPS_12BIT_LINEAR_MODE) {
+            /* 5 fps would be 29496 lines at this line time; the longest frame
+             * the sensor takes is the closest to it. */
+            full_lines_5fps = OS04A10_FULL_LINES_MAX;
         } else {
             return;
         }
