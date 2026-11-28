@@ -322,7 +322,9 @@ static td_void cmos_fps_set(ot_vi_pipe vi_pipe, td_float fps, ot_isp_ae_sensor_d
     cmos_config_vmax(sns_state, vmax);
 
     sns_state->fl_std = vmax;
-    ae_sns_dft->lines_per500ms = lines * 15; /* *15 */
+    /* Lines in half a second at the mode's own rate, as cmos_get_ae_default()
+     * has it: 15 frames of them was a 30 fps mode's. */
+    ae_sns_dft->lines_per500ms = (td_u32)(lines * max_fps / 2);
     g_lines_per500ms[vi_pipe] = ae_sns_dft->lines_per500ms;
 
     ae_sns_dft->fps = (achieve_fps_ok == TD_TRUE) ? fps : (lines * max_fps / vmax);

@@ -166,11 +166,11 @@ td_void os08a20_blc_clamp(ot_vi_pipe vi_pipe, ot_isp_sns_blc_clamp blc_clamp)
     return;
 }
 
-static void os08a20_vc_wdr_2t1_8m30_10bit_init(ot_vi_pipe vi_pipe);
-static void os08a20_linear_8m30_12bit_init(ot_vi_pipe vi_pipe);
-static void os08a20_linear_2m60_10bit_init(ot_vi_pipe vi_pipe);
+static td_s32 os08a20_vc_wdr_2t1_8m30_10bit_init(ot_vi_pipe vi_pipe);
+static td_s32 os08a20_linear_8m30_12bit_init(ot_vi_pipe vi_pipe);
+static td_s32 os08a20_linear_2m60_10bit_init(ot_vi_pipe vi_pipe);
 
-static void os08a20_default_reg_init(ot_vi_pipe vi_pipe)
+static td_s32 os08a20_default_reg_init(ot_vi_pipe vi_pipe)
 {
     td_u32 i;
     td_s32 ret = TD_SUCCESS;
@@ -190,7 +190,7 @@ static void os08a20_default_reg_init(ot_vi_pipe vi_pipe)
         isp_err_trace("write register failed!\n");
     }
 
-    return;
+    return ret;
 }
 
 static td_bool os08a20_get_quick_start_flag(ot_vi_pipe vi_pipe)
@@ -214,6 +214,7 @@ void os08a20_init(ot_vi_pipe vi_pipe)
     td_u8            img_mode;
     td_s32           ret;
     td_bool          quick_start_flag = TD_FALSE;
+    td_s32           init_ret = TD_SUCCESS;
     ot_isp_sns_state *pastos08a20 = TD_NULL;
 
     pastos08a20 = os08a20_get_ctx(vi_pipe);
@@ -231,16 +232,22 @@ void os08a20_init(ot_vi_pipe vi_pipe)
     if (quick_start_flag == TD_FALSE) {
         if (OT_WDR_MODE_2To1_LINE == wdr_mode) {
             if (OS08A20_8M_30FPS_10BIT_2TO1_VC_MODE == img_mode) {  /* OS08A20_VMAX_8M_30FPS_10BIT_2TO1_WDR */
-                os08a20_vc_wdr_2t1_8m30_10bit_init(vi_pipe);
+                init_ret = os08a20_vc_wdr_2t1_8m30_10bit_init(vi_pipe);
             } else {
             }
         } else if (img_mode == OS08A20_2M_60FPS_10BIT_LINEAR_MODE) {
-            os08a20_linear_2m60_10bit_init(vi_pipe);
+            init_ret = os08a20_linear_2m60_10bit_init(vi_pipe);
         } else {
-            os08a20_linear_8m30_12bit_init(vi_pipe);
+            init_ret = os08a20_linear_8m30_12bit_init(vi_pipe);
         }
     }
 
+    /* Only a sensor that took every register is ready: marked initialised
+     * after a failed write, it is never set up again. */
+    if (init_ret != TD_SUCCESS) {
+        isp_err_trace("pipe[%d] os08a20 init failed!\n", vi_pipe);
+        return;
+    }
     pastos08a20->init = TD_TRUE;
     return;
 }
@@ -487,7 +494,7 @@ static td_s32 os08a20_linear_8m30_12bit_init_part5(ot_vi_pipe vi_pipe)
 }
 
 
-static void os08a20_linear_8m30_12bit_init(ot_vi_pipe vi_pipe)
+static td_s32 os08a20_linear_8m30_12bit_init(ot_vi_pipe vi_pipe)
 {
     td_s32 ret = TD_SUCCESS;
 
@@ -498,13 +505,13 @@ static void os08a20_linear_8m30_12bit_init(ot_vi_pipe vi_pipe)
     ret += os08a20_linear_8m30_12bit_init_part5(vi_pipe);
     if (ret != TD_SUCCESS) {
         isp_err_trace("os08a20 write register failed!\n");
-        return;
+        return ret;
     }
 
     printf("========================================================================\n");
     printf("vi_pipe:%d,== os08a20 24Mclk 8M30fps(MIPI) 12bit linear init success! ==\n", vi_pipe);
     printf("========================================================================\n");
-    return;
+    return TD_SUCCESS;
 }
 
 static td_s32 os08a20_vc_wdr_2t1_8m30_10bit_init_part1(ot_vi_pipe vi_pipe)
@@ -731,7 +738,7 @@ static td_s32 os08a20_vc_wdr_2t1_8m30_10bit_init_part5(ot_vi_pipe vi_pipe)
     return ret;
 }
 
-static void os08a20_vc_wdr_2t1_8m30_10bit_init(ot_vi_pipe vi_pipe)
+static td_s32 os08a20_vc_wdr_2t1_8m30_10bit_init(ot_vi_pipe vi_pipe)
 {
     td_s32 ret = TD_SUCCESS;
 
@@ -742,13 +749,13 @@ static void os08a20_vc_wdr_2t1_8m30_10bit_init(ot_vi_pipe vi_pipe)
     ret += os08a20_vc_wdr_2t1_8m30_10bit_init_part5(vi_pipe);
     if (ret != TD_SUCCESS) {
         isp_err_trace("os08a20 write register failed!\n");
-        return;
+        return ret;
     }
 
     printf("========================================================================\n");
     printf("vi_pipe:%d,== os08a20 24Mclk 8M30fps(MIPI) 10bit vc-wdr init success! ==\n", vi_pipe);
     printf("========================================================================\n");
-    return;
+    return TD_SUCCESS;
 }
 
 /* 1920x1080 10-bit linear, 2x2 binning, 60 fps, 4-lane MIPI, 24 MHz MCLK.
@@ -971,16 +978,17 @@ static td_s32 os08a20_linear_2m60_10bit_regs(ot_vi_pipe vi_pipe)
     return ret;
 }
 
-static void os08a20_linear_2m60_10bit_init(ot_vi_pipe vi_pipe)
+static td_s32 os08a20_linear_2m60_10bit_init(ot_vi_pipe vi_pipe)
 {
     td_s32 ret = os08a20_linear_2m60_10bit_regs(vi_pipe);
 
-    os08a20_default_reg_init(vi_pipe);
+    ret += os08a20_default_reg_init(vi_pipe);
     delay_ms(5); /* 5 ms before streaming */
     ret += os08a20_write_register(vi_pipe, 0x0100, 0x01);
     if (ret != TD_SUCCESS) {
         isp_err_trace("os08a20 write register failed!\n");
-        return;
+        return ret;
     }
     printf("=== OS08A20 1080p60 10bit 2x2 binning linear init OK ===\n");
+    return TD_SUCCESS;
 }
