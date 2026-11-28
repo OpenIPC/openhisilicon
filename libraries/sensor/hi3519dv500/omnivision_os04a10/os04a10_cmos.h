@@ -31,10 +31,14 @@ extern "C" {
 #define OS04A10_INCREASE_LINES 2  /* make real fps less than stand fps because NVR require */
 #define OS04A10_VMAX_4M_30FPS_12BIT_LINEAR     (1624 + OS04A10_INCREASE_LINES)
 #define OS04A10_VMAX_4M_30FPS_12BIT_2TO1_WDR   (2436 + OS04A10_INCREASE_LINES)   /* 12bit */
+/* The 2:1 WDR mode's line time, each row read once: 6.78 us, measured (2438
+ * lines ran at 60.5 fps), so 2458 lines for a frame just under 60 fps. */
+#define OS04A10_VMAX_4M_60FPS_12BIT_LINEAR     (2456 + OS04A10_INCREASE_LINES)
 
 typedef enum {
     OS04A10_4M_30FPS_12BIT_LINEAR_MODE = 0,
     OS04A10_4M_30FPS_12BIT_2TO1_VC_MODE,
+    OS04A10_4M_60FPS_12BIT_LINEAR_MODE,
     OS04A10_MODE_BUTT
 } os04a10_res_mode;
 

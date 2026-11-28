@@ -151,6 +151,7 @@ void os04a10_restart(ot_vi_pipe vi_pipe)
 
 static void os04a10_linear_4m30_12bit_init(ot_vi_pipe vi_pipe);
 static void os04a10_wdr_2to1_4m30_12bit_init(ot_vi_pipe vi_pipe);
+static void os04a10_linear_4m60_12bit_init(ot_vi_pipe vi_pipe);
 
 static void os04a10_default_reg_init(ot_vi_pipe vi_pipe)
 {
@@ -216,7 +217,11 @@ void os04a10_init(ot_vi_pipe vi_pipe)
             } else {
             }
         } else if (quick_start_flag == TD_FALSE) {
-            os04a10_linear_4m30_12bit_init(vi_pipe);
+            if (img_mode == OS04A10_4M_60FPS_12BIT_LINEAR_MODE) {
+                os04a10_linear_4m60_12bit_init(vi_pipe);
+            } else {
+                os04a10_linear_4m30_12bit_init(vi_pipe);
+            }
         }
     } else {
         /* When sensor switch mode(linear<->WDR or resolution), config different registers(if possible) */
@@ -226,7 +231,11 @@ void os04a10_init(ot_vi_pipe vi_pipe)
             } else {
             }
         } else if (quick_start_flag == TD_FALSE) {
-            os04a10_linear_4m30_12bit_init(vi_pipe);
+            if (img_mode == OS04A10_4M_60FPS_12BIT_LINEAR_MODE) {
+                os04a10_linear_4m60_12bit_init(vi_pipe);
+            } else {
+                os04a10_linear_4m30_12bit_init(vi_pipe);
+            }
         }
     }
 
@@ -997,4 +1006,62 @@ static void os04a10_wdr_2to1_4m30_12bit_init(ot_vi_pipe vi_pipe)
     printf("vi_pipe:%d,== os04a10 24Mclk 4M30fps(MIPI) 12bit wdr2to1 init success! ==\n", vi_pipe);
     printf("========================================================================\n");
     return;
+}
+
+/* 2688x1520 12-bit linear at 60 fps.
+ *
+ * The 2:1 line WDR mode reads every row twice a frame at 30 fps, which is a
+ * 60 fps row rate; this is that timing -- its PLL, line length (HTS 0x02dc),
+ * analog row timing, MIPI clock and VTS -- with each row read once, so the
+ * frame comes out at 60. Everything HDR about the WDR list (the second
+ * exposure, its virtual channel, the combine) stays as the linear list has it:
+ * the linear 4M30 list is written whole, the sensor put back in standby, and
+ * only the timing changed. The bandwidth is the WDR mode's, two 12-bit frames
+ * a 30th of a second. */
+static const struct {
+    td_u16 addr;
+    td_u8 data;
+} g_os04a10_4m60_timing[] = {
+    /* PLL, as the WDR mode ends up after its "add WDR VTS blank" step */
+    {0x0305, 0x5c}, {0x0308, 0x04}, {0x0317, 0x09}, {0x0325, 0xd8},
+    /* analog row timing for the shorter line */
+    {0x3605, 0x7f}, {0x3606, 0x80}, {0x362d, 0x0e}, {0x3667, 0x54},
+    {0x3671, 0x09}, {0x3703, 0x20}, {0x3706, 0x72}, {0x370a, 0x01},
+    {0x370b, 0x14}, {0x3719, 0x1f}, {0x371b, 0x16}, {0x3756, 0x9d},
+    {0x3757, 0x9d}, {0x37cc, 0x13}, {0x37d1, 0x72}, {0x37d2, 0x01},
+    {0x37d3, 0x14}, {0x37d4, 0x00}, {0x37d5, 0x6c}, {0x37d6, 0x00},
+    {0x37d7, 0xf7},
+    /* HTS 0x02dc, VTS 0x099a (OS04A10_VMAX_4M_60FPS_12BIT_LINEAR) */
+    {0x380c, 0x02}, {0x380d, 0xdc}, {0x384c, 0x02}, {0x384d, 0xdc},
+    {0x380e, 0x09}, {0x380f, 0x9a},
+    /* MIPI clock period for the doubled rate */
+    {0x4837, 0x0e},
+};
+
+static void os04a10_linear_4m60_12bit_init(ot_vi_pipe vi_pipe)
+{
+    td_s32 ret = TD_SUCCESS;
+    td_u32 i;
+
+    ret += os04a10_linear_4m30_12bit_init_part1(vi_pipe);
+    ret += os04a10_linear_4m30_12bit_init_part2(vi_pipe);
+    ret += os04a10_linear_4m30_12bit_init_part3(vi_pipe);
+    ret += os04a10_linear_4m30_12bit_init_part4(vi_pipe);
+    ret += os04a10_linear_4m30_12bit_init_part5(vi_pipe);
+    ret += os04a10_linear_4m30_12bit_init_part6(vi_pipe);
+    ret += os04a10_linear_4m30_12bit_init_part7(vi_pipe);
+
+    ret += os04a10_write_register(vi_pipe, 0x0100, 0x00); /* standby */
+    delay_ms(5); /* 5 ms */
+    for (i = 0; i < sizeof(g_os04a10_4m60_timing) / sizeof(g_os04a10_4m60_timing[0]); i++) {
+        ret += os04a10_write_register(vi_pipe, g_os04a10_4m60_timing[i].addr, g_os04a10_4m60_timing[i].data);
+    }
+    os04a10_default_reg_init(vi_pipe);
+    delay_ms(5); /* 5 ms */
+    ret += os04a10_write_register(vi_pipe, 0x0100, 0x01);
+    if (ret != TD_SUCCESS) {
+        isp_err_trace("os04a10 write register failed!\n");
+        return;
+    }
+    printf("=== os04a10 4M60 12bit linear (WDR timing) init OK ===\n");
 }
