@@ -75,6 +75,8 @@ const os04a10_video_mode_tbl g_os04a10_mode_tbl[OS04A10_MODE_BUTT] = {
      2692, 1524, 0, OT_WDR_MODE_NONE,    "OS04A10_4M_30FPS_12BIT_LINEAR_MODE"},
     {OS04A10_VMAX_4M_30FPS_12BIT_2TO1_WDR,  OS04A10_FULL_LINES_MAX_2TO1_WDR, 30, 10.0,
      2688, 1520, 0, OT_WDR_MODE_2To1_LINE,  "OS04A10_4M_30FPS_12BIT_2TO1_VC_MODE"},
+    {OS04A10_VMAX_4M_60FPS_12BIT_LINEAR, OS04A10_FULL_LINES_MAX,      60,  5,
+     2692, 1524, 0, OT_WDR_MODE_NONE,    "OS04A10_4M_60FPS_12BIT_LINEAR_MODE"},
 };
 
 /****************************************************************************
@@ -124,7 +126,8 @@ static td_void cmos_get_ae_comm_default(ot_vi_pipe vi_pipe, ot_isp_ae_sensor_def
     ae_sns_dft->full_lines_std = sns_state->fl_std;
     ae_sns_dft->flicker_freq = 50 * 256; /* light flicker freq: 50Hz, accuracy: 256 */
     ae_sns_dft->full_lines_max = OS04A10_FULL_LINES_MAX;
-    ae_sns_dft->hmax_times = (1000000000) / (sns_state->fl_std * 30); /* 1000000000ns, 30fps */
+    ae_sns_dft->hmax_times = (1000000000) / /* 1000000000ns, line time at the mode's max fps */
+        (sns_state->fl_std * g_os04a10_mode_tbl[sns_state->img_mode].max_fps);
 
     ae_sns_dft->int_time_accu.accu_type = OT_ISP_AE_ACCURACY_LINEAR;
     ae_sns_dft->int_time_accu.accuracy = 1;
@@ -140,7 +143,7 @@ static td_void cmos_get_ae_comm_default(ot_vi_pipe vi_pipe, ot_isp_ae_sensor_def
     ae_sns_dft->min_isp_dgain_target = 1 << ae_sns_dft->isp_dgain_shift;
     ae_sns_dft->max_isp_dgain_target = 32 << ae_sns_dft->isp_dgain_shift; /* max 32 */
     if (g_lines_per500ms[vi_pipe] == 0) {
-        ae_sns_dft->lines_per500ms = sns_state->fl_std * 30 / 2; /* 30fps, div 2 */
+        ae_sns_dft->lines_per500ms = sns_state->fl_std * g_os04a10_mode_tbl[sns_state->img_mode].max_fps / 2;
     } else {
         ae_sns_dft->lines_per500ms = g_lines_per500ms[vi_pipe];
     }
@@ -1301,6 +1304,9 @@ static td_void cmos_config_image_mode_param(ot_vi_pipe vi_pipe, td_u8 sns_image_
             break;
         case OS04A10_4M_30FPS_12BIT_2TO1_VC_MODE:
             sns_state->fl_std = OS04A10_VMAX_4M_30FPS_12BIT_2TO1_WDR;
+            break;
+        case OS04A10_4M_60FPS_12BIT_LINEAR_MODE:
+            sns_state->fl_std = OS04A10_VMAX_4M_60FPS_12BIT_LINEAR;
             break;
         default:
             sns_state->fl_std = OS04A10_VMAX_4M_30FPS_12BIT_LINEAR;
